@@ -132,6 +132,23 @@ test("a download step streams progress and lands in the models folder", async ()
   assert.ok(plan.steps.some((s) => s.kind === "pull-model"));
 });
 
+test("storage lists the download and remove deletes it", async () => {
+  const before = await (await get("/api/storage")).json();
+  const row = before.files.find((f) => f.file === "Llama-3.2-3B-Instruct-Q4_K_M.gguf");
+  assert.ok(row);
+  assert.ok(before.totalGb > 0);
+
+  const res = await post("/api/remove", { kind: "file", repo: "bartowski/Llama-3.2-3B-Instruct-GGUF", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf" });
+  assert.equal(res.status, 200);
+  const after = await res.json();
+  assert.ok(!after.files.some((f) => f.file === "Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
+  assert.ok(!fs.existsSync(path.join(MODELS_DIR, "bartowski")));
+
+  assert.equal((await post("/api/remove", { kind: "file", repo: "bartowski/Llama-3.2-3B-Instruct-GGUF", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf" })).status, 400);
+  assert.equal((await post("/api/remove", { kind: "file", repo: "../x", file: "y" })).status, 400);
+  assert.equal((await post("/api/remove", { kind: "nonsense" })).status, 400);
+});
+
 test("a run that fails says so on the stream", async () => {
   const { id } = await (await post("/api/run", { kind: "download-file", args: { repo: "nobody/missing", file: "x.gguf" } })).json();
   const events = await readEvents(`${base}/api/runs/${id}`);

@@ -24,7 +24,9 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
-page.on("dialog", (d) => d.dismiss());
+// Confirm prompts are dismissed unless a step says otherwise.
+let acceptDialogs = false;
+page.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));
 
 let failed = 0;
 async function step(name, fn) {
@@ -131,6 +133,52 @@ await step("with a token the gated model gets a real answer instead of the lock"
   await page.waitForSelector("#modal-body .notice");
   assert.match(await page.locator("#modal-body .notice").innerText(), /Python/);
   await page.keyboard.press("Escape");
+});
+
+await step("settings lists downloaded models with sizes and removes one", async () => {
+  // A real Ollama may be running on the machine with models of its own;
+  // the test only touches the file it planted.
+  const { MODELS_DIR } = await import("../../src/runners.js");
+  const dir = path.join(MODELS_DIR, "second-state", "stable-diffusion-v1-5-GGUF");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf"), Buffer.alloc(2 * 1024 * 1024));
+  await page.click("#open-settings");
+  const row = page.locator("#storage-list li", { hasText: "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf" });
+  await row.waitFor();
+  assert.match(await row.locator(".size").innerText(), /0\.00 GB/);
+  assert.match(await page.locator("#storage-total").innerText(), /GB in \d+ model/);
+  const before = await page.locator("#storage-list li").count();
+  acceptDialogs = true;
+  await row.locator("button").click();
+  await page.waitForFunction((n) => document.querySelectorAll("#storage-list li").length === n - 1, before);
+  acceptDialogs = false;
+  assert.equal(await row.count(), 0);
+  assert.equal(fs.existsSync(dir), false);
+  await page.click("#close-settings");
+});
+
+await step("a set-up model offers to remove itself from the model window", async () => {
+  const { MODELS_DIR } = await import("../../src/runners.js");
+  const dir = path.join(MODELS_DIR, "ggerganov", "whisper.cpp");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "ggml-base.en.bin"), Buffer.alloc(1024));
+  await page.click(".tab[data-tab=speech]");
+  await page.locator("#models .model", { hasText: "whisper.cpp" }).click();
+  await page.waitForSelector("#steps .step");
+  const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
+  assert.equal(done[1], true, "the download step is marked done because the file is on disk");
+  if (done[0]) {
+    await page.waitForSelector("#remove-model");
+    acceptDialogs = true;
+    await page.click("#remove-model");
+    await page.waitForFunction(() => !document.querySelector("#remove-model"));
+    acceptDialogs = false;
+    assert.equal(fs.existsSync(path.join(dir, "ggml-base.en.bin")), false);
+  } else {
+    assert.equal(await page.locator("#remove-model").count(), 0, "no remove button until every step is done");
+    fs.rmSync(path.join(MODELS_DIR, "ggerganov"), { recursive: true, force: true });
+  }
+  await page.click("#close-modal");
 });
 
 await step("a reload keeps the scan and reports when it was made", async () => {

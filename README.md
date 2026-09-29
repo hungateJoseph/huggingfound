@@ -4,6 +4,7 @@ Find open-source models on Hugging Face, see which ones your computer can run, a
 
 - **Scan** Hugging Face for what is trending and what is new, then browse it by what you want to do: easy to set up, chat and writing, coding, math and reasoning, understanding images, making images, speech to text.
 - **See the fit.** Every model card shows whether the file fits in this computer's memory, before you download anything.
+- **Keep your disk.** Models are gigabytes each. Once you have tried one, a button in the same window removes it; Settings lists everything downloaded, with sizes, so any of it can go.
 - **Try it locally.** Pick a model and HuggingFound lays out the steps: install the runner, start it, download the file. Each step shows the exact command, runs when you confirm, and streams its output. When the steps are done, a chat box, an image prompt or a transcription box appears right there.
 
 Chat, coding, math and vision models run through [Ollama](https://ollama.com). Image models run through [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp). Speech models run through [whisper.cpp](https://github.com/ggerganov/whisper.cpp). All three are open source and run entirely on your machine.

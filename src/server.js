@@ -9,7 +9,7 @@ import { createHub } from "./hf.js";
 import { describeMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, detect, getRun, startRun, which } from "./runners.js";
+import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, detect, getRun, removeFile, removeOllamaModel, startRun, storage, which } from "./runners.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 const RUNNER_NAMES = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" };
@@ -85,6 +85,20 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
         : buildPlan({ model, files: model.files, machine, detected: await detect(fetchImpl), hasToken: Boolean(env().HF_TOKEN), preferredFile: pick?.file });
       return send(res, 200, { model, plan });
+    }
+    if (req.method === "GET" && url.pathname === "/api/storage") {
+      return send(res, 200, await storage(fetchImpl));
+    }
+    if (req.method === "POST" && url.pathname === "/api/remove") {
+      const body = await json(req);
+      try {
+        if (body.kind === "file") removeFile(body.repo, body.file);
+        else if (body.kind === "ollama") await removeOllamaModel(body.name, fetchImpl);
+        else return send(res, 400, { error: "kind must be file or ollama" });
+      } catch (err) {
+        return send(res, 400, { error: err.message });
+      }
+      return send(res, 200, await storage(fetchImpl));
     }
     if (req.method === "POST" && url.pathname === "/api/run") {
       const body = await json(req);

@@ -95,7 +95,8 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
         command: `ollama create ${localName} -f Modelfile`,
       });
     }
-    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "chat", model: ollamaName } };
+    const remove = viaPull ? [{ kind: "ollama", name: ollamaName }] : [{ kind: "ollama", name: localName }, { kind: "file", repo: model.id, file: file.name }];
+    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "chat", model: ollamaName }, remove };
   }
 
   if (runner.id === "whisper") {
@@ -114,7 +115,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       done: downloaded,
       command: `download to ~/HuggingFound/models/${model.id}/${file.name}`,
     });
-    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "transcribe", repo: model.id, file: file.name, ffmpeg: detected.ffmpeg } };
+    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "transcribe", repo: model.id, file: file.name, ffmpeg: detected.ffmpeg }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
   }
 
   if (runner.id === "sd") {
@@ -133,7 +134,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       done: downloaded,
       command: `download to ~/HuggingFound/models/${model.id}/${file.name}`,
     });
-    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "image", repo: model.id, file: file.name } };
+    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "image", repo: model.id, file: file.name }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
   }
 
   return { runnable: false, reason: "Unsupported runner.", steps: [] };

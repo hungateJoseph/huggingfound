@@ -126,6 +126,14 @@ button.ghost { background: transparent; }
 .runners ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
 .runners li { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
 
+.storage ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.storage li { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; font-size: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
+.storage li .what { min-width: 0; overflow-wrap: anywhere; }
+.storage li .size { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.storage button, .try-head button.remove { font-size: 13px; padding: 5px 10px; }
+.try-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.try-head h3 { margin: 0; }
+
 .spec { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 6px 0 16px; }
 .spec div { background: var(--bg); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
 .spec b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }

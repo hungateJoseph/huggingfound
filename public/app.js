@@ -349,9 +349,67 @@ function renderTry(model, plan) {
     box.innerHTML = `<p class="muted small">${left === plan.steps.length ? "Run the steps above and a try box appears here." : `${left} step${left === 1 ? "" : "s"} left before you can try it.`}</p>`;
     return;
   }
-  if (plan.tryWith.kind === "chat") return renderChat(box, plan.tryWith.model);
-  if (plan.tryWith.kind === "image") return renderImage(box, plan.tryWith);
-  if (plan.tryWith.kind === "transcribe") return renderTranscribe(box, plan.tryWith);
+  if (plan.tryWith.kind === "chat") renderChat(box, plan.tryWith.model);
+  if (plan.tryWith.kind === "image") renderImage(box, plan.tryWith);
+  if (plan.tryWith.kind === "transcribe") renderTranscribe(box, plan.tryWith);
+  renderRemove(box, model, plan);
+}
+
+// Models are gigabytes each; once tried, one click takes them off the disk.
+function renderRemove(box, model, plan) {
+  if (!plan.remove?.length) return;
+  const head = box.querySelector("h3");
+  const wrap = document.createElement("div");
+  wrap.className = "try-head";
+  head.replaceWith(wrap);
+  wrap.appendChild(head);
+  const btn = document.createElement("button");
+  btn.className = "ghost remove";
+  btn.id = "remove-model";
+  btn.textContent = `Remove from this computer (${plan.file.gb ? plan.file.gb.toFixed(1) + " GB" : "frees the download"})`;
+  wrap.appendChild(btn);
+  btn.addEventListener("click", async () => {
+    if (!confirm(`Delete ${model.name} from this computer? The runner stays installed; the model can be downloaded again any time.`)) return;
+    btn.disabled = true;
+    btn.textContent = "Removing";
+    try {
+      for (const item of plan.remove) await api.post("/api/remove", item);
+      const fresh = await api.get(`/api/model?id=${encodeURIComponent(model.id)}`);
+      if (state.open === model.id) {
+        renderModel(fresh.model, fresh.plan);
+        notice(`${model.name} was removed from this computer.`, "ok");
+      }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Remove from this computer";
+      alert(`Could not remove it: ${err.message}`);
+    }
+  });
+}
+
+async function renderStorage() {
+  const st = await api.get("/api/storage");
+  const rows = [
+    ...st.files.map((f) => ({ what: `${f.repo}/${f.file}`, gb: f.gb, body: { kind: "file", repo: f.repo, file: f.file } })),
+    ...st.ollama.map((m) => ({ what: `${m.name} (Ollama)`, gb: m.gb, body: { kind: "ollama", name: m.name } })),
+  ];
+  $("#storage-total").textContent = rows.length ? `${st.totalGb.toFixed(1)} GB in ${rows.length} model${rows.length === 1 ? "" : "s"}. Removing one keeps the runner; the model can be downloaded again later.` : "No models downloaded yet.";
+  $("#storage-list").innerHTML = rows.map((r, i) => `<li><span class="what">${esc(r.what)}</span><span class="size">${r.gb.toFixed(2)} GB</span><button class="ghost" data-remove="${i}">Remove</button></li>`).join("");
+  for (const btn of $("#storage-list").querySelectorAll("button")) {
+    btn.addEventListener("click", async () => {
+      const row = rows[Number(btn.dataset.remove)];
+      if (!confirm(`Delete ${row.what} from this computer?`)) return;
+      btn.disabled = true;
+      try {
+        await api.post("/api/remove", row.body);
+        await renderStorage();
+        if (state.open) openModel(state.open);
+      } catch (err) {
+        btn.disabled = false;
+        alert(`Could not remove it: ${err.message}`);
+      }
+    });
+  }
 }
 
 function renderChat(box, modelName) {
@@ -499,7 +557,10 @@ function renderRunners() {
   $("#runner-list").innerHTML = rows.map(([k, v]) => `<li><span>${k}</span><span class="muted">${esc(v)}</span></li>`).join("");
 }
 
-$("#open-settings").addEventListener("click", () => ($("#settings").hidden = false));
+$("#open-settings").addEventListener("click", () => {
+  $("#settings").hidden = false;
+  renderStorage().catch(() => ($("#storage-total").textContent = "Could not read the models folder."));
+});
 $("#close-settings").addEventListener("click", () => ($("#settings").hidden = true));
 $("#close-modal").addEventListener("click", () => {
   $("#modal").hidden = true;

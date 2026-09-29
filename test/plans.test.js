@@ -18,6 +18,7 @@ test("an open gguf chat model pulls straight through Ollama", () => {
   assert.equal(plan.steps[2].args.name, "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M");
   assert.equal(plan.fit.level, "good");
   assert.deepEqual(plan.tryWith, { kind: "chat", model: "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M" });
+  assert.deepEqual(plan.remove, [{ kind: "ollama", name: "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M" }]);
   assert.ok(plan.steps.every((s) => !s.done));
 });
 
@@ -49,6 +50,7 @@ test("a gated gguf model needs a token, then downloads with it and registers by 
   assert.equal(open.steps[3].args.name, "llama-3.2-3b-instruct");
   assert.match(open.steps[2].text, /token/);
   assert.equal(open.tryWith.model, "llama-3.2-3b-instruct");
+  assert.deepEqual(open.remove, [{ kind: "ollama", name: "llama-3.2-3b-instruct" }, { kind: "file", repo: model.id, file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf" }]);
 });
 
 test("a Python-only checkpoint explains itself and points at a GGUF search", () => {
@@ -75,6 +77,7 @@ test("image plans use stable-diffusion.cpp with the 8-bit file", () => {
   assert.deepEqual(plan.steps.map((s) => s.kind), ["install-sd", "download-file"]);
   assert.equal(plan.file.name, "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf");
   assert.equal(plan.tryWith.kind, "image");
+  assert.deepEqual(plan.remove, [{ kind: "file", repo: model.id, file: plan.file.name }]);
 });
 
 test("a preferred file wins over the default choice", () => {

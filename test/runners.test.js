@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-runners-"));
-const { BIN_DIR, DATA_DIR, MODELS_DIR, UPLOAD_DIR, commandFor, detect, downloadedFiles, modelPath } = await import("../src/runners.js");
+const { BIN_DIR, DATA_DIR, MODELS_DIR, UPLOAD_DIR, commandFor, detect, downloadedFiles, modelPath, removeFile, removeOllamaModel, storage } = await import("../src/runners.js");
 
 const mac = { platform: "darwin", gpu: "Apple Silicon" };
 const win = { platform: "win32", gpu: "NVIDIA GeForce RTX 4070" };
@@ -126,4 +126,42 @@ test("detect never throws when nothing is installed or reachable", async () => {
   assert.equal(d.ollama.running, false);
   assert.deepEqual(d.ollama.models, []);
   assert.ok(Array.isArray(d.models));
+});
+
+test("storage lists files with sizes and removeFile cleans up after itself", async () => {
+  const target = modelPath("some/repo", "big.gguf");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, Buffer.alloc(3 * 1024 * 1024));
+  fs.writeFileSync(path.join(path.dirname(target), "Modelfile"), `FROM ${target}\n`);
+  const st = await storage(async () => {
+    throw new Error("no ollama");
+  });
+  const row = st.files.find((f) => f.repo === "some/repo" && f.file === "big.gguf");
+  assert.ok(row);
+  assert.ok(Math.abs(row.gb - 3 / 1024) < 1e-6);
+  assert.ok(!st.files.some((f) => f.file === "Modelfile"));
+  assert.deepEqual(st.ollama, []);
+
+  removeFile("some/repo", "big.gguf");
+  assert.ok(!fs.existsSync(target));
+  assert.ok(!fs.existsSync(path.join(MODELS_DIR, "some")), "empty owner and repo folders are removed");
+  assert.throws(() => removeFile("some/repo", "big.gguf"), /not on this computer/);
+  assert.throws(() => removeFile("../..", "passwd"), /Bad file/);
+  assert.throws(() => removeFile("a/b", "../../.env"), /Bad file/);
+});
+
+test("removing an Ollama model talks to its delete endpoint and reports when it is down", async () => {
+  const calls = [];
+  await removeOllamaModel("hf.co/x/y-GGUF:Q4_K_M", async (url, init) => {
+    calls.push({ url, method: init.method, body: JSON.parse(init.body) });
+    return { ok: true, status: 200 };
+  });
+  assert.equal(calls[0].method, "DELETE");
+  assert.match(calls[0].url, /\/api\/delete$/);
+  assert.equal(calls[0].body.model, "hf.co/x/y-GGUF:Q4_K_M");
+  await assert.rejects(removeOllamaModel("x", async () => ({ ok: false, status: 404 })), /does not have/);
+  await assert.rejects(removeOllamaModel("x", async () => {
+    throw new Error("ECONNREFUSED");
+  }), /not running/);
+  await assert.rejects(removeOllamaModel("x; rm", async () => ({ ok: true })), /Bad model name/);
 });

@@ -100,6 +100,58 @@ export function downloadedFiles() {
   return out;
 }
 
+// Everything taking up space: files in the models folder with their sizes,
+// and the models Ollama holds in its own store.
+export async function storage(fetchImpl = fetch) {
+  const files = downloadedFiles().map((key) => {
+    const parts = key.split("/");
+    const repo = parts.slice(0, 2).join("/");
+    const file = parts.slice(2).join("/");
+    let gb = 0;
+    try {
+      gb = fs.statSync(modelPath(repo, file)).size / 1024 ** 3;
+    } catch {
+      // vanished between listing and stat
+    }
+    return { repo, file, gb };
+  }).filter((f) => !/^Modelfile$/.test(f.file));
+  let ollama = [];
+  try {
+    const res = await fetchImpl(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) ollama = ((await res.json()).models ?? []).map((m) => ({ name: m.name, gb: (m.size ?? 0) / 1024 ** 3 }));
+  } catch {
+    // not running; its models cannot be listed or removed until it is
+  }
+  const totalGb = files.reduce((t, f) => t + f.gb, 0) + ollama.reduce((t, m) => t + m.gb, 0);
+  return { files, ollama, totalGb };
+}
+
+export function removeFile(repo, file) {
+  if (!REPO_RE.test(String(repo)) || !FILE_RE.test(String(file))) throw new Error("Bad file arguments");
+  const target = modelPath(repo, file);
+  if (!fs.existsSync(target)) throw new Error("That file is not on this computer");
+  fs.rmSync(target, { force: true });
+  // A Modelfile only points at the file; drop it and any folders left empty.
+  const dir = path.dirname(target);
+  const modelfile = path.join(dir, "Modelfile");
+  if (fs.existsSync(modelfile) && !fs.readdirSync(dir).some((n) => n !== "Modelfile")) fs.rmSync(modelfile, { force: true });
+  for (const d of [dir, path.dirname(dir)]) {
+    if (d.startsWith(MODELS_DIR) && d !== MODELS_DIR && fs.existsSync(d) && fs.readdirSync(d).length === 0) fs.rmdirSync(d);
+  }
+}
+
+export async function removeOllamaModel(name, fetchImpl = fetch) {
+  if (!OLLAMA_NAME_RE.test(String(name))) throw new Error("Bad model name");
+  let res;
+  try {
+    res = await fetchImpl(`${OLLAMA_URL}/api/delete`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name, name }) });
+  } catch {
+    throw new Error("Ollama is not running, so its models cannot be removed. Start it and try again");
+  }
+  if (res.status === 404) throw new Error("Ollama does not have that model");
+  if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}`);
+}
+
 export function modelPath(repo, file) {
   return path.join(MODELS_DIR, ...repo.split("/"), file);
 }
