@@ -198,6 +198,27 @@ await step("settings lists downloaded models with sizes and removes one", async 
   await page.click("#close-settings");
 });
 
+await step("the main page scans this computer, shows free space, and removing a model rescans", async () => {
+  const { MODELS_DIR } = await import("../../src/runners.js");
+  const dir = path.join(MODELS_DIR, "bartowski", "Qwen2.5-Coder-7B-Instruct-GGUF");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"), Buffer.alloc(3 * 1024 * 1024));
+  assert.equal(await page.locator("#local-body").isVisible(), false, "nothing shown before a scan");
+  await page.click("#scan-local");
+  const row = page.locator("#local-list li", { hasText: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" });
+  await row.waitFor();
+  assert.match(await page.locator("#disk-line").innerText(), /\d+(\.\d)? GB free of \d+ GB on this drive/);
+  assert.match(await page.locator("#machine-line").innerText(), /GB free on disk/);
+  assert.match(await page.locator("#scan-local").innerText(), /Scan again/);
+  const before = await page.locator("#local-list li").count();
+  acceptDialogs = true;
+  await row.locator("button").click();
+  await page.waitForFunction((n) => document.querySelectorAll("#local-list li").length === n - 1, before);
+  acceptDialogs = false;
+  assert.equal(fs.existsSync(dir), false);
+  assert.match(await page.locator("#disk-line").innerText(), /GB free/, "the free space line is redrawn after removal");
+});
+
 await step("a set-up model offers to remove itself from the model window", async () => {
   const { MODELS_DIR } = await import("../../src/runners.js");
   const dir = path.join(MODELS_DIR, "ggerganov", "whisper.cpp");

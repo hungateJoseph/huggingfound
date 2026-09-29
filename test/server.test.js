@@ -191,6 +191,8 @@ test("storage lists the download and remove deletes it", async () => {
   const row = before.files.find((f) => f.file === "Llama-3.2-3B-Instruct-Q4_K_M.gguf");
   assert.ok(row);
   assert.ok(before.totalGb > 0);
+  assert.ok(before.disk.freeGb > 0 && before.disk.totalGb >= before.disk.freeGb, "free and total space on the drive");
+  assert.equal(typeof before.outputs, "number");
 
   const res = await post("/api/remove", { kind: "file", repo: "bartowski/Llama-3.2-3B-Instruct-GGUF", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf" });
   assert.equal(res.status, 200);
@@ -201,6 +203,15 @@ test("storage lists the download and remove deletes it", async () => {
   assert.equal((await post("/api/remove", { kind: "file", repo: "bartowski/Llama-3.2-3B-Instruct-GGUF", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf" })).status, 400);
   assert.equal((await post("/api/remove", { kind: "file", repo: "../x", file: "y" })).status, 400);
   assert.equal((await post("/api/remove", { kind: "nonsense" })).status, 400);
+});
+
+test("generated pictures and uploads count as space and can be cleared", async () => {
+  fs.writeFileSync(path.join(OUTPUT_DIR, "image-1.png"), Buffer.alloc(2 * 1024 * 1024));
+  const before = await (await get("/api/storage")).json();
+  assert.ok(before.outputs >= 2 / 1024);
+  const after = await (await post("/api/remove", { kind: "outputs" })).json();
+  assert.ok(after.outputs < 1e-6);
+  assert.ok(!fs.existsSync(path.join(OUTPUT_DIR, "image-1.png")));
 });
 
 test("the image server setting is validated, checked, used for pictures and cleared", async () => {

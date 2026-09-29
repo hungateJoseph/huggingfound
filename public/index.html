@@ -39,6 +39,20 @@
 
     <section id="notice" class="notice info" hidden></section>
 
+    <section class="local" id="local">
+      <div class="local-head">
+        <div>
+          <h2>On this computer</h2>
+          <p class="muted" id="local-summary">Scan to see which models are downloaded, how much space they take, and what is free.</p>
+        </div>
+        <button class="ghost" id="scan-local">Scan this computer</button>
+      </div>
+      <div id="local-body" hidden>
+        <p class="disk" id="disk-line"></p>
+        <ul id="local-list"></ul>
+      </div>
+    </section>
+
     <section id="results">
       <div class="filters">
         <label class="check"><input type="checkbox" id="only-runnable" checked> Only models this computer can run</label>

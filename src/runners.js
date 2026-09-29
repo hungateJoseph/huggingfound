@@ -127,7 +127,35 @@ export async function storage(fetchImpl = fetch) {
     // not running; its models cannot be listed or removed until it is
   }
   const totalGb = files.reduce((t, f) => t + f.gb, 0) + ollama.reduce((t, m) => t + m.gb, 0);
-  return { files, ollama, totalGb };
+  return { files, ollama, totalGb, outputs: folderSize(OUTPUT_DIR) + folderSize(UPLOAD_DIR), disk: diskSpace() };
+}
+
+// Free and total space on the drive that holds the data folder.
+export function diskSpace() {
+  try {
+    const st = fs.statfsSync(DATA_DIR);
+    return { freeGb: (st.bavail * st.bsize) / 1024 ** 3, totalGb: (st.blocks * st.bsize) / 1024 ** 3 };
+  } catch {
+    return { freeGb: null, totalGb: null };
+  }
+}
+
+function folderSize(dir) {
+  if (!fs.existsSync(dir)) return 0;
+  return walk(dir).reduce((t, f) => {
+    try {
+      return t + fs.statSync(f).size / 1024 ** 3;
+    } catch {
+      return t;
+    }
+  }, 0);
+}
+
+// Generated pictures, transcripts and uploaded recordings.
+export function clearOutputs() {
+  for (const dir of [OUTPUT_DIR, UPLOAD_DIR]) {
+    for (const f of walk(dir)) fs.rmSync(f, { force: true });
+  }
 }
 
 export function removeFile(repo, file) {

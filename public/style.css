@@ -122,6 +122,21 @@ button.ghost { background: transparent; }
 .style-note { margin: 0 0 6px; }
 .loaded-note { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
 
+.local { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 20px; }
+.local-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.local-head h2 { font-size: 17px; }
+.local-head p { margin: 2px 0 0; font-size: 14px; }
+.local ul { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
+.local li { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; font-size: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
+.local li .what { min-width: 0; overflow-wrap: anywhere; }
+.local li .size { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.local li button { font-size: 13px; padding: 5px 10px; }
+.disk { margin: 12px 0 0; font-size: 14px; }
+.disk b { font-variant-numeric: tabular-nums; }
+.disk .bar { display: block; height: 8px; border-radius: 999px; background: #efece5; margin-top: 6px; overflow: hidden; }
+.disk .bar i { display: block; height: 100%; background: var(--accent); }
+.disk .bar i.models { background: var(--ink); }
+
 .notice { padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; }
 .notice.info { background: var(--info-soft); color: var(--info); }
 .notice.warn { background: var(--warn-soft); color: var(--warn); }

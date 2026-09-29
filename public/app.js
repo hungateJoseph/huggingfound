@@ -28,7 +28,7 @@ async function check(res) {
 async function load() {
   const s = await api.get("/api/state");
   Object.assign(state, { machine: s.machine, categories: s.categories, runners: s.runners, picks: s.picks });
-  $("#machine-line").textContent = `${s.machine.os}, ${s.machine.ramGb} GB memory, ${s.machine.gpu}. Room for models up to about ${s.machine.comfortableGb} GB.`;
+  renderDiskLine();
   $("#env-path").textContent = s.envFile;
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
   state.imageServer = s.imageServer;
@@ -430,6 +430,7 @@ function renderRemove(box, model, plan) {
     btn.textContent = "Removing";
     try {
       for (const item of plan.remove) await api.post("/api/remove", item);
+      if (!$("#local-body").hidden) renderStorage(["local"]).catch(() => {});
       const fresh = await api.get(`/api/model?id=${encodeURIComponent(model.id)}`);
       if (state.open === model.id) {
         renderModel(fresh.model, fresh.plan);
@@ -443,30 +444,78 @@ function renderRemove(box, model, plan) {
   });
 }
 
-async function renderStorage() {
+// Everything on disk, rendered into the main page's section and the Settings
+// list from one scan. Removing something rescans, so the free space is right.
+async function renderStorage(targets = ["local", "settings"]) {
   const st = await api.get("/api/storage");
+  state.storage = st;
   const rows = [
     ...st.files.map((f) => ({ what: `${f.repo}/${f.file}`, gb: f.gb, body: { kind: "file", repo: f.repo, file: f.file } })),
     ...st.ollama.map((m) => ({ what: `${m.name} (Ollama)`, gb: m.gb, body: { kind: "ollama", name: m.name } })),
   ];
-  $("#storage-total").textContent = rows.length ? `${st.totalGb.toFixed(1)} GB in ${rows.length} model${rows.length === 1 ? "" : "s"}. Removing one keeps the runner; the model can be downloaded again later.` : "No models downloaded yet.";
-  $("#storage-list").innerHTML = rows.map((r, i) => `<li><span class="what">${esc(r.what)}</span><span class="size">${r.gb.toFixed(2)} GB</span><button class="ghost" data-remove="${i}">Remove</button></li>`).join("");
-  for (const btn of $("#storage-list").querySelectorAll("button")) {
-    btn.addEventListener("click", async () => {
-      const row = rows[Number(btn.dataset.remove)];
-      if (!confirm(`Delete ${row.what} from this computer?`)) return;
-      btn.disabled = true;
-      try {
-        await api.post("/api/remove", row.body);
-        await renderStorage();
-        if (state.open) openModel(state.open);
-      } catch (err) {
-        btn.disabled = false;
-        alert(`Could not remove it: ${err.message}`);
-      }
-    });
+  if (st.outputs > 0.001) rows.push({ what: "Generated pictures, transcripts and uploaded recordings", gb: st.outputs, body: { kind: "outputs" }, label: "Clear" });
+  const summary = rows.length ? `${st.totalGb.toFixed(1)} GB in ${st.files.length + st.ollama.length} model${st.files.length + st.ollama.length === 1 ? "" : "s"}. Removing one keeps the runner; the model can be downloaded again later.` : "No models downloaded yet.";
+  const list = rows.map((r, i) => `<li><span class="what">${esc(r.what)}</span><span class="size">${r.gb.toFixed(2)} GB</span><button class="ghost" data-remove="${i}">${r.label ?? "Remove"}</button></li>`).join("");
+  const disk = st.disk.freeGb != null
+    ? `<b>${st.disk.freeGb.toFixed(1)} GB free</b> of ${st.disk.totalGb.toFixed(0)} GB on this drive; models use ${st.totalGb.toFixed(1)} GB.<span class="bar"><i class="models" style="width:${Math.min(100, (st.totalGb / st.disk.totalGb) * 100).toFixed(2)}%"></i><i style="width:${Math.max(0, Math.min(100, ((st.disk.totalGb - st.disk.freeGb - st.totalGb) / st.disk.totalGb) * 100)).toFixed(2)}%"></i></span>`
+    : "";
+  renderDiskLine();
+
+  const places = [];
+  if (targets.includes("local")) {
+    $("#local-body").hidden = false;
+    $("#local-summary").textContent = summary;
+    $("#disk-line").innerHTML = disk;
+    $("#local-list").innerHTML = list;
+    places.push($("#local-list"));
+  }
+  if (targets.includes("settings")) {
+    $("#storage-total").textContent = summary;
+    $("#storage-list").innerHTML = list;
+    places.push($("#storage-list"));
+  }
+  for (const place of places) {
+    for (const btn of place.querySelectorAll("button")) {
+      btn.addEventListener("click", async () => {
+        const row = rows[Number(btn.dataset.remove)];
+        const question = row.body.kind === "outputs" ? "Delete all generated pictures, transcripts and uploaded recordings?" : `Delete ${row.what} from this computer?`;
+        if (!confirm(question)) return;
+        btn.disabled = true;
+        try {
+          await api.post("/api/remove", row.body);
+          // Refresh wherever the list is showing; the front-page section stays put until scanned.
+          await renderStorage($("#local-body").hidden ? ["settings"] : ["local", "settings"]);
+          if (state.open) openModel(state.open);
+        } catch (err) {
+          btn.disabled = false;
+          alert(`Could not remove it: ${err.message}`);
+        }
+      });
+    }
   }
 }
+
+// The free-space figure in the header follows the last scan.
+function renderDiskLine() {
+  const st = state.storage;
+  const m = state.machine;
+  const free = st?.disk?.freeGb != null ? ` ${st.disk.freeGb.toFixed(0)} GB free on disk.` : "";
+  $("#machine-line").textContent = `${m.os}, ${m.ramGb} GB memory, ${m.gpu}. Room for models up to about ${m.comfortableGb} GB.${free}`;
+}
+
+$("#scan-local").addEventListener("click", async () => {
+  const btn = $("#scan-local");
+  btn.disabled = true;
+  btn.textContent = "Scanning";
+  try {
+    await renderStorage();
+  } catch (err) {
+    notice(`Could not scan this computer: ${err.message}`, "bad");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Scan again";
+  }
+});
 
 function renderChat(box, modelName) {
   box.innerHTML = `<h3>Try it</h3>
@@ -658,7 +707,7 @@ function renderRunners() {
 
 $("#open-settings").addEventListener("click", () => {
   $("#settings").hidden = false;
-  renderStorage().catch(() => ($("#storage-total").textContent = "Could not read the models folder."));
+  renderStorage($("#local-body").hidden ? ["settings"] : ["local", "settings"]).catch(() => ($("#storage-total").textContent = "Could not read the models folder."));
 });
 $("#close-settings").addEventListener("click", () => ($("#settings").hidden = true));
 $("#close-modal").addEventListener("click", () => {

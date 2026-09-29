@@ -9,7 +9,7 @@ import { createHub } from "./hf.js";
 import { describeMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, describeImageServer, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startRun, stopImageServer, storage, which } from "./runners.js";
+import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
@@ -115,7 +115,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (body.kind === "file") removeFile(body.repo, body.file);
         else if (body.kind === "folder") removeFolder(body.repo);
         else if (body.kind === "ollama") await removeOllamaModel(body.name, fetchImpl);
-        else return send(res, 400, { error: "kind must be file, folder or ollama" });
+        else if (body.kind === "outputs") clearOutputs();
+        else return send(res, 400, { error: "kind must be file, folder, ollama or outputs" });
       } catch (err) {
         return send(res, 400, { error: err.message });
       }
