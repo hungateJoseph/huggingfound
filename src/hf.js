@@ -145,15 +145,42 @@ export function chooseFile(files, runnerId) {
     if (ggufs.length) return ggufs.sort((a, b) => (a.gb ?? 0) - (b.gb ?? 0))[0];
     if (runnerId === "sd") {
       const single = files.filter((f) => /\.safetensors$/i.test(f.name) && !f.name.includes("/") && !/lora|vae|refiner/i.test(f.name));
-      return single.sort((a, b) => (a.gb ?? 0) - (b.gb ?? 0))[0] ?? null;
+      return single.sort((a, b) => (a.gb ?? 0) - (b.gb ?? 0))[0] ?? diffusersFolder(files);
     }
     return null;
   }
+
   if (runnerId === "whisper") {
     const bins = files.filter((f) => /^ggml-.*\.bin$/.test(f.name));
     return bins.find((f) => f.name === "ggml-base.en.bin") ?? bins.find((f) => f.name === "ggml-base.bin") ?? bins[0] ?? null;
   }
   return null;
+}
+
+// A repository in the diffusers folder layout (unet/, vae/, text_encoder/,
+// text_encoder_2/) loads in stable-diffusion.cpp as a folder, as long as the
+// four weight files sit under their plain names. The half-precision variant
+// is taken when the repository has one; it is the same model at half the size.
+export function diffusersFolder(files) {
+  const want = [
+    ["unet/diffusion_pytorch_model", true],
+    ["vae/diffusion_pytorch_model", false],
+    ["text_encoder/model", false],
+    ["text_encoder_2/model", false],
+  ];
+  const parts = [];
+  for (const [base, required] of want) {
+    const fp16 = files.find((f) => f.name === `${base}.fp16.safetensors`);
+    const full = files.find((f) => f.name === `${base}.safetensors`);
+    const pick = fp16 ?? full;
+    if (!pick) {
+      if (required) return null;
+      continue;
+    }
+    parts.push({ from: pick.name, to: `${base}.safetensors`, gb: pick.gb ?? 0 });
+  }
+  if (!parts.some((p) => p.to.startsWith("text_encoder/"))) return null;
+  return { name: "diffusers folder", folder: true, xl: parts.some((p) => p.to.startsWith("text_encoder_2/")), parts, gb: parts.reduce((t, p) => t + p.gb, 0) || null };
 }
 
 // The quantization suffix Ollama wants after `hf.co/user/repo:`.

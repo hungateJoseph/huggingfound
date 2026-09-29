@@ -274,7 +274,7 @@ function renderModel(model, plan) {
   }
 
   parts.push(`<div class="spec">
-    <div><b>File</b>${esc(plan.file.name)}</div>
+    <div><b>File</b>${plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : esc(plan.file.name)}</div>
     <div><b>Size</b>${plan.file.gb ? plan.file.gb.toFixed(2) + " GB" : "unknown"}</div>
     <div><b>On this computer</b><span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span></div>
     <div><b>Runs with</b>${{ ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[plan.runner]}</div>

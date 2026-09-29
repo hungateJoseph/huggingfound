@@ -14,7 +14,7 @@ export const MODELS = [
   { id: "ggerganov/whisper.cpp", pipeline_tag: "automatic-speech-recognition", library_name: null, tags: ["automatic-speech-recognition"], downloads: 400000, likes: 900, createdAt: "2023-03-01T00:00:00.000Z" },
   { id: "openai/whisper-large-v3", pipeline_tag: "automatic-speech-recognition", library_name: "transformers", tags: ["transformers", "safetensors"], downloads: 3000000, likes: 3000, createdAt: "2023-11-07T00:00:00.000Z" },
   { id: "TheDrummer/Cydonia-24B-v2-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "not-for-all-audiences", "conversational"], downloads: 40000, likes: 350, createdAt: "2026-09-20T00:00:00.000Z" },
-  { id: "John6666/pony-realism-v23-sdxl", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusion-single-file", "not-for-all-audiences"], downloads: 25000, likes: 90, createdAt: "2026-08-01T00:00:00.000Z" },
+  { id: "John6666/pony-realism-v23-sdxl", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion-xl", "not-for-all-audiences", "diffusers:StableDiffusionXLPipeline"], downloads: 25000, likes: 90, createdAt: "2026-08-01T00:00:00.000Z" },
 ];
 
 export const FILES = {
@@ -40,7 +40,44 @@ export const FILES = {
     { rfilename: "ggml-large-v3.bin", size: 3.1 * 1024 ** 3 },
   ],
   "openai/whisper-large-v3": [{ rfilename: "model.safetensors", size: 3.1 * 1024 ** 3 }],
+  "John6666/pony-realism-v23-sdxl": [
+    { rfilename: "model_index.json", size: 600 },
+    { rfilename: "unet/config.json", size: 1800 },
+    { rfilename: "unet/diffusion_pytorch_model.safetensors", size: 9.56 * 1024 ** 3 },
+    { rfilename: "unet/diffusion_pytorch_model.fp16.safetensors", size: 4.78 * 1024 ** 3 },
+    { rfilename: "vae/diffusion_pytorch_model.fp16.safetensors", size: 0.16 * 1024 ** 3 },
+    { rfilename: "text_encoder/model.fp16.safetensors", size: 0.23 * 1024 ** 3 },
+    { rfilename: "text_encoder_2/model.fp16.safetensors", size: 1.29 * 1024 ** 3 },
+    { rfilename: "tokenizer/vocab.json", size: 1000000 },
+  ],
 };
+
+// Small but real safetensors files for the diffusers parts, so the merge
+// step has something to convert.
+export const TINY_PARTS = {
+  "unet/diffusion_pytorch_model.fp16.safetensors": ["conv_in.weight", "down_blocks.1.attentions.0.transformer_blocks.1.attn1.to_k.weight", "up_blocks.0.resnets.2.norm1.weight", "add_embedding.linear_1.bias"],
+  "vae/diffusion_pytorch_model.fp16.safetensors": ["encoder.mid_block.attentions.0.to_q.weight", "decoder.up_blocks.0.resnets.1.conv1.weight"],
+  "text_encoder/model.fp16.safetensors": ["text_model.embeddings.token_embedding.weight", "text_model.embeddings.position_ids"],
+  "text_encoder_2/model.fp16.safetensors": ["text_model.final_layer_norm.weight", "text_projection.weight"],
+};
+
+export function tinySafetensors(names) {
+  const header = {};
+  let offset = 0;
+  const chunks = [];
+  for (const [i, name] of names.entries()) {
+    const data = Buffer.alloc(16, i + 1);
+    header[name] = { dtype: "F16", shape: [2, 4], data_offsets: [offset, offset + data.length] };
+    chunks.push(data);
+    offset += data.length;
+  }
+  let json = Buffer.from(JSON.stringify(header));
+  const pad = (8 - (json.length % 8)) % 8;
+  if (pad) json = Buffer.concat([json, Buffer.alloc(pad, 0x20)]);
+  const len = Buffer.alloc(8);
+  len.writeBigUInt64LE(BigInt(json.length));
+  return Buffer.concat([len, json, ...chunks]);
+}
 
 export function startStubHub({ extraModels = [] } = {}) {
   const requests = [];
@@ -71,7 +108,7 @@ export function startStubHub({ extraModels = [] } = {}) {
       const m = all.find((x) => x.id === dl[1]);
       if (!m) return json(res, 404, { error: "not found" });
       if (m.gated && !req.headers.authorization) return json(res, 401, { error: "gated" });
-      const body = Buffer.alloc(64 * 1024, dl[2]);
+      const body = TINY_PARTS[dl[2]] ? tinySafetensors(TINY_PARTS[dl[2]]) : Buffer.alloc(64 * 1024, dl[2]);
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": body.length });
       return res.end(body);
     }

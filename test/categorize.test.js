@@ -84,7 +84,7 @@ test("adult models are flagged and land in the NSFW buckets as well as their own
   assert.deepEqual(tagged.categories, ["easy", "chat", "nsfw-writing"]);
   const named = categorize(gguf("someone/Llama-3-8B-Uncensored-GGUF"));
   assert.ok(named.categories.includes("nsfw-writing"));
-  const image = categorize({ id: "John6666/pony-realism-v23-sdxl", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusion-single-file", "not-for-all-audiences"] });
+  const image = categorize({ id: "John6666/pony-realism-v23-sdxl", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion-xl", "not-for-all-audiences", "diffusers:StableDiffusionXLPipeline"] });
   assert.deepEqual(image.categories, ["easy", "images", "nsfw-images"]);
   assert.equal(image.runner.id, "sd");
   const plain = categorize(gguf("bartowski/Qwen2.5-7B-Instruct-GGUF"));
@@ -98,4 +98,15 @@ test("parts of a model are not offered as models", () => {
     assert.deepEqual(r.categories, [], id);
     assert.equal(r.runner, null);
   }
+});
+
+test("diffusers repositories of the Stable Diffusion families run, other pipelines do not", () => {
+  const sdxl = categorize({ id: "someone/my-anime-mix", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusers:StableDiffusionXLPipeline"] });
+  assert.equal(sdxl.runner.id, "sd");
+  const sd15 = categorize({ id: "someone/dreamy-photos", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion"] });
+  assert.equal(sd15.runner.id, "sd");
+  const sd3 = categorize({ id: "stabilityai/stable-diffusion-3.5-medium", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusers:StableDiffusion3Pipeline"] });
+  assert.equal(sd3.runner.id, "sd-parts");
+  const unknown = categorize({ id: "someone/painting-model", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusers:KandinskyPipeline"] });
+  assert.equal(unknown.runner.id, "python-diffusers");
 });

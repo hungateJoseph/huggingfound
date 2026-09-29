@@ -56,13 +56,16 @@ export function categorize(model) {
 // Which local runner can take this model, if any.
 function runnerFor(model, cats, gguf) {
   if (cats.includes("images")) {
-    // stable-diffusion.cpp loads Stable Diffusion 1.x, 2.x, XL and Turbo as
-    // one file with the encoders and VAE inside. Newer families (FLUX,
-    // Qwen-Image, Wan and friends) ship the pieces separately, which is a
-    // hand-assembly job, so they are shown but not set up.
+    // stable-diffusion.cpp loads Stable Diffusion 1.x, 2.x, XL and Turbo,
+    // either as one file with the encoders and VAE inside or as a diffusers
+    // folder. Newer families (FLUX, Qwen-Image, Wan and friends) ship the
+    // pieces separately, which is a hand-assembly job, so they are shown
+    // but not set up.
     const family = /stable.?diffusion|\bsd-?(1\.?5|2\.?1|xl)\b|sdxl|sd.?turbo|dreamshaper|realistic.?vision|juggernaut/i.test(model.id);
     const parts = /flux|qwen|wan|hunyuan|z-image|lumina|chroma|kolors|pixart|sana|cogview|hidream|stable-diffusion-3|sd3|lora|openvino|onnx|tensorrt|coreml/i.test(model.id);
-    const single = !parts && (family || model.library_name === "diffusion-single-file" || (model.tags ?? []).includes("diffusion-single-file"));
+    const rawTags = (model.tags ?? []).map((t) => t.toLowerCase());
+    const sdPipeline = rawTags.includes("stable-diffusion-xl") || rawTags.includes("stable-diffusion") || rawTags.some((t) => /^diffusers:stablediffusion(xl)?(img2img|inpaint)?pipeline$/.test(t));
+    const single = !parts && (family || sdPipeline || model.library_name === "diffusion-single-file" || rawTags.includes("diffusion-single-file"));
     if (single) return { id: "sd", name: "stable-diffusion.cpp", easy: true };
     if (gguf || parts) return { id: "sd-parts", name: "stable-diffusion.cpp with separate encoder and VAE files", easy: false };
     return { id: "python-diffusers", name: "Python + diffusers", easy: false };

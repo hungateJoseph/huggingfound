@@ -108,3 +108,22 @@ test("a repository without a loadable file says so", () => {
   assert.equal(plan.runnable, false);
   assert.match(plan.reason, /no single checkpoint/);
 });
+
+test("a diffusers folder plans one download of all its parts and loads as a folder", () => {
+  const model = withFiles("John6666/pony-realism-v23-sdxl");
+  const plan = buildPlan({ model, files: model.files, machine, detected: nothing(), hasToken: false });
+  assert.equal(plan.runnable, true);
+  assert.deepEqual(plan.steps.map((s) => s.kind), ["install-sd", "download-files"]);
+  assert.equal(plan.steps[1].args.files.length, 4);
+  assert.equal(plan.steps[1].args.files[0].to, "unet/diffusion_pytorch_model.safetensors");
+  assert.equal(plan.steps[1].args.convert, "diffusers");
+  assert.equal(plan.steps[1].args.into, "pony-realism-v23-sdxl.safetensors");
+  assert.match(plan.steps[1].title, /4 files and merge them \(6\.5 GB\)/);
+  assert.match(plan.speed.text, /768 by 768/);
+  assert.deepEqual(plan.tryWith, { kind: "image", repo: model.id, file: "pony-realism-v23-sdxl.safetensors" });
+  assert.deepEqual(plan.remove, [{ kind: "folder", repo: model.id }]);
+  const have = { ...nothing(), sd: { installed: true }, models: [`${model.id}/pony-realism-v23-sdxl.safetensors`] };
+  assert.deepEqual(buildPlan({ model, files: model.files, machine, detected: have, hasToken: false }).steps.map((s) => s.done), [true, true]);
+  const partsOnly = { ...have, models: plan.steps[1].args.files.map((f) => `${model.id}/${f.to}`) };
+  assert.equal(buildPlan({ model, files: model.files, machine, detected: partsOnly, hasToken: false }).steps[1].done, false, "parts alone are not enough; the merge has to have happened");
+});

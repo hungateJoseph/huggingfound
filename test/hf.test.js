@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { chooseFile, createHub, quantTag, summarize } from "../src/hf.js";
+import { chooseFile, createHub, diffusersFolder, quantTag, summarize } from "../src/hf.js";
 import { FILES, MODELS, startStubHub } from "./stub-hub.js";
 
 let stub;
@@ -107,4 +107,22 @@ test("a search with several traits falls back to each word and ranks by words ma
   assert.ok(ids.includes("bartowski/Qwen2.5-Coder-7B-Instruct-GGUF"));
   assert.ok(ids.includes("ggerganov/whisper.cpp"));
   assert.equal(ids[0], "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF", "two words matched beats one");
+});
+
+test("a diffusers folder is chosen when there is no single file, taking the half-precision parts", () => {
+  const files = FILES["John6666/pony-realism-v23-sdxl"].map((f) => ({ name: f.rfilename, gb: f.size / 1024 ** 3 }));
+  const pick = chooseFile(files, "sd");
+  assert.equal(pick.folder, true);
+  assert.equal(pick.xl, true);
+  assert.deepEqual(pick.parts.map((p) => [p.from, p.to]), [
+    ["unet/diffusion_pytorch_model.fp16.safetensors", "unet/diffusion_pytorch_model.safetensors"],
+    ["vae/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.safetensors"],
+    ["text_encoder/model.fp16.safetensors", "text_encoder/model.safetensors"],
+    ["text_encoder_2/model.fp16.safetensors", "text_encoder_2/model.safetensors"],
+  ]);
+  assert.ok(Math.abs(pick.gb - 6.46) < 0.01);
+  assert.equal(diffusersFolder([{ name: "vae/diffusion_pytorch_model.safetensors", gb: 0.1 }]), null, "no unet, no folder");
+  const sd15 = diffusersFolder([{ name: "unet/diffusion_pytorch_model.safetensors", gb: 3.4 }, { name: "text_encoder/model.safetensors", gb: 0.5 }]);
+  assert.equal(sd15.xl, false);
+  assert.equal(sd15.parts.length, 2);
 });

@@ -45,8 +45,10 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   }
 
   const fit = fitFor(file.gb, machine);
-  const speed = estimate({ runnerId: runner.id, sizeGb: file.gb, fileName: file.name, machine });
-  const downloaded = detected.models.includes(`${model.id}/${file.name}`);
+  const speed = estimate({ runnerId: runner.id, sizeGb: file.gb, fileName: file.name, machine, xl: file.xl });
+  // A diffusers folder ends up merged into one checkpoint named after the model.
+  const mergedName = file.folder ? `${model.name.replace(/[^\w.-]/g, "-")}.safetensors` : null;
+  const downloaded = detected.models.includes(`${model.id}/${mergedName ?? file.name}`);
   const steps = [];
   const os = platformName(machine.platform);
 
@@ -128,6 +130,17 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       done: detected.sd.installed,
       command: machine.platform === "win32" ? "download the latest release from github.com/leejet/stable-diffusion.cpp" : "download the latest release from github.com/leejet/stable-diffusion.cpp, or build it with CMake",
     });
+    if (file.folder) {
+      steps.push({
+        kind: "download-files",
+        args: { repo: model.id, files: file.parts.map((part) => ({ from: part.from, to: part.to })), convert: "diffusers", into: mergedName },
+        title: `Download the model's ${file.parts.length} files and merge them (${file.gb ? file.gb.toFixed(1) + " GB" : "size unknown"})`,
+        text: `${fit.text}. This model is published as separate parts (the image network, the text encoders and the decoder). HuggingFound downloads them and merges them into one checkpoint file, the form stable-diffusion.cpp loads; the parts are removed afterwards. ${file.xl ? "An SDXL model: pictures come out at 768 by 768 and take several minutes each on a laptop." : "A 512 by 512 picture takes one to a few minutes on a laptop, longer the first time."}`,
+        done: downloaded,
+        command: `download ${file.parts.map((part) => part.from).join(", ")} and merge into ~/HuggingFound/models/${model.id}/${mergedName}`,
+      });
+      return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${mergedName}`]), steps, tryWith: { kind: "image", repo: model.id, file: mergedName }, remove: [{ kind: "folder", repo: model.id }] };
+    }
     steps.push({
       kind: "download-file",
       args: { repo: model.id, file: file.name },

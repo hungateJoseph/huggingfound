@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { convertDiffusersFolder } from "./convert.js";
 
 // The three local runners and everything the app does on the machine:
 // where files live, what is installed, and the commands that install,
@@ -84,7 +85,8 @@ export async function detect(fetchImpl = fetch) {
   };
 }
 
-// Files already in the models folder, keyed by "repo/file".
+// Files already in the models folder, keyed by "owner/repo/path", where the
+// path may have folders in it (diffusers layouts do).
 export function downloadedFiles() {
   const out = [];
   if (!fs.existsSync(MODELS_DIR)) return out;
@@ -94,7 +96,9 @@ export function downloadedFiles() {
     for (const repo of fs.readdirSync(ownerDir)) {
       const repoDir = path.join(ownerDir, repo);
       if (!fs.statSync(repoDir).isDirectory()) continue;
-      for (const file of fs.readdirSync(repoDir)) out.push(`${owner}/${repo}/${file}`);
+      for (const file of walk(repoDir)) {
+        if (!file.endsWith(".part")) out.push(`${owner}/${repo}/${path.relative(repoDir, file).split(path.sep).join("/")}`);
+      }
     }
   }
   return out;
@@ -127,7 +131,7 @@ export async function storage(fetchImpl = fetch) {
 }
 
 export function removeFile(repo, file) {
-  if (!REPO_RE.test(String(repo)) || !FILE_RE.test(String(file))) throw new Error("Bad file arguments");
+  if (!REPO_RE.test(String(repo)) || !SUBPATH_RE.test(String(file))) throw new Error("Bad file arguments");
   const target = modelPath(repo, file);
   if (!fs.existsSync(target)) throw new Error("That file is not on this computer");
   fs.rmSync(target, { force: true });
@@ -135,8 +139,23 @@ export function removeFile(repo, file) {
   const dir = path.dirname(target);
   const modelfile = path.join(dir, "Modelfile");
   if (fs.existsSync(modelfile) && !fs.readdirSync(dir).some((n) => n !== "Modelfile")) fs.rmSync(modelfile, { force: true });
-  for (const d of [dir, path.dirname(dir)]) {
-    if (d.startsWith(MODELS_DIR) && d !== MODELS_DIR && fs.existsSync(d) && fs.readdirSync(d).length === 0) fs.rmdirSync(d);
+  pruneEmpty(dir);
+}
+
+// A whole repository folder (a diffusers layout is several files).
+export function removeFolder(repo) {
+  if (!REPO_RE.test(String(repo))) throw new Error("Bad repository name");
+  const dir = path.join(MODELS_DIR, ...repo.split("/"));
+  if (!fs.existsSync(dir)) throw new Error("That model is not on this computer");
+  fs.rmSync(dir, { recursive: true, force: true });
+  pruneEmpty(path.dirname(dir));
+}
+
+function pruneEmpty(dir) {
+  let d = dir;
+  while (d.startsWith(MODELS_DIR) && d !== MODELS_DIR && fs.existsSync(d) && fs.readdirSync(d).length === 0) {
+    fs.rmdirSync(d);
+    d = path.dirname(d);
   }
 }
 
@@ -160,6 +179,8 @@ export function modelPath(repo, file) {
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
+// A file up to two folders deep inside a repository, no dot-segments.
+const SUBPATH_RE = /^(?!\.)[\w.+-]+(?:\/(?!\.)[\w.+-]+){0,2}$/;
 const OLLAMA_NAME_RE = /^[\w.:/-]+$/;
 
 // Returns { argv, cwd?, description } for a step, or a { download } request
@@ -195,8 +216,31 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
     case "download-file": {
       const repo = String(args.repo ?? "");
       const file = String(args.file ?? "");
-      if (!REPO_RE.test(repo) || !FILE_RE.test(file)) throw new Error("Bad file arguments");
+      if (!REPO_RE.test(repo) || !SUBPATH_RE.test(file)) throw new Error("Bad file arguments");
       return { download: { url: `${hubBase}/${repo}/resolve/main/${file}`, dest: modelPath(repo, file) }, text: `Downloading ${file}` };
+    }
+    case "download-files": {
+      // Several files of one repository, each saved under the name the
+      // runner expects (a diffusers folder's half-precision variants lose
+      // their .fp16 suffix).
+      const repo = String(args.repo ?? "");
+      const files = Array.isArray(args.files) ? args.files : [];
+      if (!REPO_RE.test(repo) || files.length === 0 || files.length > 8) throw new Error("Bad file arguments");
+      const downloads = files.map((f) => {
+        const from = String(f.from ?? "");
+        const to = String(f.to ?? from);
+        if (!SUBPATH_RE.test(from) || !SUBPATH_RE.test(to)) throw new Error("Bad file arguments");
+        return { url: `${hubBase}/${repo}/resolve/main/${from}`, dest: modelPath(repo, to), name: from };
+      });
+      // A diffusers folder is merged into one checkpoint afterwards, which
+      // is the form stable-diffusion.cpp identifies and loads reliably.
+      let convert = null;
+      if (args.convert === "diffusers") {
+        const into = String(args.into ?? "");
+        if (!FILE_RE.test(into) || !into.endsWith(".safetensors")) throw new Error("Bad file arguments");
+        convert = { dir: path.join(MODELS_DIR, ...repo.split("/")), into: modelPath(repo, into) };
+      }
+      return { downloads, convert, text: `Downloading ${downloads.length} files of ${repo}` };
     }
     case "install-whisper":
       if (platform === "win32") return { githubRelease: { repo: "ggerganov/whisper.cpp", match: /^whisper-bin-x64\.zip$/, pick: /whisper-cli\.exe$/, dir: "whisper" }, text: "Downloading the whisper.cpp release for Windows" };
@@ -237,10 +281,15 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       if (!REPO_RE.test(repo) || !FILE_RE.test(file) || !prompt.trim()) throw new Error("Bad image arguments");
       const bin = sdBinary();
       if (!bin) throw new Error("stable-diffusion.cpp is not installed");
+      const modelArg = modelPath(repo, file);
+      if (!fs.existsSync(modelArg)) throw new Error("The model file is not downloaded yet");
+      const xl = /xl/i.test(file) || /xl/i.test(repo);
+      const turbo = /turbo|lightning/i.test(file) || /turbo|lightning/i.test(repo);
       const out = path.join(OUTPUT_DIR, `image-${Date.now()}.png`);
-      const steps = /turbo/i.test(file) ? "4" : "20";
-      const argv = [bin, "-m", modelPath(repo, file), "-p", prompt, "-o", out, "--steps", steps, "-W", "512", "-H", "512"];
-      if (/turbo/i.test(file)) argv.push("--cfg-scale", "1");
+      // SDXL models are trained at 1024; 768 keeps them coherent at a third of the cost.
+      const size = xl && !turbo ? "768" : "512";
+      const argv = [bin, "-m", modelArg, "-p", prompt, "-o", out, "--steps", turbo ? "4" : "20", "-W", size, "-H", size];
+      if (turbo) argv.push("--cfg-scale", "1");
       return { argv, text: "Generating the image", result: out };
     }
     default:
@@ -281,6 +330,31 @@ export function startRun(kind, args, machine, { token = "", fetchImpl = fetch, h
 
   if (spec.download) {
     downloadFile(spec.download.url, spec.download.dest, token, emit, fetchImpl).then(() => finish("done", "Download complete.")).catch((err) => finish("failed", `Download failed: ${err.message}`));
+  } else if (spec.downloads) {
+    (async () => {
+      if (spec.convert && fs.existsSync(spec.convert.into)) {
+        emit("The merged checkpoint is already here.");
+        return;
+      }
+      for (const [i, d] of spec.downloads.entries()) {
+        if (fs.existsSync(d.dest)) {
+          emit(`File ${i + 1} of ${spec.downloads.length}: ${d.name} is already here`);
+          continue;
+        }
+        emit(`File ${i + 1} of ${spec.downloads.length}: ${d.name}`);
+        await downloadFile(d.url, d.dest, token, emit, fetchImpl);
+      }
+      if (spec.convert) {
+        await convertDiffusersFolder(spec.convert.dir, spec.convert.into, emit);
+        // The parts are not needed once the checkpoint exists.
+        for (const d of spec.downloads) fs.rmSync(d.dest, { force: true });
+        for (const sub of ["unet", "vae", "text_encoder", "text_encoder_2"]) {
+          const dir = path.join(spec.convert.dir, sub);
+          if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+        }
+        emit(`Saved as ${spec.convert.into}`);
+      }
+    })().then(() => finish("done", spec.convert ? "Ready." : "All files downloaded.")).catch((err) => finish("failed", `Download failed: ${err.message}`));
   } else if (spec.githubRelease) {
     installRelease(spec.githubRelease, emit, fetchImpl)
       .catch(async (err) => {

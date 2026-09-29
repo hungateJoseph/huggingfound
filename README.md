@@ -53,6 +53,7 @@ HuggingFound only ever runs the fixed set of commands below, built from checked 
 | Install whisper.cpp | built from source with CMake | release zip | built from source with CMake |
 | Install stable-diffusion.cpp | release zip, or built from source when the zip needs a newer macOS | release zip (CUDA or CPU) | release zip, or built from source |
 | Download a file | HTTPS from Hugging Face into `~/HuggingFound/models` | same | same |
+| Download a diffusers repository | the unet, VAE and text encoder files of a Stable Diffusion 1.x or XL repository, merged into one checkpoint file (tensor names mapped as in the diffusers conversion scripts, weights copied byte for byte), parts removed afterwards | same | same |
 
 Gated chat models are downloaded with your token and registered with `ollama create` from a Modelfile.
 
@@ -75,6 +76,7 @@ src/categorize.js     categories and runner detection from Hub metadata
 src/machine.js        memory, GPU, and whether a file fits
 src/picks.js          curated known-good models per category
 src/speed.js          rough speed guesses per runner, size and hardware
+src/convert.js        merges a diffusers folder into one checkpoint file
 src/plans.js          the step plan for a model on this computer
 src/runners.js        commands, downloads, releases, live step output
 src/server.js         the local HTTP API

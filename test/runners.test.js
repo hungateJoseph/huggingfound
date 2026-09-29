@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-runners-"));
-const { BIN_DIR, DATA_DIR, MODELS_DIR, UPLOAD_DIR, commandFor, detect, downloadedFiles, modelPath, removeFile, removeOllamaModel, storage } = await import("../src/runners.js");
+const { BIN_DIR, DATA_DIR, MODELS_DIR, UPLOAD_DIR, commandFor, detect, downloadedFiles, modelPath, removeFile, removeFolder, removeOllamaModel, storage } = await import("../src/runners.js");
 
 const mac = { platform: "darwin", gpu: "Apple Silicon" };
 const win = { platform: "win32", gpu: "NVIDIA GeForce RTX 4070" };
@@ -72,8 +72,12 @@ test("a program in its own bin folder is found, whichever name the release uses"
     throw new Error("refused");
   });
   assert.equal(d.sd.installed, true);
+  const file = modelPath("a/b", "m.gguf");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "");
   const spec = commandFor("generate-image", { repo: "a/b", file: "m.gguf", prompt: "a cat" }, mac);
   assert.ok(spec.argv[0].endsWith("sd-cli"));
+  removeFolder("a/b");
   fs.rmSync(dist, { recursive: true, force: true });
 });
 
@@ -164,4 +168,56 @@ test("removing an Ollama model talks to its delete endpoint and reports when it 
     throw new Error("ECONNREFUSED");
   }), /not running/);
   await assert.rejects(removeOllamaModel("x; rm", async () => ({ ok: true })), /Bad model name/);
+});
+
+test("several files of one repository download under the names the runner expects", () => {
+  const spec = commandFor("download-files", { repo: "a/b", files: [{ from: "unet/diffusion_pytorch_model.fp16.safetensors", to: "unet/diffusion_pytorch_model.safetensors" }, { from: "vae/x.safetensors" }] }, mac, "http://stub");
+  assert.equal(spec.downloads.length, 2);
+  assert.equal(spec.downloads[0].url, "http://stub/a/b/resolve/main/unet/diffusion_pytorch_model.fp16.safetensors");
+  assert.equal(spec.downloads[0].dest, modelPath("a/b", "unet/diffusion_pytorch_model.safetensors"));
+  assert.equal(spec.downloads[1].dest, modelPath("a/b", "vae/x.safetensors"));
+  assert.throws(() => commandFor("download-files", { repo: "a/b", files: [] }, mac), /Bad file/);
+  assert.throws(() => commandFor("download-files", { repo: "a/b", files: [{ from: "../x" }] }, mac), /Bad file/);
+  assert.throws(() => commandFor("download-files", { repo: "a/b", files: [{ from: "a/b/c/d" }] }, mac), /Bad file/);
+  assert.throws(() => commandFor("download-file", { repo: "a/b", file: "unet/../../x" }, mac), /Bad file/);
+});
+
+test("nested files are listed and a whole folder can be removed", () => {
+  const unet = modelPath("own/diffusers-repo", "unet/diffusion_pytorch_model.safetensors");
+  fs.mkdirSync(path.dirname(unet), { recursive: true });
+  fs.writeFileSync(unet, "");
+  fs.writeFileSync(`${unet}.part`, "");
+  const listed = downloadedFiles();
+  assert.ok(listed.includes("own/diffusers-repo/unet/diffusion_pytorch_model.safetensors"));
+  assert.ok(!listed.some((f) => f.endsWith(".part")));
+  removeFolder("own/diffusers-repo");
+  assert.ok(!fs.existsSync(path.join(MODELS_DIR, "own")));
+  assert.throws(() => removeFolder("own/diffusers-repo"), /not on this computer/);
+  assert.throws(() => removeFolder("../.."), /Bad repository/);
+});
+
+test("a merge target has to be a plain safetensors name", () => {
+  const files = [{ from: "unet/diffusion_pytorch_model.fp16.safetensors", to: "unet/diffusion_pytorch_model.safetensors" }];
+  const spec = commandFor("download-files", { repo: "a/b", files, convert: "diffusers", into: "b.safetensors" }, mac, "http://stub");
+  assert.equal(spec.convert.into, modelPath("a/b", "b.safetensors"));
+  assert.equal(spec.convert.dir, path.join(MODELS_DIR, "a", "b"));
+  assert.throws(() => commandFor("download-files", { repo: "a/b", files, convert: "diffusers", into: "../b.safetensors" }, mac), /Bad file/);
+  assert.throws(() => commandFor("download-files", { repo: "a/b", files, convert: "diffusers", into: "b.gguf" }, mac), /Bad file/);
+  assert.equal(commandFor("download-files", { repo: "a/b", files }, mac).convert, null);
+});
+
+test("image generation needs the model file in place and sizes SDXL at 768", () => {
+  const dist = path.join(BIN_DIR, "sd");
+  fs.mkdirSync(dist, { recursive: true });
+  fs.writeFileSync(path.join(dist, "sd-cli"), "#!/bin/sh\n");
+  fs.chmodSync(path.join(dist, "sd-cli"), 0o755);
+  assert.throws(() => commandFor("generate-image", { repo: "a/b-sdxl", file: "b.safetensors", prompt: "x" }, mac), /not downloaded yet/);
+  const file = modelPath("a/b-sdxl", "b.safetensors");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "");
+  const spec = commandFor("generate-image", { repo: "a/b-sdxl", file: "b.safetensors", prompt: "a cat" }, mac);
+  assert.equal(spec.argv[spec.argv.indexOf("-m") + 1], file);
+  assert.equal(spec.argv[spec.argv.indexOf("-W") + 1], "768", "SDXL renders at 768");
+  removeFolder("a/b-sdxl");
+  fs.rmSync(dist, { recursive: true, force: true });
 });

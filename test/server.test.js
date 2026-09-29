@@ -179,6 +179,32 @@ test("storage lists the download and remove deletes it", async () => {
   assert.equal((await post("/api/remove", { kind: "nonsense" })).status, 400);
 });
 
+test("a diffusers repository downloads its parts into one folder and can be removed as one", async () => {
+  const id = "John6666/pony-realism-v23-sdxl";
+  const before = await (await get(`/api/model?id=${id}`)).json();
+  assert.equal(before.plan.runnable, true);
+  const step = before.plan.steps.find((s) => s.kind === "download-files");
+  assert.equal(step.done, false);
+  const { id: runId } = await (await post("/api/run", { kind: step.kind, args: step.args })).json();
+  const events = await readEvents(`${base}/api/runs/${runId}`);
+  assert.equal(events.at(-1).status, "done");
+  assert.ok(events.some((e) => /File 1 of 4/.test(e.line ?? "")));
+  assert.ok(events.some((e) => /Merging unet/.test(e.line ?? "")));
+  const repoDir = path.join(MODELS_DIR, "John6666", "pony-realism-v23-sdxl");
+  assert.ok(fs.existsSync(path.join(repoDir, "pony-realism-v23-sdxl.safetensors")), "the merged checkpoint exists");
+  assert.ok(!fs.existsSync(path.join(repoDir, "unet")), "the parts are gone once merged");
+
+  const after = await (await get(`/api/model?id=${id}`)).json();
+  assert.equal(after.plan.steps.find((s) => s.kind === "download-files").done, true);
+  assert.equal(after.plan.tryWith.file, "pony-realism-v23-sdxl.safetensors");
+  const st = await (await get("/api/storage")).json();
+  assert.ok(st.files.some((f) => f.repo === id && f.file === "pony-realism-v23-sdxl.safetensors"));
+
+  const res = await post("/api/remove", { kind: "folder", repo: id });
+  assert.equal(res.status, 200);
+  assert.ok(!fs.existsSync(path.join(MODELS_DIR, "John6666")));
+});
+
 test("a run that fails says so on the stream", async () => {
   const { id } = await (await post("/api/run", { kind: "download-file", args: { repo: "nobody/missing", file: "x.gguf" } })).json();
   const events = await readEvents(`${base}/api/runs/${id}`);
