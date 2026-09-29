@@ -3,6 +3,8 @@
 Find open-source models on Hugging Face, see which ones your computer can run, and get them running locally in a few clicks. Made for people who have heard about local models and would like to try one without learning the tooling first.
 
 - **Scan** Hugging Face for what is trending and what is new, then browse it by what you want to do: easy to set up, chat and writing, coding, math and reasoning, understanding images, making images, speech to text.
+- **Know the wait.** Every model shows a rough speed line for this computer: words per second for chat, minutes per image, seconds per minute of audio. It is a guess from the file size and the hardware; after a real run the measured time takes its place.
+- **Find what you want.** Tabs for NSFW writing and NSFW images alongside the rest, sort by trending, user likes, downloads or newest, narrow to this week or month, or type the traits you are after ("uncensored roleplay 7b", "japanese", "medical") to search Hugging Face directly.
 - **See the fit.** Every model card shows whether the file fits in this computer's memory, before you download anything.
 - **Keep your disk.** Models are gigabytes each. Once you have tried one, a button in the same window removes it; Settings lists everything downloaded, with sizes, so any of it can go.
 - **Try it locally.** Pick a model and HuggingFound lays out the steps: install the runner, start it, download the file. Each step shows the exact command, runs when you confirm, and streams its output. When the steps are done, a chat box, an image prompt or a transcription box appears right there.
@@ -30,6 +32,7 @@ Everything it saves lives in `~/HuggingFound`:
 | `output/` | Generated images and transcripts |
 | `uploads/` | Recordings you picked for transcription |
 | `scan.json` | The last scan, so the next one can say what is new |
+| `timings.json` | How long real runs took, shown in place of the guesses |
 | `.env` | Your Hugging Face token, if you added one |
 
 Chat models pulled through Ollama live in Ollama's own store. Set `HUGGINGFOUND_HOME` to keep all of it somewhere else.
@@ -71,6 +74,7 @@ src/hf.js             Hugging Face Hub client, the scan, file choice
 src/categorize.js     categories and runner detection from Hub metadata
 src/machine.js        memory, GPU, and whether a file fits
 src/picks.js          curated known-good models per category
+src/speed.js          rough speed guesses per runner, size and hardware
 src/plans.js          the step plan for a model on this computer
 src/runners.js        commands, downloads, releases, live step output
 src/server.js         the local HTTP API

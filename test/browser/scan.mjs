@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
-import { startStubHub } from "../stub-hub.js";
+import { MODELS, startStubHub } from "../stub-hub.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-browser-"));
 const { createServer } = await import("../../src/server.js");
@@ -53,7 +53,8 @@ await step("the page opens on the easy list with the curated picks", async () =>
 await step("a scan fills the categories from the hub", async () => {
   await page.click("#scan");
   await page.waitForSelector("#scan-title:not([hidden])");
-  assert.match(await page.locator("#scan-status").innerText(), /9 models/);
+  assert.match(await page.locator("#scan-status").innerText(), new RegExp(`${MODELS.length} models`));
+  assert.match(await page.locator("#models .model .speed").first().innerText(), /About/);
   const names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Llama-3.2-3B-Instruct-GGUF"));
   assert.ok(!names.includes("Llama-3.1-8B-Instruct"), "python-only models stay hidden while the runnable filter is on");
@@ -81,6 +82,44 @@ await step("categories and the name filter narrow the list", async () => {
   await page.fill("#search", "");
 });
 
+await step("NSFW tabs, sorting and recency work on the scan", async () => {
+  await page.click(".tab[data-tab=nsfw-writing]");
+  let names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(names, ["Cydonia-24B-v2-GGUF"]);
+  assert.match(await page.locator("#models .model .pill.adult").innerText(), /18\+/);
+  await page.click(".tab[data-tab=nsfw-images]");
+  names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(names, ["pony-realism-v23-sdxl"]);
+
+  await page.click(".tab[data-tab=chat]");
+  await page.selectOption("#sort", "likes");
+  names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
+  assert.equal(names[0], "Llama-3.2-3B-Instruct-GGUF", "most liked runnable chat model first");
+  await page.selectOption("#since", "30");
+  names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(names, ["Cydonia-24B-v2-GGUF"], "only the model released this month");
+  assert.equal(await page.locator("#picks-title").isVisible(), false, "curated picks step aside for a recency filter");
+  await page.selectOption("#since", "0");
+  await page.selectOption("#sort", "trending");
+});
+
+await step("a trait search asks the hub and lists what it finds", async () => {
+  await page.fill("#trait", "whisper");
+  await page.click("#trait-go");
+  await page.waitForSelector("#found .model");
+  // The title renders in capitals; innerText follows the CSS.
+  assert.match(await page.locator("#found-title").innerText(), /search: whisper/i);
+  let names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(names, ["whisper.cpp"], "the runnable filter hides the Python-only one");
+  await page.uncheck("#only-runnable");
+  names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(names.sort(), ["whisper-large-v3", "whisper.cpp"]);
+  await page.check("#only-runnable");
+  await page.fill("#trait", "");
+  await page.click("#trait-go");
+  await page.waitForFunction(() => document.querySelector("#found-title").hidden && !document.querySelector("#found .model"));
+});
+
 await step("opening a model shows its plan with the install, start and pull steps", async () => {
   await page.click(".tab[data-tab=easy]");
   await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).click();
@@ -88,6 +127,7 @@ await step("opening a model shows its plan with the install, start and pull step
   const titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
   assert.deepEqual(titles, ["Install Ollama", "Start Ollama", "Download the model (2.0 GB)"]);
   assert.match(await page.locator("#modal-body .spec").innerText(), /Q4_K_M\.gguf/);
+  assert.match(await page.locator("#modal-body .spec").innerText(), /Speed here[\s\S]*words a second/i);
   assert.match(await page.locator("#steps .step code").first().innerText(), /ollama/);
   assert.match(await page.locator("#try").innerText(), /Run the steps above/);
 });

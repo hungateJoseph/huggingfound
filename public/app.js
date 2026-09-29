@@ -9,6 +9,7 @@ const state = {
   scanAt: null,
   tab: "easy",
   open: null,
+  found: null,
 };
 
 const api = {
@@ -111,7 +112,43 @@ function renderTabs() {
   }
 }
 
-for (const id of ["#only-runnable", "#only-new", "#search"]) $(id).addEventListener("input", render);
+for (const id of ["#only-runnable", "#only-new", "#search", "#sort", "#since"]) $(id).addEventListener("input", render);
+
+// A live search on Hugging Face for whatever traits the user types.
+$("#trait-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("#trait").value.trim();
+  const btn = $("#trait-go");
+  if (!q) {
+    state.found = null;
+    render();
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Searching";
+  try {
+    const result = await api.get(`/api/search?q=${encodeURIComponent(q)}`);
+    state.found = result;
+    notice("");
+  } catch (err) {
+    notice(`The search did not finish: ${err.message}`, "bad");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Search";
+    render();
+  }
+});
+
+function sortModels(list) {
+  const by = $("#sort").value;
+  const days = Number($("#since").value);
+  const cutoff = days ? Date.now() - days * 86400000 : 0;
+  const kept = cutoff ? list.filter((m) => m.createdAt && new Date(m.createdAt).getTime() >= cutoff) : list.slice();
+  if (by === "likes") kept.sort((a, b) => b.likes - a.likes);
+  else if (by === "downloads") kept.sort((a, b) => b.downloads - a.downloads);
+  else if (by === "newest") kept.sort((a, b) => new Date(b.createdAt ?? 0) - new Date(a.createdAt ?? 0));
+  return kept;
+}
 
 function render() {
   const cat = state.categories.find((c) => c.id === state.tab);
@@ -127,18 +164,27 @@ function render() {
   }
   blurb.textContent = cat?.blurb ?? "";
 
-  const picks = onlyNew ? [] : state.picks.filter((p) => p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
+  const keep = (m) => (!onlyRunnable || m.runner?.easy) && (!q || m.id.toLowerCase().includes(q));
+
+  // Search results ignore the category tab: the search itself said what
+  // was wanted. Sort and recency still apply.
+  const found = state.found ? sortModels(state.found.models.filter(keep)) : [];
+  $("#found").innerHTML = found.map(modelCard).join("");
+  $("#found-title").hidden = !state.found;
+  if (state.found) $("#found-title").textContent = `Search: ${state.found.q} (${found.length} of ${state.found.models.length} shown)`;
+
+  const picks = onlyNew || Number($("#since").value) ? [] : state.picks.filter((p) => p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
   $("#picks").innerHTML = picks.map(pickCard).join("");
   $("#picks-title").hidden = picks.length === 0;
 
-  const models = state.models.filter((m) => m.categories.includes(state.tab) && (!onlyRunnable || m.runner?.easy) && (!onlyNew || m.isNew) && (!q || m.id.toLowerCase().includes(q)));
+  const models = sortModels(state.models.filter((m) => m.categories.includes(state.tab) && keep(m) && (!onlyNew || m.isNew)));
   $("#models").innerHTML = models.map(modelCard).join("");
   $("#scan-title").hidden = models.length === 0;
 
   const empty = $("#empty");
-  if (!picks.length && !models.length) {
+  if (!picks.length && !models.length && !found.length) {
     empty.hidden = false;
-    empty.textContent = state.models.length ? "Nothing matches these filters." : "Run a scan to see what is trending on Hugging Face in this category.";
+    empty.textContent = state.found ? "Nothing in the search results matches these filters." : state.models.length ? "Nothing matches these filters." : "Run a scan to see what is trending on Hugging Face in this category.";
   } else {
     empty.hidden = true;
   }
@@ -161,6 +207,7 @@ function pickCard(p) {
     <div class="name">${esc(p.id.split("/").pop())}</div>
     <div class="author">${esc(p.id.split("/")[0])}</div>
     <div class="summary">${esc(p.why)}</div>
+    ${p.speed ? `<div class="speed">${esc(p.speed)}</div>` : ""}
     <div class="meta"><span class="pill ${f.level}">${esc(f.text)}</span><span class="pill runner">${runner}</span></div>
   </button>`;
 }
@@ -171,8 +218,10 @@ function modelCard(m) {
     <div class="name">${esc(m.name)}</div>
     <div class="author">${esc(m.author)}</div>
     <div class="summary">${esc(m.summary)}</div>
+    ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
+      ${m.adult ? '<span class="pill adult">18+</span>' : ""}
       ${m.gated ? '<span class="pill gated">Gated</span>' : ""}
       ${runner}
       <span>${fmt(m.downloads)} downloads</span>
@@ -229,7 +278,9 @@ function renderModel(model, plan) {
     <div><b>Size</b>${plan.file.gb ? plan.file.gb.toFixed(2) + " GB" : "unknown"}</div>
     <div><b>On this computer</b><span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span></div>
     <div><b>Runs with</b>${{ ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[plan.runner]}</div>
-  </div>`);
+    <div><b>Speed here</b>${esc(plan.speed?.text ?? "")}${plan.measured ? `<span class="measured">${esc(plan.measured)}</span>` : ""}</div>
+  </div>
+  <p class="muted small">Speed is a rough guess from the file size and this computer's hardware. The first run is slower while the model loads${plan.runner === "sd" ? " and the graphics shaders compile" : ""}; after a real run the measured time shows here.</p>`);
   if (plan.fit.level === "no") parts.push(`<div class="notice warn">This file is larger than the memory this computer has to spare. It may still download, but it will be slow or fail to load. A smaller model is a better first try.</div>`);
   parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
   parts.push(`<div class="try" id="try"></div>`);

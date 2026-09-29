@@ -9,6 +9,7 @@ test("every category has an id, a name and a blurb", () => {
     assert.ok(c.id && c.name && c.blurb);
   }
   assert.equal(CATEGORIES[0].id, "easy");
+  assert.ok(CATEGORIES.some((c) => c.id === "nsfw-writing") && CATEGORIES.some((c) => c.id === "nsfw-images"));
 });
 
 test("a gguf instruct model is chat, easy and runs on Ollama", () => {
@@ -75,4 +76,26 @@ test("describe and paramSize read the name", () => {
   assert.equal(describe({ id: "x/Qwen2.5-Coder-7B" }, ["coding"]), "7B parameters, trained for code");
   assert.equal(describe({ id: "x/thing" }, ["chat"]), "general chat and writing");
   assert.equal(describe({ id: "x/thing" }, []), "General purpose");
+});
+
+test("adult models are flagged and land in the NSFW buckets as well as their own", () => {
+  const tagged = categorize(gguf("TheDrummer/Cydonia-24B-v2-GGUF", { tags: ["gguf", "not-for-all-audiences"] }));
+  assert.equal(tagged.adult, true);
+  assert.deepEqual(tagged.categories, ["easy", "chat", "nsfw-writing"]);
+  const named = categorize(gguf("someone/Llama-3-8B-Uncensored-GGUF"));
+  assert.ok(named.categories.includes("nsfw-writing"));
+  const image = categorize({ id: "John6666/pony-realism-v23-sdxl", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusion-single-file", "not-for-all-audiences"] });
+  assert.deepEqual(image.categories, ["easy", "images", "nsfw-images"]);
+  assert.equal(image.runner.id, "sd");
+  const plain = categorize(gguf("bartowski/Qwen2.5-7B-Instruct-GGUF"));
+  assert.equal(plain.adult, false);
+  assert.ok(!plain.categories.some((c) => c.startsWith("nsfw")));
+});
+
+test("parts of a model are not offered as models", () => {
+  for (const id of ["pottokao/Qwen-Image-2.1-Text-Encoder-Heretic-GGUF", "x/sdxl-vae-fp16-fix", "y/detail-tweaker-lora", "z/gemma-3-mmproj-GGUF"]) {
+    const r = categorize({ id, pipeline_tag: "text-generation", tags: ["gguf"] });
+    assert.deepEqual(r.categories, [], id);
+    assert.equal(r.runner, null);
+  }
 });

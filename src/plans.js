@@ -1,12 +1,12 @@
 import { chooseFile, quantTag } from "./hf.js";
-import { fitFor } from "./machine.js";
-import { platformName } from "./machine.js";
+import { fitFor, platformName } from "./machine.js";
+import { estimate, measuredText } from "./speed.js";
 
 // Turns "I want to try this model" into the ordered steps this computer
 // needs, with the ones already done marked so the page can skip them.
 // Each step names a kind from runners.js; the page never sends commands.
 
-export function buildPlan({ model, files, machine, detected, hasToken, preferredFile }) {
+export function buildPlan({ model, files, machine, detected, hasToken, preferredFile, timings = {} }) {
   const runner = model.runner;
   if (!runner) return { runnable: false, reason: "This kind of model has no local runner in HuggingFound yet.", steps: [] };
   if (!runner.easy) {
@@ -45,6 +45,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   }
 
   const fit = fitFor(file.gb, machine);
+  const speed = estimate({ runnerId: runner.id, sizeGb: file.gb, fileName: file.name, machine });
   const downloaded = detected.models.includes(`${model.id}/${file.name}`);
   const steps = [];
   const os = platformName(machine.platform);
@@ -96,7 +97,8 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       });
     }
     const remove = viaPull ? [{ kind: "ollama", name: ollamaName }] : [{ kind: "ollama", name: localName }, { kind: "file", repo: model.id, file: file.name }];
-    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "chat", model: ollamaName }, remove };
+    const measured = timings[ollamaName] ?? null;
+    return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(measured), steps, tryWith: { kind: "chat", model: ollamaName }, remove };
   }
 
   if (runner.id === "whisper") {
@@ -115,7 +117,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       done: downloaded,
       command: `download to ~/HuggingFound/models/${model.id}/${file.name}`,
     });
-    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "transcribe", repo: model.id, file: file.name, ffmpeg: detected.ffmpeg }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
+    return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${file.name}`]), steps, tryWith: { kind: "transcribe", repo: model.id, file: file.name, ffmpeg: detected.ffmpeg }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
   }
 
   if (runner.id === "sd") {
@@ -134,7 +136,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       done: downloaded,
       command: `download to ~/HuggingFound/models/${model.id}/${file.name}`,
     });
-    return { runnable: true, runner: runner.id, file, fit, steps, tryWith: { kind: "image", repo: model.id, file: file.name }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
+    return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${file.name}`]), steps, tryWith: { kind: "image", repo: model.id, file: file.name }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
   }
 
   return { runnable: false, reason: "Unsupported runner.", steps: [] };

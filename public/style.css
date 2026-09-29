@@ -75,6 +75,15 @@ button.ghost { background: transparent; }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
 .filters input[type="search"] { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; min-width: 200px; background: var(--surface); }
 
+.filters .select { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
+.filters select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.trait-search { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 8px; }
+.trait-search input { font: inherit; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.speed-note { margin: 0 0 6px; }
+.model .speed { font-size: 12.5px; color: var(--muted); }
+.model .speed::before { content: "⏱ "; }
+.spec .measured { display: block; margin-top: 4px; color: var(--ok); font-weight: 600; }
+
 .section-title { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 22px 0 10px; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
@@ -103,6 +112,7 @@ button.ghost { background: transparent; }
 .pill.gated { background: var(--info-soft); color: var(--info); }
 .pill.new { background: var(--accent-soft); color: var(--accent-ink); }
 .pill.runner { background: #efece5; color: var(--ink); }
+.pill.adult { background: #fce7f3; color: #9d174d; }
 
 .notice { padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; }
 .notice.info { background: var(--info-soft); color: var(--info); }

@@ -33,6 +33,13 @@ export function createHub({ fetchImpl = fetch, base = "https://huggingface.co", 
       { sort: "trendingScore", direction: "-1", limit: "20", pipeline_tag: "text-to-image" },
       { sort: "trendingScore", direction: "-1", limit: "20", pipeline_tag: "text-to-image", search: "stable-diffusion" },
       { sort: "trendingScore", direction: "-1", limit: "20", pipeline_tag: "automatic-speech-recognition" },
+      { sort: "likes", direction: "-1", limit: "30", filter: "gguf", pipeline_tag: "text-generation" },
+      { sort: "likes", direction: "-1", limit: "20", pipeline_tag: "text-to-image" },
+      { sort: "trendingScore", direction: "-1", limit: "20", filter: "gguf", pipeline_tag: "text-generation", search: "uncensored" },
+      { sort: "trendingScore", direction: "-1", limit: "20", filter: "gguf", pipeline_tag: "text-generation", search: "roleplay" },
+      { sort: "trendingScore", direction: "-1", limit: "20", filter: "gguf,not-for-all-audiences", pipeline_tag: "text-generation" },
+      { sort: "trendingScore", direction: "-1", limit: "20", pipeline_tag: "text-to-image", search: "nsfw" },
+      { sort: "trendingScore", direction: "-1", limit: "20", pipeline_tag: "text-to-image", filter: "not-for-all-audiences" },
     ];
     const seen = new Map();
     for (const q of queries) {
@@ -49,6 +56,44 @@ export function createHub({ fetchImpl = fetch, base = "https://huggingface.co", 
     return [...seen.values()].map(summarize);
   }
 
+  // A free-text search for the traits someone wants ("uncensored roleplay
+  // 7b", "japanese", "medical"): the plain Hub search plus the same search
+  // narrowed to GGUF, so runnable models are never crowded out.
+  async function search(q) {
+    const terms = String(q).trim().slice(0, 120);
+    if (!terms) return [];
+    const queries = [
+      { search: terms, sort: "trendingScore", direction: "-1", limit: "30" },
+      { search: terms, sort: "trendingScore", direction: "-1", limit: "30", filter: "gguf" },
+      { search: terms, sort: "likes", direction: "-1", limit: "20" },
+    ];
+    const seen = new Map();
+    const collect = async (query, required) => {
+      let items = [];
+      try {
+        items = await list(query);
+      } catch (err) {
+        if (required && seen.size === 0) throw err;
+        return;
+      }
+      for (const m of items) if (!seen.has(m.id)) seen.set(m.id, m);
+    };
+    for (const query of queries) await collect(query, query === queries[queries.length - 1]);
+
+    // The Hub matches every word against the repository name, so several
+    // traits at once often find nothing. Then each word is searched on its
+    // own and the models matching the most words come first.
+    const words = terms.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+    if (seen.size < 10 && words.length > 1) {
+      for (const w of words) {
+        await collect({ search: w, sort: "trendingScore", direction: "-1", limit: "20", filter: "gguf" });
+        await collect({ search: w, sort: "trendingScore", direction: "-1", limit: "15" });
+      }
+    }
+    const matches = (m) => words.filter((w) => m.id.toLowerCase().includes(w)).length;
+    return [...seen.values()].sort((a, b) => matches(b) - matches(a)).map(summarize);
+  }
+
   // Full details for one model, including file names and sizes.
   async function model(id) {
     const res = await fetchImpl(new URL(`/api/models/${id}?blobs=true`, base), { headers: headers() });
@@ -59,13 +104,14 @@ export function createHub({ fetchImpl = fetch, base = "https://huggingface.co", 
     return { ...summarize(m), files, cardData: m.cardData ?? {} };
   }
 
-  return { scan, model, list };
+  return { scan, search, model, list };
 }
 
 // The slice of a Hub model record the app shows and reasons about.
 export function summarize(m) {
-  const { categories, runner, gguf } = categorize(m);
+  const { categories, runner, gguf, adult } = categorize(m);
   return {
+    adult,
     id: m.id,
     name: m.id.split("/").pop(),
     author: m.id.split("/")[0],

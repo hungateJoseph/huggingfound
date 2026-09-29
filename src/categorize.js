@@ -10,11 +10,14 @@ export const CATEGORIES = [
   { id: "vision", name: "Understands images", blurb: "Chat models you can show a picture to." },
   { id: "images", name: "Makes images", blurb: "Text-to-image models: describe a picture, get a picture." },
   { id: "speech", name: "Speech to text", blurb: "Turn recordings into transcripts, offline." },
+  { id: "nsfw-writing", name: "NSFW writing", blurb: "Uncensored and role-play chat models. Adult content is possible; they are for adults." },
+  { id: "nsfw-images", name: "NSFW images", blurb: "Image models trained or tuned for adult content. For adults only." },
 ];
 
 const CODE_RE = /\b(code|coder|codellama|starcoder|deepseek-coder|codegemma|codestral|devstral|codeqwen)\b/i;
 const MATH_RE = /\b(math|mathstral|numina|deepseek-math|qwen-math|r1|reasoning|reason|think|o1)\b/i;
 const CHAT_RE = /\b(instruct|chat|assistant|it|conversational)\b/i;
+const NSFW_RE = /\b(uncensored|abliterated|heretic|nsfw|lewd|erotic|roleplay|role play|rp|hentai|pony|nudity|adult)\b/i;
 
 export function categorize(model) {
   const tags = new Set((model.tags ?? []).map((t) => t.toLowerCase()));
@@ -22,6 +25,12 @@ export function categorize(model) {
   const pipeline = model.pipeline_tag ?? "";
   const gguf = tags.has("gguf") || /gguf/.test(name);
   const cats = [];
+
+  // Pieces of a model (a text encoder, a VAE, a LoRA, a vision projector)
+  // are not something to run on their own.
+  if (/text.?encoder|\bvae\b|\blora\b|mmproj|\bembeddings?\b|controlnet/i.test(model.id)) {
+    return { categories: [], runner: null, gguf, adult: false };
+  }
 
   if (pipeline === "text-to-image") {
     cats.push("images");
@@ -35,9 +44,13 @@ export function categorize(model) {
     if (cats.length === 0 || CHAT_RE.test(name) || tags.has("conversational")) cats.push("chat");
   }
 
+  const adult = tags.has("not-for-all-audiences") || tags.has("nsfw") || tags.has("uncensored") || NSFW_RE.test(name);
+  if (adult && cats.includes("images")) cats.push("nsfw-images");
+  if (adult && cats.some((c) => ["chat", "coding", "math", "vision"].includes(c))) cats.push("nsfw-writing");
+
   const runner = runnerFor(model, cats, gguf);
   if (runner && runner.easy) cats.unshift("easy");
-  return { categories: cats, runner, gguf };
+  return { categories: cats, runner, gguf, adult };
 }
 
 // Which local runner can take this model, if any.

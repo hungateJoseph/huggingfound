@@ -43,8 +43,31 @@
       <div class="filters">
         <label class="check"><input type="checkbox" id="only-runnable" checked> Only models this computer can run</label>
         <label class="check"><input type="checkbox" id="only-new"> Only new since the last scan</label>
-        <input type="search" id="search" placeholder="Filter by name">
+        <label class="select">Sort by
+          <select id="sort">
+            <option value="trending">Trending</option>
+            <option value="likes">Recommended by users</option>
+            <option value="downloads">Most downloaded</option>
+            <option value="newest">Newest</option>
+          </select>
+        </label>
+        <label class="select">Released
+          <select id="since">
+            <option value="0">Any time</option>
+            <option value="7">This week</option>
+            <option value="30">This month</option>
+            <option value="90">Last 3 months</option>
+          </select>
+        </label>
+        <input type="search" id="search" placeholder="Filter these by name">
       </div>
+      <form class="trait-search" id="trait-form">
+        <input type="search" id="trait" placeholder="Search Hugging Face for traits: uncensored roleplay 7b, japanese, medical, tiny, vision...">
+        <button class="primary" type="submit" id="trait-go">Search</button>
+      </form>
+      <p class="muted small speed-note">Speed lines are rough guesses for this computer from the model's size. The first run is slower while things load; a measured time replaces the guess after a real run.</p>
+      <h2 id="found-title" class="section-title" hidden></h2>
+      <div id="found" class="cards"></div>
       <h2 id="picks-title" class="section-title">Good first picks</h2>
       <div id="picks" class="cards"></div>
       <h2 id="scan-title" class="section-title" hidden>From the scan</h2>

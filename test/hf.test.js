@@ -17,6 +17,9 @@ test("scan merges the listings and drops duplicates", async () => {
   assert.equal(ids.length, MODELS.length);
   assert.ok(stub.requests.some((r) => r.path.includes("pipeline_tag=automatic-speech-recognition")));
   assert.ok(stub.requests.some((r) => r.path.includes("filter=gguf")));
+  assert.ok(stub.requests.some((r) => r.path.includes("sort=likes")));
+  assert.ok(stub.requests.some((r) => r.path.includes("not-for-all-audiences")));
+  assert.ok(stub.requests.some((r) => r.path.includes("search=uncensored")));
   const llama = models.find((m) => m.id === "bartowski/Llama-3.2-3B-Instruct-GGUF");
   assert.deepEqual(llama.categories, ["easy", "chat"]);
   assert.equal(llama.runner.id, "ollama");
@@ -87,4 +90,21 @@ test("summarize keeps a short, colon-free tag list", () => {
   assert.deepEqual(s.tags, ["gguf", "conversational"]);
   assert.equal(s.author, "a");
   assert.equal(s.gated, false);
+});
+
+test("search sends the terms, merges the plain and gguf listings and drops duplicates", async () => {
+  const hub = createHub({ base: stub.base });
+  const found = await hub.search("  whisper  ");
+  assert.deepEqual(found.map((m) => m.id).sort(), ["ggerganov/whisper.cpp", "openai/whisper-large-v3"]);
+  assert.ok(stub.requests.some((r) => r.path.includes("search=whisper") && r.path.includes("filter=gguf")));
+  assert.deepEqual(await hub.search("   "), []);
+});
+
+test("a search with several traits falls back to each word and ranks by words matched", async () => {
+  const hub = createHub({ base: stub.base });
+  const found = await hub.search("coder whisper gguf");
+  const ids = found.map((m) => m.id);
+  assert.ok(ids.includes("bartowski/Qwen2.5-Coder-7B-Instruct-GGUF"));
+  assert.ok(ids.includes("ggerganov/whisper.cpp"));
+  assert.equal(ids[0], "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF", "two words matched beats one");
 });

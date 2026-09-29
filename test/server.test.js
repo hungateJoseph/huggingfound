@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { startStubHub } from "./stub-hub.js";
+import { MODELS, startStubHub } from "./stub-hub.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-server-"));
 const { createServer } = await import("../src/server.js");
@@ -38,7 +38,8 @@ test("serves the page and the starting state", async () => {
   assert.match(await page.text(), /HuggingFound/);
   const s = await (await get("/api/state")).json();
   assert.ok(s.machine.ramGb > 0);
-  assert.equal(s.categories.length, 7);
+  assert.equal(s.categories.length, 9);
+  assert.ok(s.picks.every((p) => typeof p.speed === "string" && p.speed.length > 0));
   assert.equal(s.scan, null);
   assert.equal(s.token, "");
   assert.ok(s.picks.length >= 6);
@@ -58,7 +59,7 @@ test("api calls from another origin are refused", async () => {
 
 test("a scan is saved, and the next scan marks what is new", async () => {
   const first = await (await post("/api/scan", {})).json();
-  assert.equal(first.models.length, 9);
+  assert.equal(first.models.length, MODELS.length);
   assert.ok(first.models.every((m) => m.isNew === false));
   assert.ok(fs.existsSync(scanFile));
 
@@ -69,14 +70,43 @@ test("a scan is saved, and the next scan marks what is new", async () => {
     const second = await (await fetch(`http://127.0.0.1:${s2.address().port}/api/scan`, { method: "POST" })).json();
     assert.equal(second.models.filter((m) => m.isNew).map((m) => m.id).join(), "new/Thing-GGUF");
     const meta = (await (await get("/api/state")).json()).scan;
-    assert.equal(meta.count, 10);
+    assert.equal(meta.count, MODELS.length + 1);
     assert.equal(meta.newCount, 1);
     const saved = await (await get("/api/models")).json();
-    assert.equal(saved.models.length, 10);
+    assert.equal(saved.models.length, MODELS.length + 1);
   } finally {
     s2.close();
     later.server.close();
   }
+});
+
+test("scan results carry a rough speed line and an adult flag", async () => {
+  const { models } = await (await get("/api/models")).json();
+  const llama = models.find((m) => m.id === "bartowski/Llama-3.2-3B-Instruct-GGUF");
+  assert.match(llama.speed, /words a second/);
+  assert.equal(llama.adult, false);
+  const cydonia = models.find((m) => m.id === "TheDrummer/Cydonia-24B-v2-GGUF");
+  assert.equal(cydonia.adult, true);
+  assert.ok(cydonia.categories.includes("nsfw-writing"));
+  const python = models.find((m) => m.id === "meta-llama/Llama-3.1-8B-Instruct");
+  assert.equal(python.speed, "");
+});
+
+test("the trait search asks the hub and returns summarized, speed-tagged models", async () => {
+  const found = await (await get("/api/search?q=coder")).json();
+  assert.equal(found.q, "coder");
+  assert.deepEqual(found.models.map((m) => m.id), ["bartowski/Qwen2.5-Coder-7B-Instruct-GGUF"]);
+  assert.ok(found.models[0].categories.includes("coding"));
+  assert.match(found.models[0].speed, /words a second/);
+  assert.equal((await get("/api/search?q=%20")).status, 400);
+});
+
+test("a measured time replaces the guess after a real run", async () => {
+  const { recordTiming } = await import("../src/runners.js");
+  recordTiming("second-state/stable-diffusion-v1-5-GGUF/stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf", { kind: "image", seconds: 139 });
+  const { plan } = await (await get("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).json();
+  assert.match(plan.speed.text, /per 512 by 512 image/);
+  assert.equal(plan.measured, "Measured here: 2.3 minutes per image");
 });
 
 test("model details come with a plan for this machine", async () => {

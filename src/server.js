@@ -9,7 +9,8 @@ import { createHub } from "./hf.js";
 import { describeMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, detect, getRun, removeFile, removeOllamaModel, startRun, storage, which } from "./runners.js";
+import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, detect, getRun, readTimings, recordTiming, removeFile, removeOllamaModel, startRun, storage, which } from "./runners.js";
+import { estimate, guessSizeGb, speedTier } from "./speed.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 const RUNNER_NAMES = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" };
@@ -48,7 +49,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         token: saved.HF_TOKEN ? mask(saved.HF_TOKEN) : "",
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
-        picks: PICKS,
+        picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })),
+        speedTier: speedTier(machine),
       });
     }
     if (req.method === "POST" && url.pathname === "/api/settings") {
@@ -63,10 +65,16 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const previous = readScan(scanFile);
       const known = new Set((previous?.models ?? []).map((m) => m.id));
       const models = await hub().scan();
-      const scan = { at: new Date().toISOString(), models: models.map((m) => ({ ...m, isNew: previous ? !known.has(m.id) : false })) };
+      const scan = { at: new Date().toISOString(), models: models.map((m) => ({ ...withSpeed(m), isNew: previous ? !known.has(m.id) : false })) };
       fs.mkdirSync(path.dirname(scanFile), { recursive: true });
       fs.writeFileSync(scanFile, JSON.stringify(scan));
       return send(res, 200, scan);
+    }
+    if (req.method === "GET" && url.pathname === "/api/search") {
+      const q = url.searchParams.get("q") ?? "";
+      if (!q.trim()) return send(res, 400, { error: "Say what you are looking for" });
+      const models = await hub().search(q);
+      return send(res, 200, { q, models: models.map(withSpeed) });
     }
     if (req.method === "GET" && url.pathname === "/api/models") {
       return send(res, 200, readScan(scanFile) ?? { at: null, models: [] });
@@ -83,7 +91,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (pick && !model.gatedBlocked) model.runner = { id: pick.runner, name: RUNNER_NAMES[pick.runner], easy: true };
       const plan = model.gatedBlocked
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
-        : buildPlan({ model, files: model.files, machine, detected: await detect(fetchImpl), hasToken: Boolean(env().HF_TOKEN), preferredFile: pick?.file });
+        : buildPlan({ model, files: model.files, machine, detected: await detect(fetchImpl), hasToken: Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: readTimings() });
       return send(res, 200, { model, plan });
     }
     if (req.method === "GET" && url.pathname === "/api/storage") {
@@ -123,10 +131,23 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       });
       res.writeHead(upstream.ok ? 200 : upstream.status, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
       const reader = upstream.body.getReader();
+      let tail = "";
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         res.write(value);
+        tail = (tail + Buffer.from(value).toString()).slice(-4000);
+      }
+      // Ollama's last line carries how many tokens it produced and how long
+      // that took; that is the measured speed for this model.
+      const last = tail.trim().split("\n").pop();
+      try {
+        const stats = JSON.parse(last);
+        if (stats.done && stats.eval_count && stats.eval_duration) {
+          recordTiming(String(body.model), { kind: "chat", tokensPerSecond: stats.eval_count / (stats.eval_duration / 1e9), seconds: stats.eval_duration / 1e9 });
+        }
+      } catch {
+        // not a stats line
       }
       return res.end();
     }
@@ -147,6 +168,13 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       return send(res, 200, { text: file.endsWith(".txt") ? fs.readFileSync(full, "utf8") : null, url: `/output/${file}` });
     }
     send(res, 404, { error: "Not found" });
+  }
+
+  // A rough speed line for a listing card, from the size guessed off the name.
+  function withSpeed(m) {
+    if (!m.runner?.easy) return { ...m, speed: "" };
+    const sizeGb = guessSizeGb({ id: m.id, runnerId: m.runner.id });
+    return { ...m, speed: sizeGb ? estimate({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine }).text : "" };
   }
 
   // whisper.cpp is happiest with 16 kHz wav. Other formats go through

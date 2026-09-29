@@ -271,6 +271,9 @@ export function startRun(kind, args, machine, { token = "", fetchImpl = fetch, h
   };
   const finish = (status, message) => {
     run.status = status;
+    if (status === "done" && (kind === "generate-image" || kind === "transcribe")) {
+      recordTiming(`${args.repo}/${args.file}`, { kind: kind === "generate-image" ? "image" : "transcribe", seconds: (Date.now() - run.startedAt) / 1000 });
+    }
     if (message) emit(message);
     for (const l of run.listeners) l(null);
   };
@@ -308,6 +311,24 @@ export function startRun(kind, args, machine, { token = "", fetchImpl = fetch, h
     child.on("close", (code) => finish(code === 0 ? "done" : "failed", code === 0 ? "Done." : `Exited with code ${code}.`));
   }
   return run;
+}
+
+// How long real runs took here, by model file or Ollama name, so the page
+// can show a measured time instead of a guess.
+const TIMINGS_FILE = path.join(DATA_DIR, "timings.json");
+
+export function readTimings() {
+  try {
+    return JSON.parse(fs.readFileSync(TIMINGS_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+export function recordTiming(key, timing) {
+  const all = readTimings();
+  all[key] = { ...timing, at: new Date().toISOString() };
+  fs.writeFileSync(TIMINGS_FILE, JSON.stringify(all, null, 2));
 }
 
 export function getRun(id) {
