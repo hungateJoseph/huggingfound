@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HuggingFound</title>
+  <link rel="icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="/">
+        <img src="icon.svg" alt="" width="28" height="28">
+        <span>HuggingFound</span>
+      </a>
+      <div class="top-right">
+        <span class="muted small" id="machine-line"></span>
+        <button class="ghost" id="open-settings">Settings</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="intro">
+      <h1>Open models, running on this computer.</h1>
+      <p class="lead">
+        Scan Hugging Face for the latest models, see which ones this machine can run, and try one
+        with a few clicks. Chat models run through Ollama, images through stable-diffusion.cpp and
+        speech through whisper.cpp. Nothing leaves your computer except the downloads.
+      </p>
+      <div class="scan-row">
+        <button class="primary" id="scan">Scan Hugging Face</button>
+        <span class="muted small" id="scan-status">No scan yet. The curated picks below work without one.</span>
+      </div>
+    </section>
+
+    <nav class="tabs" id="tabs"></nav>
+
+    <section id="notice" class="notice info" hidden></section>
+
+    <section id="results">
+      <div class="filters">
+        <label class="check"><input type="checkbox" id="only-runnable" checked> Only models this computer can run</label>
+        <label class="check"><input type="checkbox" id="only-new"> Only new since the last scan</label>
+        <input type="search" id="search" placeholder="Filter by name">
+      </div>
+      <h2 id="picks-title" class="section-title">Good first picks</h2>
+      <div id="picks" class="cards"></div>
+      <h2 id="scan-title" class="section-title" hidden>From the scan</h2>
+      <div id="models" class="cards"></div>
+      <p id="empty" class="muted" hidden></p>
+    </section>
+  </main>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <div>
+          <h2 id="modal-title"></h2>
+          <p class="muted small" id="modal-sub"></p>
+        </div>
+        <button class="ghost" id="close-modal" aria-label="Close">Close</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="settings" hidden>
+    <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <div>
+          <h2 id="settings-title">Settings</h2>
+          <p class="muted small">Saved to <code id="env-path"></code> on this computer.</p>
+        </div>
+        <button class="ghost" id="close-settings" aria-label="Close">Close</button>
+      </div>
+      <label class="field">
+        <span>Hugging Face token (optional)</span>
+        <input type="password" id="token" autocomplete="off" placeholder="hf_...">
+        <small class="muted">A read token unlocks gated models such as Llama and Gemma once you have accepted their licence on Hugging Face. Without one, everything that is openly licensed still works.</small>
+      </label>
+      <p class="muted small" id="token-current"></p>
+      <div class="actions">
+        <button class="primary" id="save-token">Save</button>
+        <button class="ghost" id="clear-token">Remove token</button>
+      </div>
+      <div class="runners">
+        <h3>What is installed</h3>
+        <ul id="runner-list"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
