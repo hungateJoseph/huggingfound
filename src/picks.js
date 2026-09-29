@@ -1,0 +1,70 @@
+// Known-good models for each category: files that exist, sizes that fit a
+// laptop, and runners that take them without fuss. Shown alongside whatever
+// a scan turns up, so a first try does not depend on what is trending.
+
+export const PICKS = [
+  {
+    id: "bartowski/Llama-3.2-3B-Instruct-GGUF",
+    why: "A small, quick general assistant. Good first model.",
+    file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    gb: 2.0,
+    runner: "ollama",
+    categories: ["easy", "chat"],
+  },
+  {
+    id: "bartowski/Qwen2.5-7B-Instruct-GGUF",
+    why: "Stronger writing and reasoning if you have 8 GB or more to spare.",
+    file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    gb: 4.7,
+    runner: "ollama",
+    categories: ["easy", "chat"],
+  },
+  {
+    id: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+    why: "Writes and explains code in most languages.",
+    file: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+    gb: 4.7,
+    runner: "ollama",
+    categories: ["easy", "coding"],
+  },
+  {
+    id: "bartowski/Qwen2.5-Math-7B-Instruct-GGUF",
+    why: "Tuned for step-by-step math.",
+    file: "Qwen2.5-Math-7B-Instruct-Q4_K_M.gguf",
+    gb: 4.7,
+    runner: "ollama",
+    categories: ["easy", "math"],
+  },
+  {
+    id: "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+    why: "Shows its reasoning before answering; good for hard problems.",
+    file: "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
+    gb: 4.7,
+    runner: "ollama",
+    categories: ["easy", "math"],
+  },
+  {
+    id: "ggerganov/whisper.cpp",
+    why: "Transcribes recordings offline. The base English model is fast; larger ones are more accurate.",
+    file: "ggml-base.en.bin",
+    gb: 0.15,
+    runner: "whisper",
+    categories: ["easy", "speech"],
+  },
+  {
+    id: "second-state/stable-diffusion-v1-5-GGUF",
+    why: "The classic image model, small enough for most laptops.",
+    file: "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf",
+    gb: 1.8,
+    runner: "sd",
+    categories: ["easy", "images"],
+  },
+  {
+    id: "stabilityai/sdxl-turbo",
+    why: "Sharper images in one or two steps; needs about 7 GB free.",
+    file: "sd_xl_turbo_1.0_fp16.safetensors",
+    gb: 6.9,
+    runner: "sd",
+    categories: ["images"],
+  },
+];
