@@ -6,7 +6,7 @@ import { estimate, measuredText } from "./speed.js";
 // needs, with the ones already done marked so the page can skip them.
 // Each step names a kind from runners.js; the page never sends commands.
 
-export function buildPlan({ model, files, machine, detected, hasToken, preferredFile, timings = {} }) {
+export function buildPlan({ model, files, machine, detected, hasToken, preferredFile, timings = {}, imageServer = null }) {
   const runner = model.runner;
   if (!runner) return { runnable: false, reason: "This kind of model has no local runner in HuggingFound yet.", steps: [] };
   if (!runner.easy) {
@@ -123,6 +123,28 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   }
 
   if (runner.id === "sd") {
+    const fast = /turbo|lightning|lcm|hyper/i.test(`${model.id}/${file.name}`);
+    const qualities = Object.fromEntries(["fast", "default", "max"].map((q) => {
+      const n = fast ? (q === "max" ? 8 : 4) : { fast: 12, default: 20, max: 40 }[q];
+      return [q, { steps: n, ...estimate({ runnerId: "sd", sizeGb: file.gb, fileName: file.name, machine, xl: file.xl, steps: n }) }];
+    }));
+    // With a remote image server nothing is downloaded here; the server
+    // makes the picture with whatever model it has loaded.
+    if (imageServer) {
+      return {
+        runnable: true,
+        runner: runner.id,
+        file,
+        fit: { level: "good", text: "Made on the image server" },
+        speed: { text: `Made by the image server at ${imageServer.url}${imageServer.model ? `, which has ${imageServer.model} loaded` : ""}`, seconds: null },
+        measured: "",
+        steps: [],
+        qualities,
+        remote: imageServer.url,
+        tryWith: { kind: "image", repo: model.id, file: file.folder ? mergedName : file.name, remote: imageServer.url },
+        remove: [],
+      };
+    }
     steps.push({
       kind: "install-sd",
       title: "Install stable-diffusion.cpp",
@@ -139,7 +161,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
         done: downloaded,
         command: `download ${file.parts.map((part) => part.from).join(", ")} and merge into ~/HuggingFound/models/${model.id}/${mergedName}`,
       });
-      return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${mergedName}`]), steps, tryWith: { kind: "image", repo: model.id, file: mergedName }, remove: [{ kind: "folder", repo: model.id }] };
+      return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${mergedName}`]), steps, qualities, fast, keepsLoaded: detected.sd.server, tryWith: { kind: "image", repo: model.id, file: mergedName }, remove: [{ kind: "folder", repo: model.id }] };
     }
     steps.push({
       kind: "download-file",
@@ -149,7 +171,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       done: downloaded,
       command: `download to ~/HuggingFound/models/${model.id}/${file.name}`,
     });
-    return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${file.name}`]), steps, tryWith: { kind: "image", repo: model.id, file: file.name }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
+    return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${file.name}`]), steps, qualities, fast, keepsLoaded: detected.sd.server, tryWith: { kind: "image", repo: model.id, file: file.name }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
   }
 
   return { runnable: false, reason: "Unsupported runner.", steps: [] };

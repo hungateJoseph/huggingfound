@@ -127,3 +127,19 @@ test("a diffusers folder plans one download of all its parts and loads as a fold
   const partsOnly = { ...have, models: plan.steps[1].args.files.map((f) => `${model.id}/${f.to}`) };
   assert.equal(buildPlan({ model, files: model.files, machine, detected: partsOnly, hasToken: false }).steps[1].done, false, "parts alone are not enough; the merge has to have happened");
 });
+
+test("image plans carry the three presets with times, and a remote server empties the steps", () => {
+  const model = withFiles("second-state/stable-diffusion-v1-5-GGUF");
+  const plan = buildPlan({ model, files: model.files, machine, detected: nothing(), hasToken: false });
+  assert.deepEqual(Object.keys(plan.qualities), ["fast", "default", "max"]);
+  assert.deepEqual([plan.qualities.fast.steps, plan.qualities.default.steps, plan.qualities.max.steps], [12, 20, 40]);
+  assert.ok(plan.qualities.fast.seconds < plan.qualities.default.seconds && plan.qualities.default.seconds < plan.qualities.max.seconds);
+  assert.equal(plan.fast, false);
+  assert.equal(plan.keepsLoaded, undefined, "no server build in this detection");
+  const remote = buildPlan({ model, files: model.files, machine, detected: nothing(), hasToken: false, imageServer: { url: "http://box:1234", model: "sdxl-lightning" } });
+  assert.equal(remote.runnable, true);
+  assert.deepEqual(remote.steps, []);
+  assert.equal(remote.tryWith.remote, "http://box:1234");
+  assert.match(remote.speed.text, /sdxl-lightning loaded/);
+  assert.deepEqual(remote.remove, []);
+});

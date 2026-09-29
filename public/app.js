@@ -31,6 +31,9 @@ async function load() {
   $("#machine-line").textContent = `${s.machine.os}, ${s.machine.ramGb} GB memory, ${s.machine.gpu}. Room for models up to about ${s.machine.comfortableGb} GB.`;
   $("#env-path").textContent = s.envFile;
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
+  state.imageServer = s.imageServer;
+  $("#image-server").value = s.imageServer;
+  renderImageServerStatus();
   renderRunners();
   if (s.scan?.at) {
     const saved = await api.get("/api/models");
@@ -208,7 +211,7 @@ function pickCard(p) {
     <div class="author">${esc(p.id.split("/")[0])}</div>
     <div class="summary">${esc(p.why)}</div>
     ${p.speed ? `<div class="speed">${esc(p.speed)}</div>` : ""}
-    <div class="meta"><span class="pill ${f.level}">${esc(f.text)}</span><span class="pill runner">${runner}</span></div>
+    <div class="meta"><span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}<span class="pill runner">${runner}</span></div>
   </button>`;
 }
 
@@ -222,6 +225,7 @@ function modelCard(m) {
     <div class="meta">
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
       ${m.adult ? '<span class="pill adult">18+</span>' : ""}
+      ${m.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}
       ${m.gated ? '<span class="pill gated">Gated</span>' : ""}
       ${runner}
       <span>${fmt(m.downloads)} downloads</span>
@@ -260,6 +264,7 @@ async function openModel(id) {
 }
 
 function renderModel(model, plan) {
+  state.plan = plan;
   const sub = [model.author, model.summary, model.gated ? "gated" : ""].filter(Boolean).join(" · ");
   $("#modal-sub").innerHTML = `${esc(sub)} · <a href="${esc(model.url)}" target="_blank" rel="noopener">Open on Hugging Face</a>`;
   const body = $("#modal-body");
@@ -528,14 +533,43 @@ function addMsg(role, text) {
   return el;
 }
 
+function qualityLabel(q, info, fast) {
+  const names = { fast: "Fast", default: "Default", max: "Max" };
+  const what = fast ? `${info.steps} steps` : q === "default" ? `${info.steps} steps, the standard settings` : q === "fast" ? `${info.steps} steps, sharper sampler` : `${info.steps} steps, for the most detail`;
+  return `<b>${names[q]}</b> <span class="muted">${what}${info.seconds ? `, about ${esc(shortDuration(info.seconds))}` : ""}</span>`;
+}
+
+function shortDuration(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)} s`;
+  return `${(seconds / 60).toFixed(seconds < 600 ? 1 : 0).replace(/\.0$/, "")} min`;
+}
+
 function renderImage(box, t) {
+  const plan = state.plan;
+  let saved = "default";
+  try {
+    saved = localStorage.getItem("imageQuality") || "default";
+  } catch {
+    // no storage
+  }
+  const qualities = plan?.qualities ?? {};
+  const options = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === saved ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
+  const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
+  const loaded = plan?.keepsLoaded && !t.remote ? `<p class="muted small loaded-note"><span>After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.</span><button class="ghost" id="unload-model">Unload now</button></p>` : "";
   box.innerHTML = `<h3>Try it</h3>
+    ${remote}
+    <div class="quality" id="quality">${options}</div>
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="Describe a picture, for example: a lighthouse at dusk, oil painting"></textarea>
       <button class="primary" id="image-go">Generate</button>
     </div>
+    ${loaded}
     <pre class="log" id="image-log" hidden></pre>
     <div id="image-out"></div>`;
+  box.querySelector("#unload-model")?.addEventListener("click", async () => {
+    await api.post("/api/unload", {});
+    notice("The image model was unloaded from memory.", "ok");
+  });
   $("#image-go").addEventListener("click", async () => {
     const prompt = $("#image-prompt").value.trim();
     if (!prompt) return;
@@ -544,7 +578,13 @@ function renderImage(box, t) {
     log.textContent = "";
     $("#image-go").disabled = true;
     try {
-      const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt } });
+      const quality = box.querySelector("input[name=quality]:checked")?.value ?? "default";
+      try {
+        localStorage.setItem("imageQuality", quality);
+      } catch {
+        // no storage
+      }
+      const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt, quality } });
       const result = await follow(id, (line) => {
         log.textContent += line + "\n";
         log.scrollTop = log.scrollHeight;
@@ -602,7 +642,7 @@ function renderRunners() {
   const rows = [
     ["Ollama", r.ollama.installed ? (r.ollama.running ? `running, ${r.ollama.models.length} model${r.ollama.models.length === 1 ? "" : "s"}` : "installed, not running") : "not installed"],
     ["whisper.cpp", r.whisper.installed ? "installed" : "not installed"],
-    ["stable-diffusion.cpp", r.sd.installed ? "installed" : "not installed"],
+    ["stable-diffusion.cpp", r.sd.installed ? (r.sd.server ? (r.sd.loaded.ready ? `installed, ${r.sd.loaded.file.split("/").pop()} loaded in memory` : "installed, keeps models loaded between pictures") : "installed (one picture at a time; the server build is missing)") : "not installed"],
     ["ffmpeg", r.ffmpeg ? "installed" : "not installed (only needed for non-WAV recordings)"],
   ];
   $("#runner-list").innerHTML = rows.map(([k, v]) => `<li><span>${k}</span><span class="muted">${esc(v)}</span></li>`).join("");
@@ -642,6 +682,38 @@ $("#save-token").addEventListener("click", async () => {
   $("#settings").hidden = true;
   notice("Token saved. Gated models you have accepted on Hugging Face can be downloaded now.", "ok");
 });
+async function renderImageServerStatus() {
+  const el = $("#image-server-status");
+  if (!state.imageServer) {
+    el.textContent = "Pictures are made on this computer.";
+    return;
+  }
+  el.textContent = `Checking ${state.imageServer}`;
+  try {
+    const r = await api.get("/api/image-server");
+    el.textContent = r.ok ? `Connected. The server has ${r.model} loaded; pictures will be made there.` : `Saved, but the server did not answer (${r.error}). Pictures will fail until it is reachable.`;
+  } catch (err) {
+    el.textContent = `Could not check the server: ${err.message}`;
+  }
+}
+
+$("#save-image-server").addEventListener("click", async () => {
+  const value = $("#image-server").value.trim();
+  try {
+    await api.post("/api/settings", { IMAGE_SERVER: value });
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  await load();
+  if (state.open) openModel(state.open);
+});
+$("#clear-image-server").addEventListener("click", async () => {
+  await api.post("/api/settings", { IMAGE_SERVER: "" });
+  await load();
+  if (state.open) openModel(state.open);
+});
+
 $("#clear-token").addEventListener("click", async () => {
   await api.post("/api/settings", { HF_TOKEN: "" });
   await load();

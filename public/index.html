@@ -108,6 +108,16 @@
         <button class="primary" id="save-token">Save</button>
         <button class="ghost" id="clear-token">Remove token</button>
       </div>
+      <label class="field">
+        <span>Image server (optional)</span>
+        <input type="url" id="image-server" autocomplete="off" placeholder="http://192.168.1.20:1234">
+        <small class="muted">The address of a stable-diffusion.cpp server (sd-server) on another computer, a rented GPU box or this one. When set, pictures are made there with the model it has loaded, in seconds on a real GPU, and nothing is downloaded here. Leave empty to generate on this computer.</small>
+      </label>
+      <p class="muted small" id="image-server-status"></p>
+      <div class="actions">
+        <button class="primary" id="save-image-server">Save</button>
+        <button class="ghost" id="clear-image-server">Use this computer</button>
+      </div>
       <div class="runners">
         <h3>What is installed</h3>
         <ul id="runner-list"></ul>

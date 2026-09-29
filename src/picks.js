@@ -61,10 +61,20 @@ export const PICKS = [
   },
   {
     id: "stabilityai/sdxl-turbo",
-    why: "Sharper images in one or two steps; needs about 7 GB free.",
+    why: "A fast model: four steps instead of twenty, so a picture in well under a minute. Needs about 7 GB free.",
     file: "sd_xl_turbo_1.0_fp16.safetensors",
     gb: 6.9,
     runner: "sd",
-    categories: ["images"],
+    categories: ["easy", "images"],
+    fast: true,
+  },
+  {
+    id: "ByteDance/SDXL-Lightning",
+    why: "SDXL quality in four steps. The fastest way to good pictures on a laptop; needs about 7 GB free.",
+    file: "sdxl_lightning_4step.safetensors",
+    gb: 6.9,
+    runner: "sd",
+    categories: ["easy", "images"],
+    fast: true,
   },
 ];

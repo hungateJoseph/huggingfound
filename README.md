@@ -6,6 +6,8 @@ Find open-source models on Hugging Face, see which ones your computer can run, a
 - **Know the wait.** Every model shows a rough speed line for this computer: words per second for chat, minutes per image, seconds per minute of audio. It is a guess from the file size and the hardware; after a real run the measured time takes its place.
 - **Find what you want.** Tabs for NSFW writing and NSFW images alongside the rest, sort by trending, user likes, downloads or newest, narrow to this week or month, or type the traits you are after ("uncensored roleplay 7b", "japanese", "medical") to search Hugging Face directly.
 - **See the fit.** Every model card shows whether the file fits in this computer's memory, before you download anything.
+- **Pick the speed.** Every image model offers Fast (12 steps, a sharper sampler), Default (the plain 20 steps) and Max (40 steps), each with a time estimate for this computer. Distilled models such as SDXL Turbo and SDXL Lightning are marked fast and make a picture in four steps. After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.
+- **Use a GPU elsewhere.** Point Settings at a stable-diffusion.cpp server (`sd-server`) on another computer or a rented GPU box, and pictures are made there in seconds with the model it has loaded; nothing is downloaded here.
 - **Keep your disk.** Models are gigabytes each. Once you have tried one, a button in the same window removes it; Settings lists everything downloaded, with sizes, so any of it can go.
 - **Try it locally.** Pick a model and HuggingFound lays out the steps: install the runner, start it, download the file. Each step shows the exact command, runs when you confirm, and streams its output. When the steps are done, a chat box, an image prompt or a transcription box appears right there.
 
@@ -33,7 +35,7 @@ Everything it saves lives in `~/HuggingFound`:
 | `uploads/` | Recordings you picked for transcription |
 | `scan.json` | The last scan, so the next one can say what is new |
 | `timings.json` | How long real runs took, shown in place of the guesses |
-| `.env` | Your Hugging Face token, if you added one |
+| `.env` | Your Hugging Face token and the image server address, if you set them |
 
 Chat models pulled through Ollama live in Ollama's own store. Set `HUGGINGFOUND_HOME` to keep all of it somewhere else.
 

@@ -38,7 +38,7 @@ export function guessSizeGb({ id, runnerId, gb }) {
   return null;
 }
 
-export function estimate({ runnerId, sizeGb, fileName = "", machine, xl = false }) {
+export function estimate({ runnerId, sizeGb, fileName = "", machine, xl = false, steps = null }) {
   const tier = speedTier(machine);
   if (!sizeGb) return { text: "Speed unknown until the file size is known", seconds: null };
   if (runnerId === "ollama") {
@@ -48,15 +48,15 @@ export function estimate({ runnerId, sizeGb, fileName = "", machine, xl = false 
     return { text: `About ${words} word${words === 1 ? "" : "s"} a second; a short answer in ${duration(short)}`, seconds: short, tokensPerSecond };
   }
   if (runnerId === "sd") {
-    const turbo = /turbo|lightning|lcm/i.test(fileName);
-    const steps = turbo ? 4 : 20;
+    const turbo = /turbo|lightning|lcm|hyper/i.test(fileName);
+    const n = steps ?? (turbo ? 4 : 20);
     // Measured on a plain M3: 5.4 s a step for SD 1.5 at 512, 7.4 s a step
     // for SDXL at 768. Within a family the file size barely moves this.
     const isXl = xl || /xl/i.test(fileName);
     const perStep = (isXl && !turbo ? 7.4 : 5.4) / tier;
-    const seconds = Math.round(steps * perStep + 10);
+    const seconds = Math.round(n * perStep + 10);
     const side = isXl && !turbo ? 768 : 512;
-    return { text: `About ${duration(seconds)} per ${side} by ${side} image, longer the first time`, seconds };
+    return { text: `About ${duration(seconds)} per ${side} by ${side} image${turbo ? " (a fast model: 4 steps)" : ""}, longer the first time`, seconds };
   }
   if (runnerId === "whisper") {
     const perMinute = Math.max(1, Math.round((4 * (sizeGb / 0.14)) / Math.max(1, tier)));

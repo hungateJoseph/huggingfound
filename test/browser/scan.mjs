@@ -23,7 +23,8 @@ const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
-page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+// Deliberate 400s (a rejected setting) log as resource errors; those are not page bugs.
+page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
 // Confirm prompts are dismissed unless a step says otherwise.
 let acceptDialogs = false;
 page.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));
@@ -221,6 +222,42 @@ await step("a set-up model offers to remove itself from the model window", async
   await page.click("#close-modal");
 });
 
+await step("an image model offers Fast, Default and Max with Default chosen", async () => {
+  const { MODELS_DIR } = await import("../../src/runners.js");
+  const dir = path.join(MODELS_DIR, "second-state", "stable-diffusion-v1-5-GGUF");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf"), Buffer.alloc(1024));
+  await page.click(".tab[data-tab=images]");
+  await page.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).click();
+  await page.waitForSelector("#steps .step");
+  const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
+  assert.equal(done[1], true, "the planted file counts as downloaded");
+  if (done[0]) {
+    await page.waitForSelector("#quality input");
+    const values = await page.$$eval("#quality input", (els) => els.map((e) => [e.value, e.checked]));
+    assert.deepEqual(values, [["fast", false], ["default", true], ["max", false]]);
+    assert.match(await page.locator("#quality").innerText(), /20 steps, the standard settings/);
+    assert.match(await page.locator("#quality").innerText(), /40 steps/);
+  } else {
+    assert.equal(await page.locator("#quality").count(), 0);
+  }
+  await page.click("#close-modal");
+  fs.rmSync(path.join(MODELS_DIR, "second-state"), { recursive: true, force: true });
+});
+
+await step("settings has the image server field and rejects a bad address", async () => {
+  await page.click("#open-settings");
+  await page.waitForSelector("#settings:not([hidden])");
+  assert.match(await page.locator("#image-server-status").innerText(), /on this computer/);
+  await page.fill("#image-server", "not an address");
+  acceptDialogs = true;
+  await page.click("#save-image-server");
+  await page.waitForTimeout(300);
+  acceptDialogs = false;
+  assert.equal(await page.locator("#image-server").inputValue(), "not an address", "nothing saved");
+  await page.click("#close-settings");
+});
+
 await step("a reload keeps the scan and reports when it was made", async () => {
   await page.reload();
   await page.waitForSelector("#scan-title:not([hidden])");
@@ -228,7 +265,7 @@ await step("a reload keeps the scan and reports when it was made", async () => {
 });
 
 await step("no errors reached the console", () => {
-  assert.deepEqual(errors, []);
+  assert.deepEqual(errors, [], errors.join(" | "));
 });
 
 await browser.close();

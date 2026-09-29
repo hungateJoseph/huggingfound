@@ -7,7 +7,31 @@ import { MODELS, startStubHub } from "./stub-hub.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-server-"));
 const { createServer } = await import("../src/server.js");
-const { MODELS_DIR } = await import("../src/runners.js");
+const { MODELS_DIR, OUTPUT_DIR } = await import("../src/runners.js");
+import http from "node:http";
+
+// A stand-in sd-server: reports one loaded model and answers txt2img with a 1 by 1 PNG.
+const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+function startStubImageServer() {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      requests.push({ path: req.url, body: body ? JSON.parse(body) : null });
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/sdapi/v1/sd-models") return res.end(JSON.stringify([{ title: "sdxl_lightning_4step.safetensors", model_name: "sdxl_lightning_4step" }]));
+      if (req.url === "/sdcpp/v1/img_gen") {
+        res.statusCode = 202;
+        return res.end(JSON.stringify({ id: "job_1", kind: "img_gen", status: "queued", created: 1, poll_url: "/sdcpp/v1/jobs/job_1" }));
+      }
+      if (req.url === "/sdcpp/v1/jobs/job_1") return res.end(JSON.stringify({ id: "job_1", kind: "img_gen", status: "completed", queue_position: 0, result: { output_format: "png", images: [{ index: 0, b64_json: ONE_PIXEL_PNG }] }, error: null }));
+      res.statusCode = 404;
+      res.end("{}");
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, url: `http://127.0.0.1:${server.address().port}`, requests })));
+}
 
 let stub;
 let server;
@@ -177,6 +201,47 @@ test("storage lists the download and remove deletes it", async () => {
   assert.equal((await post("/api/remove", { kind: "file", repo: "bartowski/Llama-3.2-3B-Instruct-GGUF", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf" })).status, 400);
   assert.equal((await post("/api/remove", { kind: "file", repo: "../x", file: "y" })).status, 400);
   assert.equal((await post("/api/remove", { kind: "nonsense" })).status, 400);
+});
+
+test("the image server setting is validated, checked, used for pictures and cleared", async () => {
+  assert.equal((await post("/api/settings", { IMAGE_SERVER: "ftp://nope" })).status, 400);
+  assert.equal((await post("/api/settings", { IMAGE_SERVER: "box:1234" })).status, 400);
+  assert.equal((await post("/api/settings", {})).status, 400);
+  const off = await (await get("/api/image-server")).json();
+  assert.deepEqual(off, { configured: "", ok: false });
+
+  const stubImages = await startStubImageServer();
+  try {
+    assert.equal((await post("/api/settings", { IMAGE_SERVER: stubImages.url + "/" })).status, 200);
+    assert.equal((await (await get("/api/state")).json()).imageServer, stubImages.url);
+    const check = await (await get("/api/image-server")).json();
+    assert.equal(check.ok, true);
+    assert.equal(check.model, "sdxl_lightning_4step");
+
+    const { plan } = await (await get("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).json();
+    assert.deepEqual(plan.steps, [], "nothing to download when a server makes the pictures");
+    assert.equal(plan.tryWith.remote, stubImages.url);
+    assert.match(plan.speed.text, /sdxl_lightning_4step loaded/);
+
+    const { id } = await (await post("/api/run", { kind: "generate-image", args: { repo: "second-state/stable-diffusion-v1-5-GGUF", file: "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf", prompt: "a cat", quality: "fast", remote: "http://evil.example" } })).json();
+    const events = await readEvents(`${base}/api/runs/${id}`);
+    assert.equal(events.at(-1).status, "done", JSON.stringify(events));
+    const sent = stubImages.requests.find((r) => r.path === "/sdcpp/v1/img_gen");
+    assert.ok(sent, "the configured server got the request, not the address in the page's arguments");
+    assert.equal(sent.body.prompt, "a cat");
+    assert.equal(sent.body.sample_params.sample_steps, 12);
+    assert.equal(sent.body.sample_params.sample_method, "dpm++2m");
+    assert.equal(sent.body.vae_tiling_params.enabled, true);
+    const png = fs.readFileSync(path.join(OUTPUT_DIR, events.at(-1).result));
+    assert.equal(png.subarray(1, 4).toString(), "PNG");
+  } finally {
+    stubImages.server.close();
+  }
+  assert.equal((await post("/api/settings", { IMAGE_SERVER: "" })).status, 200);
+  assert.equal((await (await get("/api/state")).json()).imageServer, "");
+  const { plan: local } = await (await get("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).json();
+  assert.equal(local.steps.length, 2);
+  assert.deepEqual(Object.keys(local.qualities), ["fast", "default", "max"]);
 });
 
 test("a diffusers repository downloads its parts into one folder and can be removed as one", async () => {

@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-runners-"));
-const { BIN_DIR, DATA_DIR, MODELS_DIR, UPLOAD_DIR, commandFor, detect, downloadedFiles, modelPath, removeFile, removeFolder, removeOllamaModel, storage } = await import("../src/runners.js");
+const { BIN_DIR, DATA_DIR, MODELS_DIR, UPLOAD_DIR, commandFor, detect, downloadedFiles, modelPath, removeFile, removeFolder, removeOllamaModel, storage, QUALITIES, imageSettings, isFastImageModel } = await import("../src/runners.js");
 
 const mac = { platform: "darwin", gpu: "Apple Silicon" };
 const win = { platform: "win32", gpu: "NVIDIA GeForce RTX 4070" };
@@ -219,5 +219,54 @@ test("image generation needs the model file in place and sizes SDXL at 768", () 
   assert.equal(spec.argv[spec.argv.indexOf("-m") + 1], file);
   assert.equal(spec.argv[spec.argv.indexOf("-W") + 1], "768", "SDXL renders at 768");
   removeFolder("a/b-sdxl");
+  fs.rmSync(dist, { recursive: true, force: true });
+});
+
+test("quality presets: Default is the plain 20 steps, Fast and Max change sampler and steps", () => {
+  const d = imageSettings("default", { fast: false, xl: false });
+  assert.equal(d.steps, 20);
+  assert.deepEqual(d.cliArgs, ["--steps", "20", "-W", "512", "-H", "512", "--cfg-scale", "7"]);
+  assert.equal(d.samplerName, "euler_a");
+  const f = imageSettings("fast", { fast: false, xl: true });
+  assert.equal(f.steps, 12);
+  assert.equal(f.size, 768);
+  assert.ok(f.cliArgs.includes("dpm++2m") && f.cliArgs.includes("karras"));
+  assert.ok(!f.cliArgs.includes("--diffusion-fa"), "flash attention stays off");
+  assert.equal(f.samplerName, "dpm++2m");
+  assert.equal(f.schedulerName, "karras");
+  const m = imageSettings("max", { fast: false, xl: false });
+  assert.equal(m.steps, 40);
+  // distilled models are built for four steps whatever the preset says
+  const t = imageSettings("default", { fast: true, xl: true });
+  assert.equal(t.steps, 4);
+  assert.equal(t.cfg, 1);
+  assert.equal(t.size, 512);
+  assert.ok(t.cliArgs.includes("sgm_uniform"));
+  assert.equal(imageSettings("max", { fast: true, xl: false }).steps, 8);
+  assert.deepEqual(Object.keys(QUALITIES), ["fast", "default", "max"]);
+  assert.equal(isFastImageModel("ByteDance/SDXL-Lightning/sdxl_lightning_4step.safetensors"), true);
+  assert.equal(isFastImageModel("second-state/x/y.gguf"), false);
+});
+
+test("image generation refuses unknown presets, uses the server build when present and the remote address when set", () => {
+  const dist = path.join(BIN_DIR, "sd");
+  fs.mkdirSync(dist, { recursive: true });
+  fs.writeFileSync(path.join(dist, "sd-cli"), "#!/bin/sh\n");
+  fs.chmodSync(path.join(dist, "sd-cli"), 0o755);
+  const file = modelPath("a/b", "m.safetensors");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "");
+  assert.throws(() => commandFor("generate-image", { repo: "a/b", file: "m.safetensors", prompt: "x", quality: "ultra" }, mac), /Bad image/);
+  const cli = commandFor("generate-image", { repo: "a/b", file: "m.safetensors", prompt: "x", quality: "max" }, mac);
+  assert.ok(cli.argv, "no server build: one-shot sd-cli");
+  assert.equal(cli.argv[cli.argv.indexOf("--steps") + 1], "40");
+  fs.writeFileSync(path.join(dist, "sd-server"), "#!/bin/sh\n");
+  fs.chmodSync(path.join(dist, "sd-server"), 0o755);
+  const srv = commandFor("generate-image", { repo: "a/b", file: "m.safetensors", prompt: "x" }, mac);
+  assert.equal(typeof srv.run, "function", "with the server build the picture goes through the loaded model");
+  assert.match(srv.text, /Default, 20 steps/);
+  const remote = commandFor("generate-image", { repo: "a/b", file: "not-here.safetensors", prompt: "x", remote: "http://10.0.0.5:1234" }, mac);
+  assert.equal(typeof remote.run, "function", "a remote server needs no local file");
+  removeFolder("a/b");
   fs.rmSync(dist, { recursive: true, force: true });
 });

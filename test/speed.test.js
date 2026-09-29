@@ -21,6 +21,9 @@ test("the image guess matches the measured SD 1.5 run on a plain M3", () => {
   const xl = estimate({ runnerId: "sd", sizeGb: 6.5, fileName: "merged.safetensors", machine: m3, xl: true });
   assert.ok(xl.seconds >= 140 && xl.seconds <= 175, `SDXL at 768 measured 158 s here, got ${xl.seconds}`);
   assert.match(xl.text, /768 by 768/);
+  const twelve = estimate({ runnerId: "sd", sizeGb: 1.64, fileName: "x.gguf", machine: m3, steps: 12 });
+  assert.ok(twelve.seconds < e.seconds, "fewer steps, less time");
+  assert.match(estimate({ runnerId: "sd", sizeGb: 6.9, fileName: "sdxl_lightning_4step.safetensors", machine: m3 }).text, /fast model: 4 steps/);
 });
 
 test("chat and speech guesses scale with size and hardware", () => {

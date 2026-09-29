@@ -112,6 +112,7 @@ export function summarize(m) {
   const { categories, runner, gguf, adult } = categorize(m);
   return {
     adult,
+    fast: categories.includes("images") && /turbo|lightning|lcm|hyper/i.test(m.id),
     id: m.id,
     name: m.id.split("/").pop(),
     author: m.id.split("/")[0],

@@ -9,7 +9,7 @@ import { createHub } from "./hf.js";
 import { describeMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startRun, storage, which } from "./runners.js";
+import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, describeImageServer, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
@@ -47,6 +47,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         categories: CATEGORIES,
         runners: await detect(fetchImpl),
         token: saved.HF_TOKEN ? mask(saved.HF_TOKEN) : "",
+        imageServer: saved.IMAGE_SERVER || "",
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
         picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })),
@@ -55,8 +56,19 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
     if (req.method === "POST" && url.pathname === "/api/settings") {
       const body = await json(req);
-      if (typeof body.HF_TOKEN !== "string") return send(res, 400, { error: "HF_TOKEN must be a string" });
-      writeEnv(envFile, { HF_TOKEN: body.HF_TOKEN.trim() });
+      const updates = {};
+      if ("HF_TOKEN" in body) {
+        if (typeof body.HF_TOKEN !== "string") return send(res, 400, { error: "HF_TOKEN must be a string" });
+        updates.HF_TOKEN = body.HF_TOKEN.trim();
+      }
+      if ("IMAGE_SERVER" in body) {
+        if (typeof body.IMAGE_SERVER !== "string") return send(res, 400, { error: "IMAGE_SERVER must be a string" });
+        const value = body.IMAGE_SERVER.trim().replace(/\/+$/, "");
+        if (value && !/^https?:\/\/[\w.\-:[\]]+(\/[\w./-]*)?$/.test(value)) return send(res, 400, { error: "IMAGE_SERVER must be an http or https address" });
+        updates.IMAGE_SERVER = value;
+      }
+      if (!Object.keys(updates).length) return send(res, 400, { error: "Nothing to save" });
+      writeEnv(envFile, updates);
       // A new token can change what the Hub is willing to show.
       details.clear();
       return send(res, 200, { ok: true });
@@ -91,7 +103,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (pick && !model.gatedBlocked) model.runner = { id: pick.runner, name: RUNNER_NAMES[pick.runner], easy: true };
       const plan = model.gatedBlocked
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
-        : buildPlan({ model, files: model.files, machine, detected: await detect(fetchImpl), hasToken: Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: readTimings() });
+        : buildPlan({ model, files: model.files, machine, detected: await detect(fetchImpl), hasToken: Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: readTimings(), imageServer: await remoteImageServer() });
       return send(res, 200, { model, plan });
     }
     if (req.method === "GET" && url.pathname === "/api/storage") {
@@ -109,10 +121,30 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       }
       return send(res, 200, await storage(fetchImpl));
     }
+    if (req.method === "GET" && url.pathname === "/api/image-server") {
+      const configured = env().IMAGE_SERVER;
+      if (!configured) return send(res, 200, { configured: "", ok: false });
+      try {
+        return send(res, 200, { configured, ok: true, ...(await describeImageServer(configured, fetchImpl)) });
+      } catch (err) {
+        return send(res, 200, { configured, ok: false, error: err.message });
+      }
+    }
+    if (req.method === "POST" && url.pathname === "/api/unload") {
+      stopImageServer();
+      return send(res, 200, { ok: true });
+    }
     if (req.method === "POST" && url.pathname === "/api/run") {
       const body = await json(req);
       try {
-        const run = startRun(String(body.kind ?? ""), body.args ?? {}, machine, { token: env().HF_TOKEN, fetchImpl, hubBase });
+        const args = { ...(body.args ?? {}) };
+        // The remote address comes from settings, never from the page.
+        if (body.kind === "generate-image") {
+          const remote = env().IMAGE_SERVER;
+          if (remote) args.remote = remote;
+          else delete args.remote;
+        }
+        const run = startRun(String(body.kind ?? ""), args, machine, { token: env().HF_TOKEN, fetchImpl, hubBase });
         return send(res, 200, { id: run.id });
       } catch (err) {
         return send(res, 400, { error: err.message });
@@ -169,6 +201,17 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       return send(res, 200, { text: file.endsWith(".txt") ? fs.readFileSync(full, "utf8") : null, url: `/output/${file}` });
     }
     send(res, 404, { error: "Not found" });
+  }
+
+  // The remote image server from settings, with what it has loaded, or null.
+  async function remoteImageServer() {
+    const url = env().IMAGE_SERVER;
+    if (!url) return null;
+    try {
+      return { url, ...(await describeImageServer(url, fetchImpl)) };
+    } catch {
+      return { url, model: null };
+    }
   }
 
   // A rough speed line for a listing card, from the size guessed off the name.

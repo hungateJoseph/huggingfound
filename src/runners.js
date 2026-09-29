@@ -80,7 +80,7 @@ export async function detect(fetchImpl = fetch) {
     ffmpeg: Boolean(which("ffmpeg")),
     ollama: { installed: Boolean(ollamaPath), running: ollamaRunning, models: ollamaModels },
     whisper: { installed: Boolean(whisperBinary()) },
-    sd: { installed: Boolean(sdBinary()) },
+    sd: { installed: Boolean(sdBinary()), server: Boolean(sdServerBinary()), loaded: imageServerState() },
     models: downloadedFiles(),
   };
 }
@@ -134,6 +134,7 @@ export function removeFile(repo, file) {
   if (!REPO_RE.test(String(repo)) || !SUBPATH_RE.test(String(file))) throw new Error("Bad file arguments");
   const target = modelPath(repo, file);
   if (!fs.existsSync(target)) throw new Error("That file is not on this computer");
+  if (imageServer.file === target) stopImageServer();
   fs.rmSync(target, { force: true });
   // A Modelfile only points at the file; drop it and any folders left empty.
   const dir = path.dirname(target);
@@ -147,6 +148,7 @@ export function removeFolder(repo) {
   if (!REPO_RE.test(String(repo))) throw new Error("Bad repository name");
   const dir = path.join(MODELS_DIR, ...repo.split("/"));
   if (!fs.existsSync(dir)) throw new Error("That model is not on this computer");
+  if (imageServer.file && imageServer.file.startsWith(dir + path.sep)) stopImageServer();
   fs.rmSync(dir, { recursive: true, force: true });
   pruneEmpty(path.dirname(dir));
 }
@@ -260,7 +262,7 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       // then it is built from source instead.
       return {
         githubRelease: { repo: "leejet/stable-diffusion.cpp", match, pick: /(^|\/)sd(-cli)?(\.exe)?$/, dir: "sd", verify: ["--help"] },
-        fallbackBuild: platform === "win32" ? null : { repo: "leejet/stable-diffusion.cpp", dir: "sd", cmakeArgs: platform === "darwin" ? ["-DSD_METAL=ON"] : [], pick: /(^|\/)sd-cli$/ },
+        fallbackBuild: platform === "win32" ? null : { repo: "leejet/stable-diffusion.cpp", dir: "sd", cmakeArgs: platform === "darwin" ? ["-DSD_METAL=ON"] : [], pick: /(^|\/)sd-(cli|server)$/ },
         text: "Installing stable-diffusion.cpp",
       };
     }
@@ -278,23 +280,239 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       const repo = String(args.repo ?? "");
       const file = String(args.file ?? "");
       const prompt = String(args.prompt ?? "").slice(0, 1000);
-      if (!REPO_RE.test(repo) || !FILE_RE.test(file) || !prompt.trim()) throw new Error("Bad image arguments");
+      const quality = String(args.quality ?? "default");
+      if (!REPO_RE.test(repo) || !FILE_RE.test(file) || !prompt.trim() || !QUALITIES[quality]) throw new Error("Bad image arguments");
+      const modelArg = modelPath(repo, file);
+      const fast = isFastImageModel(`${repo}/${file}`);
+      const xl = /xl/i.test(file) || /xl/i.test(repo);
+      const settings = imageSettings(quality, { fast, xl });
+      const out = path.join(OUTPUT_DIR, `image-${Date.now()}.png`);
+
+      // A remote image server makes the picture with the model loaded there.
+      if (args.remote) {
+        return { run: (emit, fetchImpl) => generateRemote(String(args.remote), prompt, settings, out, emit, fetchImpl), text: `Asking the image server at ${args.remote}`, result: out };
+      }
+      if (!fs.existsSync(modelArg)) throw new Error("The model file is not downloaded yet");
+      const server = sdServerBinary();
+      if (server) {
+        return { run: (emit, fetchImpl) => generateWithServer(server, modelArg, prompt, settings, out, emit, fetchImpl), text: `Generating the image (${settings.label})`, result: out };
+      }
       const bin = sdBinary();
       if (!bin) throw new Error("stable-diffusion.cpp is not installed");
-      const modelArg = modelPath(repo, file);
-      if (!fs.existsSync(modelArg)) throw new Error("The model file is not downloaded yet");
-      const xl = /xl/i.test(file) || /xl/i.test(repo);
-      const turbo = /turbo|lightning/i.test(file) || /turbo|lightning/i.test(repo);
-      const out = path.join(OUTPUT_DIR, `image-${Date.now()}.png`);
-      // SDXL models are trained at 1024; 768 keeps them coherent at a third of the cost.
-      const size = xl && !turbo ? "768" : "512";
-      const argv = [bin, "-m", modelArg, "-p", prompt, "-o", out, "--steps", turbo ? "4" : "20", "-W", size, "-H", size];
-      if (turbo) argv.push("--cfg-scale", "1");
-      return { argv, text: "Generating the image", result: out };
+      const argv = [bin, "-m", modelArg, "-p", prompt, "-o", out, ...settings.cliArgs];
+      return { argv, text: `Generating the image (${settings.label})`, result: out };
     }
     default:
       throw new Error(`Unknown step ${kind}`);
   }
+}
+
+// ---- image generation settings -----------------------------------------------
+
+// Three presets. Default is exactly what stable-diffusion.cpp does on its
+// own (20 steps, Euler a). Fast trades a few steps for a better sampler;
+// Max spends twice the steps. Distilled models (Turbo, Lightning, LCM,
+// Hyper) are built for 4 steps and ignore most of this. Flash attention is
+// left off: on Metal it broke the VAE at 768 by 768 and saves little.
+export const QUALITIES = {
+  fast: { label: "Fast", steps: 12, sampler: "dpm++2m", scheduler: "karras" },
+  default: { label: "Default", steps: 20, sampler: null, scheduler: null },
+  max: { label: "Max", steps: 40, sampler: "dpm++2m", scheduler: "karras" },
+};
+
+export function isFastImageModel(name) {
+  return /turbo|lightning|lcm|hyper/i.test(name);
+}
+
+export function imageSettings(quality, { fast, xl }) {
+  const q = QUALITIES[quality] ?? QUALITIES.default;
+  const size = xl && !fast ? 768 : 512;
+  const steps = fast ? (quality === "max" ? 8 : 4) : q.steps;
+  const sampler = fast ? "euler" : q.sampler;
+  const scheduler = fast ? "sgm_uniform" : q.scheduler;
+  const cfg = fast ? 1 : 7;
+  const cliArgs = ["--steps", String(steps), "-W", String(size), "-H", String(size), "--cfg-scale", String(cfg)];
+  if (sampler) cliArgs.push("--sampling-method", sampler);
+  if (scheduler) cliArgs.push("--scheduler", scheduler);
+
+  // sd-server takes the same sampler and scheduler names as the command line.
+  const samplerName = sampler ?? "euler_a";
+  const schedulerName = scheduler ?? "discrete";
+  return { label: `${q.label}, ${steps} steps`, steps, size, cfg, sampler, scheduler, samplerName, schedulerName, cliArgs };
+}
+
+// ---- keeping the image model loaded ------------------------------------------
+
+// sd-server holds one model in memory and answers over HTTP, so the second
+// picture skips the 20 to 40 seconds of loading the first one paid. One
+// server at a time, restarted when a different model is asked for, stopped
+// after a quiet quarter hour, when the model is removed, and when the app
+// exits.
+const sdServerBinary = () => localBinary("sd", [`sd-server${EXE}`]);
+const IMAGE_SERVER_PORT = 4189;
+const IMAGE_SERVER_IDLE_MS = 15 * 60 * 1000;
+const imageServer = { proc: null, file: null, ready: false, timer: null, errors: [], url: `http://127.0.0.1:${IMAGE_SERVER_PORT}` };
+
+export function imageServerState() {
+  return { file: imageServer.file, ready: imageServer.ready };
+}
+
+export function stopImageServer(reason = "") {
+  if (imageServer.timer) clearTimeout(imageServer.timer);
+  imageServer.timer = null;
+  if (imageServer.proc) {
+    try {
+      imageServer.proc.kill();
+    } catch {
+      // already gone
+    }
+  }
+  imageServer.proc = null;
+  imageServer.file = null;
+  imageServer.ready = false;
+  imageServer.errors = [];
+  return reason;
+}
+
+process.on("exit", () => stopImageServer());
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => {
+    stopImageServer();
+    process.exit(0);
+  });
+}
+
+function touchImageServer() {
+  if (imageServer.timer) clearTimeout(imageServer.timer);
+  imageServer.timer = setTimeout(() => stopImageServer("idle"), IMAGE_SERVER_IDLE_MS);
+  imageServer.timer.unref?.();
+}
+
+async function ensureImageServer(bin, modelFile, emit, fetchImpl) {
+  if (imageServer.proc && imageServer.file === modelFile && imageServer.ready) {
+    emit("Using the model already loaded in memory.");
+    touchImageServer();
+    return imageServer.url;
+  }
+  if (imageServer.proc) {
+    emit(`Unloading ${path.basename(imageServer.file)} to make room.`);
+    stopImageServer();
+  }
+  emit(`Loading ${path.basename(modelFile)} into memory; it stays loaded for the next pictures.`);
+  // VAE tiling decodes the picture in pieces; without it the decoder ran
+  // out of room on a 16 GB Mac at 768 by 768 and the request never came back.
+  const argv = ["-m", modelFile, "--listen-ip", "127.0.0.1", "--listen-port", String(IMAGE_SERVER_PORT), "--vae-tiling"];
+  const proc = spawn(bin, argv, { cwd: DATA_DIR, stdio: ["ignore", "pipe", "pipe"] });
+  imageServer.proc = proc;
+  imageServer.file = modelFile;
+  imageServer.ready = false;
+  imageServer.errors = [];
+  let tail = "";
+  const onData = (chunk) => {
+    tail = (tail + chunk.toString()).slice(-2000);
+    for (const line of chunk.toString().split(/\r?\n/)) {
+      if (/\[ERROR/.test(line)) imageServer.errors.push({ at: Date.now(), line: line.trim() });
+      if (/ERROR|Version:|listening/.test(line)) emit(line.trim());
+    }
+  };
+  proc.stdout.on("data", onData);
+  proc.stderr.on("data", onData);
+  proc.on("exit", () => {
+    if (imageServer.proc === proc) stopImageServer();
+  });
+  for (let i = 0; i < 180; i++) {
+    if (proc.exitCode !== null) throw new Error(`the image server stopped: ${tail.split("\n").filter(Boolean).pop() ?? "no output"}`);
+    try {
+      const res = await fetchImpl(`${imageServer.url}/sdapi/v1/sd-models`, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) {
+        imageServer.ready = true;
+        touchImageServer();
+        return imageServer.url;
+      }
+    } catch {
+      // still loading
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  stopImageServer();
+  throw new Error("the image server did not answer in three minutes");
+}
+
+// Submits a job to sd-server's native async API and polls it. No request
+// stays open for minutes, so nothing times out, and a job that fails on
+// the server reports why.
+async function txt2img(url, prompt, settings, out, emit, fetchImpl) {
+  const body = {
+    prompt,
+    width: settings.size,
+    height: settings.size,
+    seed: -1,
+    sample_params: { sample_steps: settings.steps, sample_method: settings.samplerName, scheduler: settings.schedulerName, guidance: { txt_cfg: settings.cfg } },
+    vae_tiling_params: { enabled: true },
+    output_format: "png",
+  };
+  emit(`${settings.steps} steps at ${settings.size} by ${settings.size}, ${settings.samplerName}`);
+  const submitted = await fetchImpl(`${url}/sdcpp/v1/img_gen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+  if (!submitted.ok) throw new Error(`the image server refused the request (HTTP ${submitted.status})`);
+  const job = await submitted.json();
+  const started = Date.now();
+  let lastStatus = "";
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    // The local server sometimes logs a failure without failing the job;
+    // that line ends the wait.
+    if (url === imageServer.url) {
+      const err = imageServer.errors.find((e) => e.at >= started);
+      if (err || !imageServer.proc) {
+        stopImageServer();
+        throw new Error(err ? err.line : "the image server stopped");
+      }
+    }
+    if (Date.now() - started > 30 * 60 * 1000) throw new Error("no picture after 30 minutes");
+    let state;
+    try {
+      const res = await fetchImpl(`${url}/sdcpp/v1/jobs/${encodeURIComponent(job.id)}`, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state = await res.json();
+    } catch (err) {
+      throw new Error(`lost the image server while waiting: ${err.message}`);
+    }
+    if (state.status !== lastStatus) {
+      lastStatus = state.status;
+      if (state.status === "queued" && state.queue_position > 0) emit(`Waiting behind ${state.queue_position} other job${state.queue_position === 1 ? "" : "s"}`);
+      if (state.status === "generating") emit("Generating");
+    }
+    if (state.status === "completed") {
+      const b64 = state.result?.images?.[0]?.b64_json;
+      if (!b64) throw new Error("the image server returned no image");
+      fs.writeFileSync(out, Buffer.from(b64, "base64"));
+      return out;
+    }
+    if (state.status === "failed" || state.status === "cancelled") {
+      throw new Error(state.error?.message ?? state.error?.error ?? JSON.stringify(state.error ?? state.status));
+    }
+  }
+}
+
+async function generateWithServer(bin, modelFile, prompt, settings, out, emit, fetchImpl) {
+  const url = await ensureImageServer(bin, modelFile, emit, fetchImpl);
+  const result = await txt2img(url, prompt, settings, out, emit, fetchImpl);
+  touchImageServer();
+  return result;
+}
+
+async function generateRemote(remote, prompt, settings, out, emit, fetchImpl) {
+  const url = remote.replace(/\/+$/, "");
+  return txt2img(url, prompt, settings, out, emit, fetchImpl);
+}
+
+// What a remote or local sd-server has loaded, for the page to show.
+export async function describeImageServer(url, fetchImpl = fetch) {
+  const base = String(url).replace(/\/+$/, "");
+  const res = await fetchImpl(`${base}/sdapi/v1/sd-models`, { signal: AbortSignal.timeout(4000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const list = await res.json();
+  return { model: list[0]?.model_name ?? list[0]?.title ?? "unknown model" };
 }
 
 function needOllama() {
@@ -328,7 +546,9 @@ export function startRun(kind, args, machine, { token = "", fetchImpl = fetch, h
   };
   emit(spec.text);
 
-  if (spec.download) {
+  if (spec.run) {
+    spec.run(emit, fetchImpl).then(() => finish("done", "Done.")).catch((err) => finish("failed", `Failed: ${err.message}`));
+  } else if (spec.download) {
     downloadFile(spec.download.url, spec.download.dest, token, emit, fetchImpl).then(() => finish("done", "Download complete.")).catch((err) => finish("failed", `Download failed: ${err.message}`));
   } else if (spec.downloads) {
     (async () => {
@@ -533,14 +753,17 @@ async function buildFromSource({ repo, dir, cmakeArgs, pick }, emit, fetchImpl) 
   await runLogged([cmake, "-S", src, "-B", path.join(src, "build"), "-DCMAKE_BUILD_TYPE=Release", ...cmakeArgs], emit);
   emit(`Compiling (this takes a few minutes; ${os.cpus().length} cores)`);
   await runLogged([cmake, "--build", path.join(src, "build"), "--config", "Release", "-j", String(Math.max(1, os.cpus().length - 1))], emit, /\[\s*\d+%\]|error|warning: unused/i);
-  const found = walk(path.join(src, "build")).find((f) => pick.test(f));
-  if (!found) throw new Error("the build finished but the program was not found");
+  const found = walk(path.join(src, "build")).filter((f) => pick.test(f));
+  if (!found.length) throw new Error("the build finished but the program was not found");
   const dest = path.join(BIN_DIR, dir);
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dest, { recursive: true });
-  const target = path.join(dest, path.basename(found));
-  fs.copyFileSync(found, target);
-  fs.chmodSync(target, 0o755);
+  let target;
+  for (const f of found) {
+    target = path.join(dest, path.basename(f));
+    fs.copyFileSync(f, target);
+    fs.chmodSync(target, 0o755);
+  }
   // The checkout and its build tree run to hundreds of megabytes; only the
   // program is kept.
   fs.rmSync(src, { recursive: true, force: true });
