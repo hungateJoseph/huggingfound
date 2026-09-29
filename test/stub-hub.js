@@ -1,0 +1,83 @@
+import http from "node:http";
+
+// A tiny stand-in for the Hugging Face Hub: answers the listings the scan
+// asks for, model details with file sizes, a gated model, and file downloads.
+
+export const MODELS = [
+  { id: "bartowski/Llama-3.2-3B-Instruct-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "text-generation", "conversational"], downloads: 250000, likes: 400, createdAt: "2024-09-25T00:00:00.000Z" },
+  { id: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "code", "conversational"], downloads: 90000, likes: 120, createdAt: "2024-11-12T00:00:00.000Z" },
+  { id: "bartowski/Qwen2.5-Math-7B-Instruct-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "math"], downloads: 12000, likes: 30, createdAt: "2024-10-01T00:00:00.000Z" },
+  { id: "meta-llama/Llama-3.1-8B-Instruct", pipeline_tag: "text-generation", library_name: "transformers", tags: ["transformers", "safetensors", "conversational"], gated: "manual", downloads: 5000000, likes: 4000, createdAt: "2024-07-23T00:00:00.000Z" },
+  { id: "unsloth/gemma-3-4b-it-GGUF", pipeline_tag: "image-text-to-text", library_name: "transformers", tags: ["gguf", "image-text-to-text"], downloads: 80000, likes: 200, createdAt: "2025-03-12T00:00:00.000Z" },
+  { id: "second-state/stable-diffusion-v1-5-GGUF", pipeline_tag: "text-to-image", library_name: null, tags: ["gguf", "text-to-image"], downloads: 3000, likes: 20, createdAt: "2024-08-20T00:00:00.000Z" },
+  { id: "black-forest-labs/FLUX.1-dev", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "text-to-image"], gated: "auto", downloads: 900000, likes: 9000, createdAt: "2024-08-01T00:00:00.000Z" },
+  { id: "ggerganov/whisper.cpp", pipeline_tag: "automatic-speech-recognition", library_name: null, tags: ["automatic-speech-recognition"], downloads: 400000, likes: 900, createdAt: "2023-03-01T00:00:00.000Z" },
+  { id: "openai/whisper-large-v3", pipeline_tag: "automatic-speech-recognition", library_name: "transformers", tags: ["transformers", "safetensors"], downloads: 3000000, likes: 3000, createdAt: "2023-11-07T00:00:00.000Z" },
+];
+
+export const FILES = {
+  "bartowski/Llama-3.2-3B-Instruct-GGUF": [
+    { rfilename: "README.md", size: 12000 },
+    { rfilename: "Llama-3.2-3B-Instruct-Q8_0.gguf", size: 3.4 * 1024 ** 3 },
+    { rfilename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf", size: 2.0 * 1024 ** 3 },
+    { rfilename: "Llama-3.2-3B-Instruct-f16.gguf", size: 6.4 * 1024 ** 3 },
+  ],
+  "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF": [{ rfilename: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf", size: 4.7 * 1024 ** 3 }],
+  "bartowski/Qwen2.5-Math-7B-Instruct-GGUF": [{ rfilename: "Qwen2.5-Math-7B-Instruct-Q4_K_M.gguf", size: 4.7 * 1024 ** 3 }],
+  "unsloth/gemma-3-4b-it-GGUF": [
+    { rfilename: "gemma-3-4b-it-Q4_K_M.gguf", size: 2.5 * 1024 ** 3 },
+    { rfilename: "mmproj-F16.gguf", size: 0.8 * 1024 ** 3 },
+  ],
+  "second-state/stable-diffusion-v1-5-GGUF": [
+    { rfilename: "stable-diffusion-v1-5-pruned-emaonly-Q4_0.gguf", size: 1.1 * 1024 ** 3 },
+    { rfilename: "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf", size: 1.76 * 1024 ** 3 },
+  ],
+  "ggerganov/whisper.cpp": [
+    { rfilename: "ggml-tiny.bin", size: 75 * 1024 ** 2 },
+    { rfilename: "ggml-base.en.bin", size: 148 * 1024 ** 2 },
+    { rfilename: "ggml-large-v3.bin", size: 3.1 * 1024 ** 3 },
+  ],
+  "openai/whisper-large-v3": [{ rfilename: "model.safetensors", size: 3.1 * 1024 ** 3 }],
+};
+
+export function startStubHub({ extraModels = [] } = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://stub");
+    requests.push({ path: url.pathname + url.search, auth: req.headers.authorization ?? null });
+    const all = [...MODELS, ...extraModels];
+
+    if (url.pathname === "/api/models") {
+      let items = all;
+      const pipeline = url.searchParams.get("pipeline_tag");
+      if (pipeline) items = items.filter((m) => m.pipeline_tag === pipeline);
+      if (url.searchParams.get("filter") === "gguf") items = items.filter((m) => m.tags.includes("gguf"));
+      return json(res, 200, items.slice(0, Number(url.searchParams.get("limit") || 100)));
+    }
+    const detail = /^\/api\/models\/([^/]+\/[^/]+)$/.exec(url.pathname);
+    if (detail) {
+      const m = all.find((x) => x.id === detail[1]);
+      if (!m) return json(res, 404, { error: "not found" });
+      if (m.gated && !req.headers.authorization) return json(res, 401, { error: "gated" });
+      return json(res, 200, { ...m, siblings: FILES[m.id] ?? [], cardData: {} });
+    }
+    const dl = /^\/([^/]+\/[^/]+)\/resolve\/main\/(.+)$/.exec(url.pathname);
+    if (dl) {
+      const m = all.find((x) => x.id === dl[1]);
+      if (!m) return json(res, 404, { error: "not found" });
+      if (m.gated && !req.headers.authorization) return json(res, 401, { error: "gated" });
+      const body = Buffer.alloc(64 * 1024, dl[2]);
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": body.length });
+      return res.end(body);
+    }
+    json(res, 404, { error: "not found" });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve({ server, base: `http://127.0.0.1:${server.address().port}`, requests }));
+  });
+}
+
+function json(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+}
