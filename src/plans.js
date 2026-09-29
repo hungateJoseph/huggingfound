@@ -121,15 +121,15 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
     steps.push({
       kind: "install-sd",
       title: "Install stable-diffusion.cpp",
-      text: `The program that turns a description into an image. HuggingFound downloads the ready-made build for ${os}.`,
+      text: `The program that turns a description into an image. HuggingFound downloads the ready-made build for ${os}${machine.platform === "win32" ? "." : ", and builds it from source if that build does not run on this version."}`,
       done: detected.sd.installed,
-      command: "download the latest release from github.com/leejet/stable-diffusion.cpp",
+      command: machine.platform === "win32" ? "download the latest release from github.com/leejet/stable-diffusion.cpp" : "download the latest release from github.com/leejet/stable-diffusion.cpp, or build it with CMake",
     });
     steps.push({
       kind: "download-file",
       args: { repo: model.id, file: file.name },
       title: `Download ${file.name} (${file.gb ? file.gb.toFixed(1) + " GB" : "size unknown"})`,
-      text: `${fit.text}. Image models are large; a 512 by 512 picture takes a few seconds to a minute.`,
+      text: `${fit.text}. Image models are large; a 512 by 512 picture takes one to a few minutes on a laptop, longer the first time while the graphics shaders compile.`,
       done: downloaded,
       command: `download to ~/HuggingFound/models/${model.id}/${file.name}`,
     });
@@ -144,13 +144,12 @@ function installNote(runner, machine, detected) {
     if (machine.platform === "linux") return "Installed with the official script from ollama.com.";
     return `HuggingFound downloads the official release build for ${platformName(machine.platform)} into ~/HuggingFound/bin. No package manager, nothing else touched.`;
   }
-  if (machine.platform === "darwin") return detected.brew ? "Installed with Homebrew, which is already on this Mac." : "Homebrew is not installed; install it first from brew.sh.";
   if (machine.platform === "win32") return "Downloaded as a ready-made build.";
-  return detected.brew ? "Installed with Homebrew." : "Needs Homebrew on Linux, or a build from source.";
+  return "Built from source into ~/HuggingFound/bin, which takes a minute or two. Needs git and a C compiler (the Xcode command line tools on a Mac); CMake is fetched if missing.";
 }
 
 function displayCommand(kind, machine) {
   if (kind === "install-ollama") return { darwin: "download ollama-darwin.tgz from github.com/ollama/ollama/releases", win32: "download ollama-windows-amd64.zip from github.com/ollama/ollama/releases", linux: "curl -fsSL https://ollama.com/install.sh | sh" }[machine.platform];
-  if (kind === "install-whisper") return machine.platform === "win32" ? "download whisper-bin-x64.zip from the whisper.cpp releases" : "brew install whisper-cpp";
+  if (kind === "install-whisper") return machine.platform === "win32" ? "download whisper-bin-x64.zip from the whisper.cpp releases" : "git clone github.com/ggerganov/whisper.cpp and build it with CMake";
   return "";
 }

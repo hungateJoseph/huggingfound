@@ -25,10 +25,17 @@ test("install commands per platform", () => {
   assert.ok(commandFor("install-ollama", {}, win).githubRelease.match.test("ollama-windows-amd64.zip"));
   assert.ok(commandFor("install-ollama", {}, { ...win, arch: "arm64" }).githubRelease.match.test("ollama-windows-arm64.zip"));
   assert.match(commandFor("install-ollama", {}, linux).argv.join(" "), /ollama.com\/install.sh/);
-  assert.deepEqual(commandFor("install-whisper", {}, mac).argv, ["brew", "install", "whisper-cpp"]);
+  assert.equal(commandFor("install-whisper", {}, mac).build.repo, "ggerganov/whisper.cpp");
+  assert.equal(commandFor("install-whisper", {}, linux).build.dir, "whisper");
   assert.equal(commandFor("install-whisper", {}, win).githubRelease.repo, "ggerganov/whisper.cpp");
-  assert.match(commandFor("install-sd", {}, mac).githubRelease.match.source, /Darwin/);
+  const sdMac = commandFor("install-sd", {}, mac);
+  assert.match(sdMac.githubRelease.match.source, /Darwin/);
+  assert.ok(sdMac.githubRelease.pick.test("x/sd-cli"));
+  assert.ok(sdMac.githubRelease.pick.test("x/sd"));
+  assert.deepEqual(sdMac.githubRelease.verify, ["--help"]);
+  assert.ok(sdMac.fallbackBuild.cmakeArgs.includes("-DSD_METAL=ON"));
   assert.match(commandFor("install-sd", {}, win).githubRelease.match.source, /cuda12/);
+  assert.equal(commandFor("install-sd", {}, win).fallbackBuild, null);
   assert.match(commandFor("install-sd", {}, { platform: "win32", gpu: "none detected" }).githubRelease.match.source, /cpu/);
   assert.match(commandFor("install-sd", {}, linux).githubRelease.match.source, /Linux/);
 });
@@ -54,6 +61,20 @@ test("create-model writes a Modelfile next to the download", () => {
   } catch (err) {
     assert.match(err.message, /not installed/);
   }
+});
+
+test("a program in its own bin folder is found, whichever name the release uses", async () => {
+  const dist = path.join(BIN_DIR, "sd");
+  fs.mkdirSync(dist, { recursive: true });
+  fs.writeFileSync(path.join(dist, "sd-cli"), "#!/bin/sh\n");
+  fs.chmodSync(path.join(dist, "sd-cli"), 0o755);
+  const d = await detect(async () => {
+    throw new Error("refused");
+  });
+  assert.equal(d.sd.installed, true);
+  const spec = commandFor("generate-image", { repo: "a/b", file: "m.gguf", prompt: "a cat" }, mac);
+  assert.ok(spec.argv[0].endsWith("sd-cli"));
+  fs.rmSync(dist, { recursive: true, force: true });
 });
 
 test("an unpacked release build in the bin folder counts as installed", async () => {

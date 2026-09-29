@@ -39,15 +39,24 @@ function ollamaBinary() {
   return walk(dist).find((f) => path.basename(f) === name) ?? null;
 }
 
-function sdBinary() {
-  const local = path.join(BIN_DIR, process.platform === "win32" ? "sd.exe" : "sd");
-  return fs.existsSync(local) ? local : which("sd");
+// Programs HuggingFound installed itself live under bin/<name>/ with their
+// libraries; one already on the PATH is used as it is.
+function localBinary(dirName, names) {
+  const dir = path.join(BIN_DIR, dirName);
+  if (fs.existsSync(dir)) {
+    const hit = walk(dir).find((f) => names.includes(path.basename(f)));
+    if (hit) return hit;
+  }
+  for (const n of names) {
+    const found = which(n);
+    if (found) return found;
+  }
+  return null;
 }
 
-function whisperBinary() {
-  const local = path.join(BIN_DIR, process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli");
-  return fs.existsSync(local) ? local : which("whisper-cli");
-}
+const EXE = process.platform === "win32" ? ".exe" : "";
+const sdBinary = () => localBinary("sd", [`sd-cli${EXE}`, `sd${EXE}`]);
+const whisperBinary = () => localBinary("whisper", [`whisper-cli${EXE}`]);
 
 export async function detect(fetchImpl = fetch) {
   const ollamaPath = ollamaBinary();
@@ -138,15 +147,26 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       return { download: { url: `${hubBase}/${repo}/resolve/main/${file}`, dest: modelPath(repo, file) }, text: `Downloading ${file}` };
     }
     case "install-whisper":
-      if (platform === "darwin" || platform === "linux") return { argv: ["brew", "install", "whisper-cpp"], text: "Installing whisper.cpp with Homebrew" };
-      return { githubRelease: { repo: "ggerganov/whisper.cpp", match: /whisper-bin-x64\.zip$/, pick: /whisper-cli\.exe$/ }, text: "Downloading the whisper.cpp release for Windows" };
+      if (platform === "win32") return { githubRelease: { repo: "ggerganov/whisper.cpp", match: /^whisper-bin-x64\.zip$/, pick: /whisper-cli\.exe$/, dir: "whisper" }, text: "Downloading the whisper.cpp release for Windows" };
+      // No macOS or Linux binaries are published; it builds in a minute or two.
+      return {
+        build: { repo: "ggerganov/whisper.cpp", dir: "whisper", cmakeArgs: ["-DBUILD_SHARED_LIBS=OFF", "-DWHISPER_BUILD_TESTS=OFF", "-DWHISPER_BUILD_SERVER=OFF"], pick: /(^|\/)whisper-cli$/ },
+        text: "Building whisper.cpp from source",
+      };
     case "install-sd": {
       const match = platform === "darwin"
         ? /Darwin.*arm64\.zip$/
         : platform === "win32"
           ? (/nvidia/i.test(machine.gpu) ? /win-cuda12-x64\.zip$/ : /win-cpu-x64\.zip$/)
           : /Linux-Ubuntu.*x86_64\.zip$/;
-      return { githubRelease: { repo: "leejet/stable-diffusion.cpp", match, pick: /(^|\/)sd(\.exe)?$/ }, text: "Downloading the stable-diffusion.cpp release for this computer" };
+      // The release build is tried first and checked with --help. It is
+      // compiled on the newest macOS, so on an older one it will not load;
+      // then it is built from source instead.
+      return {
+        githubRelease: { repo: "leejet/stable-diffusion.cpp", match, pick: /(^|\/)sd(-cli)?(\.exe)?$/, dir: "sd", verify: ["--help"] },
+        fallbackBuild: platform === "win32" ? null : { repo: "leejet/stable-diffusion.cpp", dir: "sd", cmakeArgs: platform === "darwin" ? ["-DSD_METAL=ON"] : [], pick: /(^|\/)sd-cli$/ },
+        text: "Installing stable-diffusion.cpp",
+      };
     }
     case "transcribe": {
       const repo = String(args.repo ?? "");
@@ -207,7 +227,16 @@ export function startRun(kind, args, machine, { token = "", fetchImpl = fetch, h
   if (spec.download) {
     downloadFile(spec.download.url, spec.download.dest, token, emit, fetchImpl).then(() => finish("done", "Download complete.")).catch((err) => finish("failed", `Download failed: ${err.message}`));
   } else if (spec.githubRelease) {
-    installRelease(spec.githubRelease, emit, fetchImpl).then(() => finish("done", "Installed.")).catch((err) => finish("failed", `Install failed: ${err.message}`));
+    installRelease(spec.githubRelease, emit, fetchImpl)
+      .catch(async (err) => {
+        if (!spec.fallbackBuild) throw err;
+        emit(`The release build did not work here (${err.message}).`);
+        await buildFromSource(spec.fallbackBuild, emit, fetchImpl);
+      })
+      .then(() => finish("done", "Installed."))
+      .catch((err) => finish("failed", `Install failed: ${err.message}`));
+  } else if (spec.build) {
+    buildFromSource(spec.build, emit, fetchImpl).then(() => finish("done", "Installed.")).catch((err) => finish("failed", `Install failed: ${err.message}`));
   } else if (spec.detached) {
     const child = spawn(spec.argv[0], spec.argv.slice(1), { detached: true, stdio: "ignore", cwd: DATA_DIR });
     child.on("error", (err) => finish("failed", err.message));
@@ -283,7 +312,7 @@ async function downloadFile(url, dest, token, emit, fetchImpl) {
 // Fetches the matching asset of a project's latest GitHub release. With
 // `dir` the whole archive is kept under bin/<dir> (Ollama needs its libraries
 // next to the binary); otherwise only the picked program is copied out.
-async function installRelease({ repo, match, pick, dir }, emit, fetchImpl) {
+async function installRelease({ repo, match, pick, dir, verify }, emit, fetchImpl) {
   const res = await fetchImpl(`https://api.github.com/repos/${repo}/releases/latest`, { headers: { "User-Agent": "huggingfound", Accept: "application/vnd.github+json" } });
   if (!res.ok) throw new Error(`GitHub replied HTTP ${res.status}`);
   const release = await res.json();
@@ -302,6 +331,13 @@ async function installRelease({ repo, match, pick, dir }, emit, fetchImpl) {
   fs.rmSync(archive, { force: true });
   if (dir) {
     if (process.platform !== "win32") fs.chmodSync(found, 0o755);
+    if (verify) {
+      const problem = await tryRun(found, verify);
+      if (problem) {
+        fs.rmSync(extractDir, { recursive: true, force: true });
+        throw new Error(problem);
+      }
+    }
     emit(`Installed to ${found}`);
     return;
   }
@@ -310,6 +346,89 @@ async function installRelease({ repo, match, pick, dir }, emit, fetchImpl) {
   if (process.platform !== "win32") fs.chmodSync(dest, 0o755);
   fs.rmSync(extractDir, { recursive: true, force: true });
   emit(`Installed to ${dest}`);
+}
+
+// Runs a program once to see whether it loads on this machine. Returns a
+// short reason when it does not, null when it does.
+function tryRun(bin, args) {
+  return new Promise((resolve) => {
+    const child = spawn(bin, args, { cwd: DATA_DIR });
+    let err = "";
+    child.stderr.on("data", (c) => (err += c));
+    child.on("error", (e) => resolve(e.message));
+    child.on("close", (code, signal) => {
+      if (code === 0) return resolve(null);
+      const m = /built for macOS [\d.]+ which is newer than running OS/.exec(err);
+      resolve(m ? "it is compiled for a newer macOS than this one" : `it exited with ${signal ?? code}`);
+    });
+  });
+}
+
+// ---- building from source --------------------------------------------------
+
+// git comes with the Xcode command line tools on macOS and with build
+// essentials on Linux; CMake is fetched as a self-contained release when
+// it is not already on the machine.
+async function buildFromSource({ repo, dir, cmakeArgs, pick }, emit, fetchImpl) {
+  const git = which("git");
+  if (!git) {
+    throw new Error(process.platform === "darwin" ? "git is needed; run `xcode-select --install` in Terminal, then try again" : "git is needed; install it with your package manager and try again");
+  }
+  if (process.platform === "darwin" && !fs.existsSync("/Library/Developer/CommandLineTools/usr/bin/clang") && !which("clang")) {
+    throw new Error("the C compiler is missing; run `xcode-select --install` in Terminal, then try again");
+  }
+  const cmake = await ensureCmake(emit, fetchImpl);
+  const src = path.join(BIN_DIR, `${dir}-src`);
+  fs.rmSync(src, { recursive: true, force: true });
+  emit(`Cloning github.com/${repo}`);
+  await runLogged([git, "clone", "--depth", "1", "--recursive", "--shallow-submodules", `https://github.com/${repo}.git`, src], emit);
+  emit("Configuring the build");
+  await runLogged([cmake, "-S", src, "-B", path.join(src, "build"), "-DCMAKE_BUILD_TYPE=Release", ...cmakeArgs], emit);
+  emit(`Compiling (this takes a few minutes; ${os.cpus().length} cores)`);
+  await runLogged([cmake, "--build", path.join(src, "build"), "--config", "Release", "-j", String(Math.max(1, os.cpus().length - 1))], emit, /\[\s*\d+%\]|error|warning: unused/i);
+  const found = walk(path.join(src, "build")).find((f) => pick.test(f));
+  if (!found) throw new Error("the build finished but the program was not found");
+  const dest = path.join(BIN_DIR, dir);
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(dest, { recursive: true });
+  const target = path.join(dest, path.basename(found));
+  fs.copyFileSync(found, target);
+  fs.chmodSync(target, 0o755);
+  // The checkout and its build tree run to hundreds of megabytes; only the
+  // program is kept.
+  fs.rmSync(src, { recursive: true, force: true });
+  emit(`Installed to ${target}`);
+}
+
+async function ensureCmake(emit, fetchImpl) {
+  const onPath = which("cmake");
+  if (onPath) return onPath;
+  const local = fs.existsSync(path.join(BIN_DIR, "cmake")) ? walk(path.join(BIN_DIR, "cmake")).find((f) => path.basename(f) === "cmake") : null;
+  if (local) return local;
+  emit("CMake is not installed; fetching a self-contained copy");
+  const match = process.platform === "darwin" ? /^cmake-[\d.]+-macos-universal\.tar\.gz$/ : os.arch() === "arm64" ? /^cmake-[\d.]+-linux-aarch64\.tar\.gz$/ : /^cmake-[\d.]+-linux-x86_64\.tar\.gz$/;
+  await installRelease({ repo: "Kitware/CMake", match, pick: /(^|\/)bin\/cmake$/, dir: "cmake" }, emit, fetchImpl);
+  const cmake = walk(path.join(BIN_DIR, "cmake")).find((f) => path.basename(f) === "cmake");
+  if (!cmake) throw new Error("CMake could not be set up");
+  return cmake;
+}
+
+// Runs a command to completion, streaming its output; `keep` limits which
+// lines make it into the log for very chatty builds.
+function runLogged(argv, emit, keep) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), { cwd: DATA_DIR, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    const onData = (chunk) => {
+      for (const line of chunk.toString().split(/\r?\n|\r/)) {
+        if (!line.trim()) continue;
+        if (!keep || keep.test(line)) emit(line.trimEnd());
+      }
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`${path.basename(argv[0])} exited with code ${code}`))));
+  });
 }
 
 function extract(archive, dest) {

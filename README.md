@@ -25,7 +25,7 @@ Everything it saves lives in `~/HuggingFound`:
 | Path | What |
 | --- | --- |
 | `models/` | Files downloaded directly (image, speech, and gated chat models) |
-| `bin/` | Ollama, stable-diffusion.cpp and, on Windows, whisper.cpp builds |
+| `bin/` | Ollama, stable-diffusion.cpp, whisper.cpp and, if needed, CMake |
 | `output/` | Generated images and transcripts |
 | `uploads/` | Recordings you picked for transcription |
 | `scan.json` | The last scan, so the next one can say what is new |
@@ -46,13 +46,13 @@ HuggingFound only ever runs the fixed set of commands below, built from checked 
 | Install Ollama | release build (`ollama-darwin.tgz`) unpacked into `~/HuggingFound/bin/ollama` | release build (`ollama-windows-amd64.zip`) | official install script |
 | Start Ollama | `ollama serve` | same | same |
 | Get a chat model | `ollama pull hf.co/<repo>:<quant>` | same | same |
-| Install whisper.cpp | `brew install whisper-cpp` | release zip | `brew install whisper-cpp` |
-| Install stable-diffusion.cpp | release zip for Apple Silicon | release zip (CUDA or CPU) | release zip |
+| Install whisper.cpp | built from source with CMake | release zip | built from source with CMake |
+| Install stable-diffusion.cpp | release zip, or built from source when the zip needs a newer macOS | release zip (CUDA or CPU) | release zip, or built from source |
 | Download a file | HTTPS from Hugging Face into `~/HuggingFound/models` | same | same |
 
 Gated chat models are downloaded with your token and registered with `ollama create` from a Modelfile.
 
-Ollama is fetched from its GitHub releases rather than through Homebrew or winget on purpose. On a macOS version Homebrew no longer builds bottles for, `brew install ollama` compiles from source inside a sandbox and fails; the release build works everywhere. An Ollama already on the PATH is used as is. Every step runs from `~/HuggingFound`, never from the folder the app was started in.
+No package manager is involved. Ollama comes from its GitHub releases; on a macOS version Homebrew no longer builds bottles for, `brew install ollama` compiles from source inside a sandbox and fails, while the release build works everywhere. stable-diffusion.cpp publishes macOS builds compiled on the newest macOS only, so a release that fails to load is replaced by a build from source; whisper.cpp publishes no macOS or Linux builds and is always built. Building needs git and a C compiler (on a Mac, `xcode-select --install`); CMake is fetched as a self-contained release into `~/HuggingFound/bin/cmake` when it is not installed. Anything already on the PATH is used as is. Every step runs from `~/HuggingFound`, never from the folder the app was started in.
 
 ## Tests
 
