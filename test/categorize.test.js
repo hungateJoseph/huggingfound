@@ -110,3 +110,14 @@ test("diffusers repositories of the Stable Diffusion families run, other pipelin
   const unknown = categorize({ id: "someone/painting-model", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusers:KandinskyPipeline"] });
   assert.equal(unknown.runner.id, "python-diffusers");
 });
+
+test("an image-editing model with a bundled text encoder is an image model, never a chat model", () => {
+  const r = categorize({ id: "rectangleworm/PornMaster_Klein-9b", pipeline_tag: "image-to-image", library_name: "diffusers", tags: ["diffusers", "gguf", "flux", "image-to-image", "conversational", "not-for-all-audiences", "diffusion-single-file"] });
+  assert.ok(!r.categories.includes("chat"));
+  assert.ok(r.categories.includes("images"));
+  assert.ok(r.categories.includes("nsfw-images"));
+  assert.equal(r.runner.id, "sd-parts", "FLUX ships in pieces; shown, not set up");
+  assert.equal(r.runner.easy, false);
+  const chat = categorize({ id: "x/some-chat-GGUF", pipeline_tag: "text-generation", tags: ["gguf", "conversational"] });
+  assert.ok(chat.categories.includes("chat"));
+});

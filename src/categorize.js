@@ -32,7 +32,11 @@ export function categorize(model) {
     return { categories: [], runner: null, gguf, adult: false };
   }
 
-  if (pipeline === "text-to-image") {
+  // A repository that bundles a text encoder GGUF next to an image model
+  // gets a "conversational" tag on the Hub. It is still an image model;
+  // handing that encoder to Ollama as a chat model is a mistake.
+  const imageLike = /^(text-to-image|image-to-image|image-editing|image-to-video|text-to-video|video-to-video|inpainting)$/.test(pipeline) || tags.has("flux") || tags.has("diffusers");
+  if (pipeline === "text-to-image" || (imageLike && !/text-generation/.test(pipeline))) {
     cats.push("images");
   } else if (pipeline === "automatic-speech-recognition") {
     cats.push("speech");
@@ -61,9 +65,9 @@ function runnerFor(model, cats, gguf) {
     // folder. Newer families (FLUX, Qwen-Image, Wan and friends) ship the
     // pieces separately, which is a hand-assembly job, so they are shown
     // but not set up.
-    const family = /stable.?diffusion|\bsd-?(1\.?5|2\.?1|xl)\b|sdxl|sd.?turbo|dreamshaper|realistic.?vision|juggernaut/i.test(model.id);
-    const parts = /flux|qwen|wan|hunyuan|z-image|lumina|chroma|kolors|pixart|sana|cogview|hidream|stable-diffusion-3|sd3|lora|openvino|onnx|tensorrt|coreml/i.test(model.id);
     const rawTags = (model.tags ?? []).map((t) => t.toLowerCase());
+    const family = /stable.?diffusion|\bsd-?(1\.?5|2\.?1|xl)\b|sdxl|sd.?turbo|dreamshaper|realistic.?vision|juggernaut/i.test(model.id);
+    const parts = /flux|klein|qwen|wan|hunyuan|z-image|lumina|chroma|kolors|pixart|sana|cogview|hidream|stable-diffusion-3|sd3|lora|openvino|onnx|tensorrt|coreml/i.test(model.id) || rawTags.some((t) => /^(flux|flux2|klein|qwen-image|wan|hunyuan|sd3|stable-diffusion-3)$/.test(t));
     const sdPipeline = rawTags.includes("stable-diffusion-xl") || rawTags.includes("stable-diffusion") || rawTags.some((t) => /^diffusers:stablediffusion(xl)?(img2img|inpaint)?pipeline$/.test(t));
     const single = !parts && (family || sdPipeline || model.library_name === "diffusion-single-file" || rawTags.includes("diffusion-single-file"));
     if (single) return { id: "sd", name: "stable-diffusion.cpp", easy: true };

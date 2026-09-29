@@ -190,6 +190,9 @@ button.ghost { background: transparent; }
 
 .try { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
 .try h3 { margin-top: 0; }
+.instructions { margin: 0 0 10px; font-size: 14px; }
+.instructions summary { cursor: pointer; color: var(--muted); }
+.instructions textarea { font: inherit; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; width: 100%; margin-top: 8px; background: var(--surface); color: var(--ink); resize: vertical; }
 .chat { display: grid; gap: 8px; }
 .messages { display: grid; gap: 8px; max-height: 320px; overflow: auto; padding: 4px 0; }
 .msg { padding: 9px 12px; border-radius: 10px; max-width: 90%; white-space: pre-wrap; word-break: break-word; font-size: 14px; }

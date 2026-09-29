@@ -243,6 +243,20 @@ await step("a set-up model offers to remove itself from the model window", async
   await page.click("#close-modal");
 });
 
+await step("a chat model's try box has an instructions field", async () => {
+  await page.click(".tab[data-tab=easy]");
+  await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).click();
+  await page.waitForSelector("#steps .step");
+  const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
+  if (done.every(Boolean)) {
+    await page.waitForSelector("#chat-system");
+    assert.match(await page.locator(".instructions").innerText(), /Instructions for the model/);
+  } else {
+    assert.equal(await page.locator("#chat-system").count(), 0, "no chat box until the steps are done");
+  }
+  await page.click("#close-modal");
+});
+
 await step("an image model offers Fast, Default and Max with Default chosen", async () => {
   const { MODELS_DIR } = await import("../../src/runners.js");
   const dir = path.join(MODELS_DIR, "second-state", "stable-diffusion-v1-5-GGUF");

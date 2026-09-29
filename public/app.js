@@ -518,7 +518,18 @@ $("#scan-local").addEventListener("click", async () => {
 });
 
 function renderChat(box, modelName) {
+  let savedSystem = "";
+  try {
+    savedSystem = localStorage.getItem(`system:${modelName}`) || "";
+  } catch {
+    // no storage
+  }
   box.innerHTML = `<h3>Try it</h3>
+    <details class="instructions" ${savedSystem ? "open" : ""}>
+      <summary>Instructions for the model</summary>
+      <textarea id="chat-system" rows="2" placeholder="Who the model is and how it should answer, for example: You are a terse assistant that answers in plain English.">${esc(savedSystem)}</textarea>
+      <small class="muted">Sent before every conversation as the system message; models follow this far more than a request typed into the chat. It sets a persona and rules, and it cannot change what a model was trained to refuse.</small>
+    </details>
     <div class="chat">
       <div class="messages" id="messages"><div class="msg assistant">Ready. Ask anything; the answer comes from ${esc(modelName)} on this computer.</div></div>
       <div class="chat-input">
@@ -531,6 +542,15 @@ function renderChat(box, modelName) {
     const text = $("#chat-text").value.trim();
     if (!text) return;
     $("#chat-text").value = "";
+    const system = $("#chat-system").value.trim();
+    try {
+      localStorage.setItem(`system:${modelName}`, system);
+    } catch {
+      // no storage
+    }
+    if (system && messages[0]?.role !== "system") messages.unshift({ role: "system", content: system });
+    else if (system) messages[0].content = system;
+    else if (messages[0]?.role === "system") messages.shift();
     messages.push({ role: "user", content: text });
     addMsg("user", text);
     const out = addMsg("assistant", "");
