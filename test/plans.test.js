@@ -13,7 +13,8 @@ test("an open gguf chat model pulls straight through Ollama", () => {
   const plan = buildPlan({ model, files: model.files, machine, detected: nothing(), hasToken: false });
   assert.equal(plan.runnable, true);
   assert.deepEqual(plan.steps.map((s) => s.kind), ["install-ollama", "start-ollama", "pull-model"]);
-  assert.equal(plan.steps[0].command, "brew install ollama");
+  assert.match(plan.steps[0].command, /ollama-darwin\.tgz/);
+  assert.match(plan.steps[0].text, /release build for macOS/);
   assert.equal(plan.steps[2].args.name, "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M");
   assert.equal(plan.fit.level, "good");
   assert.deepEqual(plan.tryWith, { kind: "chat", model: "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M" });
@@ -30,7 +31,7 @@ test("steps already taken are marked done", () => {
 test("install commands follow the platform", () => {
   const model = withFiles("bartowski/Llama-3.2-3B-Instruct-GGUF");
   const win = buildPlan({ model, files: model.files, machine: { ...machine, platform: "win32" }, detected: nothing(), hasToken: false });
-  assert.equal(win.steps[0].command, "winget install Ollama.Ollama");
+  assert.match(win.steps[0].command, /ollama-windows-amd64\.zip/);
   const linux = buildPlan({ model, files: model.files, machine: { ...machine, platform: "linux" }, detected: nothing(), hasToken: false });
   assert.match(linux.steps[0].command, /ollama.com\/install.sh/);
 });

@@ -25,7 +25,7 @@ Everything it saves lives in `~/HuggingFound`:
 | Path | What |
 | --- | --- |
 | `models/` | Files downloaded directly (image, speech, and gated chat models) |
-| `bin/` | stable-diffusion.cpp and, on Windows, whisper.cpp builds |
+| `bin/` | Ollama, stable-diffusion.cpp and, on Windows, whisper.cpp builds |
 | `output/` | Generated images and transcripts |
 | `uploads/` | Recordings you picked for transcription |
 | `scan.json` | The last scan, so the next one can say what is new |
@@ -43,7 +43,7 @@ HuggingFound only ever runs the fixed set of commands below, built from checked 
 
 | Step | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| Install Ollama | `brew install ollama` | `winget install Ollama.Ollama` | official install script |
+| Install Ollama | release build (`ollama-darwin.tgz`) unpacked into `~/HuggingFound/bin/ollama` | release build (`ollama-windows-amd64.zip`) | official install script |
 | Start Ollama | `ollama serve` | same | same |
 | Get a chat model | `ollama pull hf.co/<repo>:<quant>` | same | same |
 | Install whisper.cpp | `brew install whisper-cpp` | release zip | `brew install whisper-cpp` |
@@ -51,6 +51,8 @@ HuggingFound only ever runs the fixed set of commands below, built from checked 
 | Download a file | HTTPS from Hugging Face into `~/HuggingFound/models` | same | same |
 
 Gated chat models are downloaded with your token and registered with `ollama create` from a Modelfile.
+
+Ollama is fetched from its GitHub releases rather than through Homebrew or winget on purpose. On a macOS version Homebrew no longer builds bottles for, `brew install ollama` compiles from source inside a sandbox and fails; the release build works everywhere. An Ollama already on the PATH is used as is. Every step runs from `~/HuggingFound`, never from the folder the app was started in.
 
 ## Tests
 

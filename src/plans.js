@@ -140,13 +140,17 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 }
 
 function installNote(runner, machine, detected) {
-  if (machine.platform === "darwin") return detected.brew ? "Installed with Homebrew, which is already on this Mac." : "Homebrew is not installed; install it first from brew.sh, or download the installer from ollama.com.";
-  if (machine.platform === "win32") return runner === "ollama" ? "Installed with winget, which comes with Windows." : "Downloaded as a ready-made build.";
-  return runner === "ollama" ? "Installed with the official script." : detected.brew ? "Installed with Homebrew." : "Needs Homebrew on Linux, or a build from source.";
+  if (runner === "ollama") {
+    if (machine.platform === "linux") return "Installed with the official script from ollama.com.";
+    return `HuggingFound downloads the official release build for ${platformName(machine.platform)} into ~/HuggingFound/bin. No package manager, nothing else touched.`;
+  }
+  if (machine.platform === "darwin") return detected.brew ? "Installed with Homebrew, which is already on this Mac." : "Homebrew is not installed; install it first from brew.sh.";
+  if (machine.platform === "win32") return "Downloaded as a ready-made build.";
+  return detected.brew ? "Installed with Homebrew." : "Needs Homebrew on Linux, or a build from source.";
 }
 
 function displayCommand(kind, machine) {
-  if (kind === "install-ollama") return { darwin: "brew install ollama", win32: "winget install Ollama.Ollama", linux: "curl -fsSL https://ollama.com/install.sh | sh" }[machine.platform];
+  if (kind === "install-ollama") return { darwin: "download ollama-darwin.tgz from github.com/ollama/ollama/releases", win32: "download ollama-windows-amd64.zip from github.com/ollama/ollama/releases", linux: "curl -fsSL https://ollama.com/install.sh | sh" }[machine.platform];
   if (kind === "install-whisper") return machine.platform === "win32" ? "download whisper-bin-x64.zip from the whisper.cpp releases" : "brew install whisper-cpp";
   return "";
 }

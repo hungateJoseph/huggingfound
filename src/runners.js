@@ -28,6 +28,17 @@ export function which(cmd) {
   }
 }
 
+// Ollama from the PATH when it is installed system-wide, otherwise the
+// release build HuggingFound unpacked into its own bin folder.
+function ollamaBinary() {
+  const onPath = which("ollama");
+  if (onPath) return onPath;
+  const dist = path.join(BIN_DIR, "ollama");
+  if (!fs.existsSync(dist)) return null;
+  const name = process.platform === "win32" ? "ollama.exe" : "ollama";
+  return walk(dist).find((f) => path.basename(f) === name) ?? null;
+}
+
 function sdBinary() {
   const local = path.join(BIN_DIR, process.platform === "win32" ? "sd.exe" : "sd");
   return fs.existsSync(local) ? local : which("sd");
@@ -39,7 +50,7 @@ function whisperBinary() {
 }
 
 export async function detect(fetchImpl = fetch) {
-  const ollamaPath = which("ollama");
+  const ollamaPath = ollamaBinary();
   let ollamaRunning = false;
   let ollamaModels = [];
   if (ollamaPath) {
@@ -96,15 +107,19 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
   const platform = machine.platform;
   switch (kind) {
     case "install-ollama":
-      if (platform === "darwin") return { argv: ["brew", "install", "ollama"], text: "Installing Ollama with Homebrew" };
-      if (platform === "win32") return { argv: ["winget", "install", "--id", "Ollama.Ollama", "-e", "--accept-package-agreements", "--accept-source-agreements"], text: "Installing Ollama with winget" };
+      // The official release builds, unpacked into ~/HuggingFound/bin/ollama.
+      // Package managers are avoided on purpose: on a macOS version Homebrew
+      // no longer ships bottles for, `brew install ollama` compiles from
+      // source inside a sandbox and fails.
+      if (platform === "darwin") return { githubRelease: { repo: "ollama/ollama", match: /^ollama-darwin\.tgz$/, pick: /(^|\/)ollama$/, dir: "ollama" }, text: "Downloading the Ollama release for macOS" };
+      if (platform === "win32") return { githubRelease: { repo: "ollama/ollama", match: machine.arch === "arm64" ? /^ollama-windows-arm64\.zip$/ : /^ollama-windows-amd64\.zip$/, pick: /(^|\/)ollama\.exe$/, dir: "ollama" }, text: "Downloading the Ollama release for Windows" };
       return { argv: ["sh", "-c", "curl -fsSL https://ollama.com/install.sh | sh"], text: "Installing Ollama with the official script" };
     case "start-ollama":
-      return { argv: ["ollama", "serve"], detached: true, text: "Starting Ollama in the background", waitFor: `${OLLAMA_URL}/api/tags` };
+      return { argv: [needOllama(), "serve"], detached: true, text: "Starting Ollama in the background", waitFor: `${OLLAMA_URL}/api/tags` };
     case "pull-model": {
       const name = String(args.name ?? "");
       if (!OLLAMA_NAME_RE.test(name)) throw new Error("Bad model name");
-      return { argv: ["ollama", "pull", name], text: `Downloading ${name} through Ollama` };
+      return { argv: [needOllama(), "pull", name], text: `Downloading ${name} through Ollama` };
     }
     case "create-model": {
       const repo = String(args.repo ?? "");
@@ -114,7 +129,7 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       const modelfile = path.join(path.dirname(modelPath(repo, file)), "Modelfile");
       fs.mkdirSync(path.dirname(modelfile), { recursive: true });
       fs.writeFileSync(modelfile, `FROM ${modelPath(repo, file)}\n`);
-      return { argv: ["ollama", "create", name, "-f", modelfile], text: `Registering ${file} with Ollama as ${name}` };
+      return { argv: [needOllama(), "create", name, "-f", modelfile], text: `Registering ${file} with Ollama as ${name}` };
     }
     case "download-file": {
       const repo = String(args.repo ?? "");
@@ -161,6 +176,12 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
   }
 }
 
+function needOllama() {
+  const bin = ollamaBinary();
+  if (!bin) throw new Error("Ollama is not installed; run the install step first");
+  return bin;
+}
+
 // ---- running steps with a live log -------------------------------------------
 
 const runs = new Map();
@@ -188,12 +209,15 @@ export function startRun(kind, args, machine, { token = "", fetchImpl = fetch, h
   } else if (spec.githubRelease) {
     installRelease(spec.githubRelease, emit, fetchImpl).then(() => finish("done", "Installed.")).catch((err) => finish("failed", `Install failed: ${err.message}`));
   } else if (spec.detached) {
-    const child = spawn(spec.argv[0], spec.argv.slice(1), { detached: true, stdio: "ignore" });
+    const child = spawn(spec.argv[0], spec.argv.slice(1), { detached: true, stdio: "ignore", cwd: DATA_DIR });
     child.on("error", (err) => finish("failed", err.message));
     child.unref();
     waitForUrl(spec.waitFor, fetchImpl).then((ok) => finish(ok ? "done" : "failed", ok ? "Ollama is running." : "Ollama did not answer in time."));
   } else {
-    const child = spawn(spec.argv[0], spec.argv.slice(1), { env: { ...process.env, HF_TOKEN: token || "" } });
+    // Children run from the data folder. Installers that sandbox themselves
+    // (Homebrew does) cannot read a working directory under Documents or
+    // Desktop and abort with "getcwd: Operation not permitted".
+    const child = spawn(spec.argv[0], spec.argv.slice(1), { cwd: DATA_DIR, env: { ...process.env, HF_TOKEN: token || "" } });
     const onData = (chunk) => {
       for (const line of chunk.toString().split(/\r?\n|\r/)) if (line.trim()) emit(line.trimEnd());
     };
@@ -256,31 +280,46 @@ async function downloadFile(url, dest, token, emit, fetchImpl) {
   fs.renameSync(tmp, dest);
 }
 
-async function installRelease({ repo, match, pick }, emit, fetchImpl) {
+// Fetches the matching asset of a project's latest GitHub release. With
+// `dir` the whole archive is kept under bin/<dir> (Ollama needs its libraries
+// next to the binary); otherwise only the picked program is copied out.
+async function installRelease({ repo, match, pick, dir }, emit, fetchImpl) {
   const res = await fetchImpl(`https://api.github.com/repos/${repo}/releases/latest`, { headers: { "User-Agent": "huggingfound", Accept: "application/vnd.github+json" } });
   if (!res.ok) throw new Error(`GitHub replied HTTP ${res.status}`);
   const release = await res.json();
   const asset = (release.assets ?? []).find((a) => match.test(a.name));
   if (!asset) throw new Error(`no download for this computer in ${repo} ${release.tag_name}`);
-  const zip = path.join(BIN_DIR, asset.name);
+  const archive = path.join(BIN_DIR, asset.name);
   emit(`Fetching ${asset.name} (${(asset.size / 1024 ** 2).toFixed(0)} MB)`);
-  await downloadFile(asset.browser_download_url, zip, "", emit, fetchImpl);
-  const extractDir = path.join(BIN_DIR, asset.name.replace(/\.zip$/, ""));
+  await downloadFile(asset.browser_download_url, archive, "", emit, fetchImpl);
+  const extractDir = path.join(BIN_DIR, dir ?? asset.name.replace(/\.(zip|tgz|tar\.gz)$/, ""));
   fs.rmSync(extractDir, { recursive: true, force: true });
   fs.mkdirSync(extractDir, { recursive: true });
   emit("Unpacking");
-  if (process.platform === "win32") {
-    execFileSync("powershell", ["-NoProfile", "-Command", `Expand-Archive -Force -Path '${zip}' -DestinationPath '${extractDir}'`]);
-  } else {
-    execFileSync("unzip", ["-o", "-q", zip, "-d", extractDir]);
-  }
+  extract(archive, extractDir);
   const found = walk(extractDir).find((f) => pick.test(f));
   if (!found) throw new Error("the download did not contain the program");
+  fs.rmSync(archive, { force: true });
+  if (dir) {
+    if (process.platform !== "win32") fs.chmodSync(found, 0o755);
+    emit(`Installed to ${found}`);
+    return;
+  }
   const dest = path.join(BIN_DIR, path.basename(found));
   fs.copyFileSync(found, dest);
   if (process.platform !== "win32") fs.chmodSync(dest, 0o755);
-  fs.rmSync(zip, { force: true });
+  fs.rmSync(extractDir, { recursive: true, force: true });
   emit(`Installed to ${dest}`);
+}
+
+function extract(archive, dest) {
+  if (/\.(tgz|tar\.gz)$/.test(archive)) {
+    execFileSync("tar", ["-xzf", archive, "-C", dest], { cwd: DATA_DIR });
+  } else if (process.platform === "win32") {
+    execFileSync("powershell", ["-NoProfile", "-Command", `Expand-Archive -Force -Path '${archive}' -DestinationPath '${dest}'`], { cwd: DATA_DIR });
+  } else {
+    execFileSync("unzip", ["-o", "-q", archive, "-d", dest], { cwd: DATA_DIR });
+  }
 }
 
 function walk(dir) {

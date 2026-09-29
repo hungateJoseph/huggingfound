@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-runners-"));
-const { DATA_DIR, MODELS_DIR, UPLOAD_DIR, commandFor, detect, downloadedFiles, modelPath } = await import("../src/runners.js");
+const { BIN_DIR, DATA_DIR, MODELS_DIR, UPLOAD_DIR, commandFor, detect, downloadedFiles, modelPath } = await import("../src/runners.js");
 
 const mac = { platform: "darwin", gpu: "Apple Silicon" };
 const win = { platform: "win32", gpu: "NVIDIA GeForce RTX 4070" };
@@ -18,8 +18,12 @@ test("the data folder follows HUGGINGFOUND_HOME and is created", () => {
 });
 
 test("install commands per platform", () => {
-  assert.deepEqual(commandFor("install-ollama", {}, mac).argv, ["brew", "install", "ollama"]);
-  assert.equal(commandFor("install-ollama", {}, win).argv[0], "winget");
+  const macOllama = commandFor("install-ollama", {}, mac).githubRelease;
+  assert.equal(macOllama.repo, "ollama/ollama");
+  assert.ok(macOllama.match.test("ollama-darwin.tgz"));
+  assert.equal(macOllama.dir, "ollama");
+  assert.ok(commandFor("install-ollama", {}, win).githubRelease.match.test("ollama-windows-amd64.zip"));
+  assert.ok(commandFor("install-ollama", {}, { ...win, arch: "arm64" }).githubRelease.match.test("ollama-windows-arm64.zip"));
   assert.match(commandFor("install-ollama", {}, linux).argv.join(" "), /ollama.com\/install.sh/);
   assert.deepEqual(commandFor("install-whisper", {}, mac).argv, ["brew", "install", "whisper-cpp"]);
   assert.equal(commandFor("install-whisper", {}, win).githubRelease.repo, "ggerganov/whisper.cpp");
@@ -30,17 +34,39 @@ test("install commands per platform", () => {
 });
 
 test("pull and download steps build from checked names", () => {
-  assert.deepEqual(commandFor("pull-model", { name: "hf.co/bartowski/x-GGUF:Q4_K_M" }, mac).argv, ["ollama", "pull", "hf.co/bartowski/x-GGUF:Q4_K_M"]);
+  try {
+    const argv = commandFor("pull-model", { name: "hf.co/bartowski/x-GGUF:Q4_K_M" }, mac).argv;
+    assert.match(argv[0], /ollama(\.exe)?$/);
+    assert.deepEqual(argv.slice(1), ["pull", "hf.co/bartowski/x-GGUF:Q4_K_M"]);
+  } catch (err) {
+    assert.match(err.message, /not installed/);
+  }
   const dl = commandFor("download-file", { repo: "a/b", file: "m.gguf" }, mac, "http://stub");
   assert.equal(dl.download.url, "http://stub/a/b/resolve/main/m.gguf");
   assert.equal(dl.download.dest, modelPath("a/b", "m.gguf"));
 });
 
 test("create-model writes a Modelfile next to the download", () => {
-  const spec = commandFor("create-model", { repo: "a/b", file: "m.gguf", name: "b" }, mac);
-  assert.equal(spec.argv[0], "ollama");
-  const modelfile = spec.argv[spec.argv.indexOf("-f") + 1];
-  assert.equal(fs.readFileSync(modelfile, "utf8"), `FROM ${modelPath("a/b", "m.gguf")}\n`);
+  try {
+    const spec = commandFor("create-model", { repo: "a/b", file: "m.gguf", name: "b" }, mac);
+    const modelfile = spec.argv[spec.argv.indexOf("-f") + 1];
+    assert.equal(fs.readFileSync(modelfile, "utf8"), `FROM ${modelPath("a/b", "m.gguf")}\n`);
+  } catch (err) {
+    assert.match(err.message, /not installed/);
+  }
+});
+
+test("an unpacked release build in the bin folder counts as installed", async () => {
+  const dist = path.join(BIN_DIR, "ollama");
+  fs.mkdirSync(dist, { recursive: true });
+  fs.writeFileSync(path.join(dist, "ollama"), "#!/bin/sh\n");
+  const d = await detect(async () => {
+    throw new Error("refused");
+  });
+  assert.equal(d.ollama.installed, true);
+  const spec = commandFor("start-ollama", {}, mac);
+  assert.ok(spec.argv[0].endsWith("ollama"));
+  fs.rmSync(dist, { recursive: true, force: true });
 });
 
 test("anything that is not a plain repo or file name is refused", () => {
