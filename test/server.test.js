@@ -223,12 +223,13 @@ test("the image server setting is validated, checked, used for pictures and clea
     assert.equal(plan.tryWith.remote, stubImages.url);
     assert.match(plan.speed.text, /sdxl_lightning_4step loaded/);
 
-    const { id } = await (await post("/api/run", { kind: "generate-image", args: { repo: "second-state/stable-diffusion-v1-5-GGUF", file: "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf", prompt: "a cat", quality: "fast", remote: "http://evil.example" } })).json();
+    const { id } = await (await post("/api/run", { kind: "generate-image", args: { repo: "second-state/stable-diffusion-v1-5-GGUF", file: "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf", prompt: "a cat", negative: "dog", quality: "fast", remote: "http://evil.example" } })).json();
     const events = await readEvents(`${base}/api/runs/${id}`);
     assert.equal(events.at(-1).status, "done", JSON.stringify(events));
     const sent = stubImages.requests.find((r) => r.path === "/sdcpp/v1/img_gen");
     assert.ok(sent, "the configured server got the request, not the address in the page's arguments");
     assert.equal(sent.body.prompt, "a cat");
+    assert.equal(sent.body.negative_prompt, "dog");
     assert.equal(sent.body.sample_params.sample_steps, 12);
     assert.equal(sent.body.sample_params.sample_method, "dpm++2m");
     assert.equal(sent.body.vae_tiling_params.enabled, true);

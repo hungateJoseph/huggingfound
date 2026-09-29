@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { summarize } from "../src/hf.js";
-import { buildPlan } from "../src/plans.js";
+import { buildPlan, imageStyle } from "../src/plans.js";
 import { FILES, MODELS } from "./stub-hub.js";
 
 const machine = { platform: "darwin", arch: "arm64", os: "macOS", gpu: "Apple Silicon", comfortableGb: 11 };
@@ -142,4 +142,14 @@ test("image plans carry the three presets with times, and a remote server emptie
   assert.equal(remote.tryWith.remote, "http://box:1234");
   assert.match(remote.speed.text, /sdxl-lightning loaded/);
   assert.deepEqual(remote.remove, []);
+});
+
+test("image models are labelled anime or realistic from their names", () => {
+  assert.equal(imageStyle({ id: "John6666/wai-nsfw-illustrious-sdxl-v150-sdxl", tags: [] }).kind, "anime");
+  assert.equal(imageStyle({ id: "John6666/pony-realism-v23-sdxl", tags: [] }).kind, "realistic", "a realism merge of an anime base is for photographs");
+  assert.equal(imageStyle({ id: "someone/pony-diffusion-v6-xl", tags: [] }).kind, "anime");
+  assert.equal(imageStyle({ id: "stablediffusionapi/cyberrealistic-v41", tags: [] }).kind, "realistic");
+  assert.equal(imageStyle({ id: "second-state/stable-diffusion-v1-5-GGUF", tags: [] }), null);
+  const plan = buildPlan({ model: withFiles("John6666/pony-realism-v23-sdxl"), files: withFiles("John6666/pony-realism-v23-sdxl").files, machine, detected: nothing(), hasToken: false });
+  assert.equal(plan.style.kind, "realistic");
 });

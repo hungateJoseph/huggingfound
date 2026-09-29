@@ -257,9 +257,11 @@ test("image generation refuses unknown presets, uses the server build when prese
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, "");
   assert.throws(() => commandFor("generate-image", { repo: "a/b", file: "m.safetensors", prompt: "x", quality: "ultra" }, mac), /Bad image/);
-  const cli = commandFor("generate-image", { repo: "a/b", file: "m.safetensors", prompt: "x", quality: "max" }, mac);
+  const cli = commandFor("generate-image", { repo: "a/b", file: "m.safetensors", prompt: "x", quality: "max", negative: "anime, cartoon" }, mac);
   assert.ok(cli.argv, "no server build: one-shot sd-cli");
   assert.equal(cli.argv[cli.argv.indexOf("--steps") + 1], "40");
+  assert.equal(cli.argv[cli.argv.indexOf("-n") + 1], "anime, cartoon", "the avoid list is the negative prompt");
+  assert.ok(!commandFor("generate-image", { repo: "a/b", file: "m.safetensors", prompt: "x" }, mac).argv.includes("-n"));
   fs.writeFileSync(path.join(dist, "sd-server"), "#!/bin/sh\n");
   fs.chmodSync(path.join(dist, "sd-server"), 0o755);
   const srv = commandFor("generate-image", { repo: "a/b", file: "m.safetensors", prompt: "x" }, mac);

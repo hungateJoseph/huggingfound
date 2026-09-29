@@ -238,6 +238,7 @@ await step("an image model offers Fast, Default and Max with Default chosen", as
     assert.deepEqual(values, [["fast", false], ["default", true], ["max", false]]);
     assert.match(await page.locator("#quality").innerText(), /20 steps, the standard settings/);
     assert.match(await page.locator("#quality").innerText(), /40 steps/);
+    assert.equal(await page.locator("#image-negative").count(), 1, "an Avoid field for the negative prompt");
   } else {
     assert.equal(await page.locator("#quality").count(), 0);
   }

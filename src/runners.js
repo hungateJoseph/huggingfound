@@ -280,12 +280,13 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       const repo = String(args.repo ?? "");
       const file = String(args.file ?? "");
       const prompt = String(args.prompt ?? "").slice(0, 1000);
+      const negative = String(args.negative ?? "").slice(0, 1000).trim();
       const quality = String(args.quality ?? "default");
       if (!REPO_RE.test(repo) || !FILE_RE.test(file) || !prompt.trim() || !QUALITIES[quality]) throw new Error("Bad image arguments");
       const modelArg = modelPath(repo, file);
       const fast = isFastImageModel(`${repo}/${file}`);
       const xl = /xl/i.test(file) || /xl/i.test(repo);
-      const settings = imageSettings(quality, { fast, xl });
+      const settings = { ...imageSettings(quality, { fast, xl }), negative };
       const out = path.join(OUTPUT_DIR, `image-${Date.now()}.png`);
 
       // A remote image server makes the picture with the model loaded there.
@@ -300,6 +301,7 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       const bin = sdBinary();
       if (!bin) throw new Error("stable-diffusion.cpp is not installed");
       const argv = [bin, "-m", modelArg, "-p", prompt, "-o", out, ...settings.cliArgs];
+      if (negative) argv.push("-n", negative);
       return { argv, text: `Generating the image (${settings.label})`, result: out };
     }
     default:
@@ -444,6 +446,7 @@ async function ensureImageServer(bin, modelFile, emit, fetchImpl) {
 async function txt2img(url, prompt, settings, out, emit, fetchImpl) {
   const body = {
     prompt,
+    negative_prompt: settings.negative || "",
     width: settings.size,
     height: settings.size,
     seed: -1,
@@ -451,7 +454,7 @@ async function txt2img(url, prompt, settings, out, emit, fetchImpl) {
     vae_tiling_params: { enabled: true },
     output_format: "png",
   };
-  emit(`${settings.steps} steps at ${settings.size} by ${settings.size}, ${settings.samplerName}`);
+  emit(`${settings.steps} steps at ${settings.size} by ${settings.size}, ${settings.samplerName}${settings.negative ? `; avoiding: ${settings.negative}` : ""}`);
   const submitted = await fetchImpl(`${url}/sdcpp/v1/img_gen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
   if (!submitted.ok) throw new Error(`the image server refused the request (HTTP ${submitted.status})`);
   const job = await submitted.json();

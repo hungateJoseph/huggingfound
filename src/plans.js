@@ -124,6 +124,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 
   if (runner.id === "sd") {
     const fast = /turbo|lightning|lcm|hyper/i.test(`${model.id}/${file.name}`);
+    const style = imageStyle(model);
     const qualities = Object.fromEntries(["fast", "default", "max"].map((q) => {
       const n = fast ? (q === "max" ? 8 : 4) : { fast: 12, default: 20, max: 40 }[q];
       return [q, { steps: n, ...estimate({ runnerId: "sd", sizeGb: file.gb, fileName: file.name, machine, xl: file.xl, steps: n }) }];
@@ -161,7 +162,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
         done: downloaded,
         command: `download ${file.parts.map((part) => part.from).join(", ")} and merge into ~/HuggingFound/models/${model.id}/${mergedName}`,
       });
-      return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${mergedName}`]), steps, qualities, fast, keepsLoaded: detected.sd.server, tryWith: { kind: "image", repo: model.id, file: mergedName }, remove: [{ kind: "folder", repo: model.id }] };
+      return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${mergedName}`]), steps, qualities, fast, style, keepsLoaded: detected.sd.server, tryWith: { kind: "image", repo: model.id, file: mergedName }, remove: [{ kind: "folder", repo: model.id }] };
     }
     steps.push({
       kind: "download-file",
@@ -171,7 +172,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       done: downloaded,
       command: `download to ~/HuggingFound/models/${model.id}/${file.name}`,
     });
-    return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${file.name}`]), steps, qualities, fast, keepsLoaded: detected.sd.server, tryWith: { kind: "image", repo: model.id, file: file.name }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
+    return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[`${model.id}/${file.name}`]), steps, qualities, fast, style, keepsLoaded: detected.sd.server, tryWith: { kind: "image", repo: model.id, file: file.name }, remove: [{ kind: "file", repo: model.id, file: file.name }] };
   }
 
   return { runnable: false, reason: "Unsupported runner.", steps: [] };
@@ -190,4 +191,19 @@ function displayCommand(kind, machine) {
   if (kind === "install-ollama") return { darwin: "download ollama-darwin.tgz from github.com/ollama/ollama/releases", win32: "download ollama-windows-amd64.zip from github.com/ollama/ollama/releases", linux: "curl -fsSL https://ollama.com/install.sh | sh" }[machine.platform];
   if (kind === "install-whisper") return machine.platform === "win32" ? "download whisper-bin-x64.zip from the whisper.cpp releases" : "git clone github.com/ggerganov/whisper.cpp and build it with CMake";
   return "";
+}
+
+// What kind of pictures an image model was trained for, from its name and
+// tags, so nobody asks an anime model for a photograph.
+export function imageStyle(model) {
+  const text = `${model.id} ${(model.tags ?? []).join(" ")}`.toLowerCase();
+  // A realism merge of an anime base (the many "realistic pony" mixes) is
+  // meant for photographs, so the realistic words win.
+  if (/realistic|realism|photoreal|photo|juggernaut|realvis|epicrealism|cyberrealistic|photon|absolutereality|dreamshaper|majic/.test(text)) {
+    return { kind: "realistic", text: "Trained for photographic, realistic pictures." };
+  }
+  if (/illustrious|pony|anime|animagine|noob|waifu|hentai|cartoon|toon|manga|counterfeit|anything-v/.test(text)) {
+    return { kind: "anime", text: "Trained on anime and illustration. Asking it for a photograph will not work; a realistic model is a better fit for that (search for realistic, photoreal or juggernaut)." };
+  }
+  return null;
 }

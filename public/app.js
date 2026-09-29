@@ -556,13 +556,20 @@ function renderImage(box, t) {
   const options = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === saved ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
   const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
   const loaded = plan?.keepsLoaded && !t.remote ? `<p class="muted small loaded-note"><span>After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.</span><button class="ghost" id="unload-model">Unload now</button></p>` : "";
+  const style = plan?.style ? `<p class="muted small style-note"><b>${plan.style.kind === "anime" ? "Anime model." : "Realistic model."}</b> ${esc(plan.style.text)}</p>` : "";
   box.innerHTML = `<h3>Try it</h3>
     ${remote}
+    ${style}
     <div class="quality" id="quality">${options}</div>
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="Describe a picture, for example: a lighthouse at dusk, oil painting"></textarea>
       <button class="primary" id="image-go">Generate</button>
     </div>
+    <label class="field avoid">
+      <span>Avoid</span>
+      <input type="text" id="image-negative" placeholder="anime, cartoon, drawing, blurry, extra fingers">
+      <small class="muted">Models cannot read "not" or "no" in the description; whatever you do not want goes here instead.</small>
+    </label>
     ${loaded}
     <pre class="log" id="image-log" hidden></pre>
     <div id="image-out"></div>`;
@@ -584,7 +591,8 @@ function renderImage(box, t) {
       } catch {
         // no storage
       }
-      const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt, quality } });
+      const negative = $("#image-negative").value.trim();
+      const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt, negative, quality } });
       const result = await follow(id, (line) => {
         log.textContent += line + "\n";
         log.scrollTop = log.scrollHeight;
