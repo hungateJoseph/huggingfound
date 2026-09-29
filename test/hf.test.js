@@ -126,3 +126,18 @@ test("a diffusers folder is chosen when there is no single file, taking the half
   assert.equal(sd15.xl, false);
   assert.equal(sd15.parts.length, 2);
 });
+
+test("small add-on files at the top level are never taken for the checkpoint", () => {
+  const files = [
+    { name: "3d_render.safetensors", gb: 0.08 },
+    { name: "Fixhands-unfilteredai.safetensors", gb: 0.002 },
+    { name: "model.safetensors", gb: 6.46 },
+    { name: "unet/diffusion_pytorch_model.fp16.safetensors", gb: 4.78 },
+    { name: "text_encoder/model.safetensors", gb: 0.46 },
+  ];
+  assert.equal(chooseFile(files, "sd").name, "model.safetensors");
+  const addOnsOnly = [{ name: "Fixhands.safetensors", gb: 0.002 }, { name: "unet/diffusion_pytorch_model.safetensors", gb: 4.7 }, { name: "text_encoder/model.safetensors", gb: 0.4 }];
+  assert.equal(chooseFile(addOnsOnly, "sd").folder, true, "falls through to the diffusers folder");
+  assert.equal(chooseFile([{ name: "tiny.safetensors", gb: 0.1 }], "sd"), null);
+  assert.equal(chooseFile([{ name: "sd-lora-Q4_0.gguf", gb: 0.05 }, { name: "model-Q8_0.gguf", gb: 1.7 }], "sd").name, "model-Q8_0.gguf");
+});

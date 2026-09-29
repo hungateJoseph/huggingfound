@@ -136,7 +136,7 @@ export function summarize(m) {
 // sensible quantization wins. Images and speech have their own rules.
 export function chooseFile(files, runnerId) {
   if (runnerId === "ollama" || runnerId === "sd") {
-    const ggufs = files.filter((f) => /\.gguf$/i.test(f.name) && !/mmproj/i.test(f.name));
+    const ggufs = files.filter((f) => /\.gguf$/i.test(f.name) && !/mmproj/i.test(f.name) && (runnerId !== "sd" || (f.gb ?? 1) >= 0.8));
     // Chat models are fine around 4 bits. Image models lose detail below 8.
     const preferred = runnerId === "sd" ? ["Q8_0", "F16", "f16", "Q5_0", "Q4_0"] : ["Q4_K_M", "Q4_K_S", "Q4_0", "Q5_K_M", "IQ4_XS", "Q8_0", "F16", "f16"];
     for (const q of preferred) {
@@ -145,8 +145,14 @@ export function chooseFile(files, runnerId) {
     }
     if (ggufs.length) return ggufs.sort((a, b) => (a.gb ?? 0) - (b.gb ?? 0))[0];
     if (runnerId === "sd") {
-      const single = files.filter((f) => /\.safetensors$/i.test(f.name) && !f.name.includes("/") && !/lora|vae|refiner/i.test(f.name));
-      return single.sort((a, b) => (a.gb ?? 0) - (b.gb ?? 0))[0] ?? diffusersFolder(files);
+      // A checkpoint with the encoders and decoder inside is never small:
+      // 2 GB for SD 1.5 in half precision, 6.5 GB for SDXL. Anything under
+      // that at the top level is an add-on (a LoRA, an embedding, a hands
+      // fix) and would only fail to load.
+      const single = files.filter((f) => /\.safetensors$/i.test(f.name) && !f.name.includes("/") && !/lora|vae|refiner|embedding|fix|lycoris/i.test(f.name) && (f.gb ?? 0) >= 1.5);
+      const named = single.filter((f) => /^(model|checkpoint|sd|v\d)/i.test(f.name));
+      const pool = named.length ? named : single;
+      return pool.sort((a, b) => (a.gb ?? 0) - (b.gb ?? 0))[0] ?? diffusersFolder(files);
     }
     return null;
   }
