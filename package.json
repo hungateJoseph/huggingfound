@@ -1,0 +1,33 @@
+{
+  "name": "huggingfound",
+  "version": "0.1.0",
+  "description": "Find open-source models on Hugging Face, see which ones your computer can run, and get them running locally step by step.",
+  "license": "MIT",
+  "author": "hungateJoseph",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "huggingfound": "bin/huggingfound.js"
+  },
+  "scripts": {
+    "start": "node bin/huggingfound.js",
+    "test": "node --test test/",
+    "test:browser": "node test/browser/scan.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hungateJoseph/huggingfound.git"
+  },
+  "keywords": [
+    "huggingface",
+    "ollama",
+    "local-models",
+    "whisper",
+    "stable-diffusion"
+  ]
+}
