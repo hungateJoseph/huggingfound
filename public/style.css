@@ -256,3 +256,24 @@ details#web-found summary { cursor: pointer; margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* views */
+.views { display: flex; gap: 4px; margin-left: 18px; }
+.view-link { border: 0; background: transparent; padding: 6px 10px; border-radius: 999px; color: var(--muted); font-weight: 600; }
+.view-link.on { background: var(--ink); color: #fff; }
+#home { padding: 48px 0 24px; text-align: center; }
+#home h1 { margin: 0 0 10px; font-size: 40px; }
+#home .lead { margin: 0 auto 26px; max-width: 640px; }
+.trait-search.big { max-width: 760px; margin: 0 auto 14px; }
+.trait-search.big input { font-size: 17px; padding: 14px 16px; }
+.trait-search.big button { padding: 12px 22px; font-size: 16px; }
+.examples { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; align-items: center; margin: 0 0 8px; }
+body[data-mode="results"] #home, body[data-mode="browse"] #home { padding: 18px 0 8px; text-align: left; }
+body[data-mode="results"] #home h1, body[data-mode="browse"] #home h1 { font-size: 22px; margin-bottom: 8px; }
+body[data-mode="results"] #home .lead, body[data-mode="browse"] #home .lead, body[data-mode="results"] #examples, body[data-mode="browse"] #examples { display: none; }
+body[data-mode="results"] .trait-search.big, body[data-mode="browse"] .trait-search.big { margin: 0 0 12px; max-width: none; }
+.why { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.why span { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #efece5; color: var(--muted); }
+.why span.say { background: var(--accent-soft); color: var(--accent-ink); }
+#found-hint { margin: -4px 0 12px; }
+@media (max-width: 600px) { #home h1 { font-size: 30px; } .views { margin-left: 8px; } }

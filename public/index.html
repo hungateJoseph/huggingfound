@@ -14,6 +14,10 @@
         <img src="icon.svg" alt="" width="28" height="28">
         <span>HuggingFound</span>
       </a>
+      <nav class="views">
+        <button class="view-link on" id="nav-home">Search</button>
+        <button class="view-link" id="nav-browse">Browse</button>
+      </nav>
       <div class="top-right">
         <span class="muted small" id="machine-line"></span>
         <button class="ghost" id="open-settings">Settings</button>
@@ -22,6 +26,57 @@
   </header>
 
   <main class="wrap">
+    <section id="home">
+      <h1 id="home-title">What do you want a model for?</h1>
+      <p class="lead" id="home-lead">Say it in plain words. HuggingFound looks through Hugging Face, the model cards, the community discussions and the wider web, and ranks what fits by what people say about it. Everything runs on this computer.</p>
+      <form class="trait-search big" id="trait-form">
+        <input type="search" id="trait" placeholder="a model for creative writing, anime pictures, coding help, transcribing meetings..." autofocus>
+        <button class="primary" type="submit" id="trait-go">Search</button>
+      </form>
+      <p class="examples" id="examples">
+        <span class="muted small">Try:</span>
+        <button class="chip" data-example="creative writing">creative writing</button>
+        <button class="chip" data-example="roleplay with characters">roleplay with characters</button>
+        <button class="chip" data-example="anime pictures">anime pictures</button>
+        <button class="chip" data-example="realistic photos">realistic photos</button>
+        <button class="chip" data-example="coding help">coding help</button>
+        <button class="chip" data-example="transcribe meetings">transcribe meetings</button>
+        <button class="chip" data-example="math and reasoning">math and reasoning</button>
+      </p>
+      <p class="muted small" id="home-hint"></p>
+    </section>
+
+    <section id="notice" class="notice info" hidden></section>
+
+    <section id="results" hidden>
+      <h2 id="found-title" class="section-title"></h2>
+      <p class="muted small" id="found-hint"></p>
+      <div id="found" class="cards"></div>
+      <p id="found-empty" class="muted" hidden></p>
+      <details id="web-found" hidden>
+        <summary class="section-title" id="web-found-summary">Also mentioned elsewhere</summary>
+        <h2 class="section-title">On Civitai</h2>
+        <p class="muted small" id="civitai-note"></p>
+        <div id="civitai-found" class="cards"></div>
+        <h2 class="section-title">On GitHub</h2>
+        <p class="muted small" id="github-note"></p>
+        <ul id="github-found" class="posts"></ul>
+        <h2 class="section-title">On Hacker News</h2>
+        <p class="muted small" id="hn-note"></p>
+        <ul id="hn-found" class="posts"></ul>
+        <h2 class="section-title">On Lemmy</h2>
+        <p class="muted small" id="lemmy-note"></p>
+        <ul id="lemmy-found" class="posts"></ul>
+        <h2 class="section-title">On YouTube</h2>
+        <p class="muted small" id="youtube-note"></p>
+        <ul id="youtube-found" class="posts"></ul>
+        <h2 class="section-title">On Reddit</h2>
+        <p class="muted small" id="reddit-note"></p>
+        <ul id="reddit-found" class="posts"></ul>
+      </details>
+    </section>
+
+    <section id="browse" hidden>
     <section class="intro">
       <h1>Open models, running on this computer.</h1>
       <p class="lead">
@@ -44,7 +99,6 @@
 
     <nav class="tabs" id="tabs"></nav>
 
-    <section id="notice" class="notice info" hidden></section>
 
     <section class="local" id="local">
       <div class="local-head">
@@ -60,7 +114,7 @@
       </div>
     </section>
 
-    <section id="results">
+    <section id="lists">
       <div class="filters">
         <label class="check"><input type="checkbox" id="only-runnable" checked> Only models this computer can run</label>
         <label class="check"><input type="checkbox" id="only-new"> Only new since the last scan</label>
@@ -82,39 +136,13 @@
         </label>
         <input type="search" id="search" placeholder="Filter these by name or by what people say">
       </div>
-      <form class="trait-search" id="trait-form">
-        <input type="search" id="trait" placeholder="Search Hugging Face: uncensored roleplay 7b, japanese, medical, tiny, vision, good hands...">
-        <button class="primary" type="submit" id="trait-go">Search</button>
-      </form>
       <p class="muted small speed-note">Speed lines are rough guesses for this computer from the model's size. The first run is slower while things load; a measured time replaces the guess after a real run.</p>
-      <h2 id="found-title" class="section-title" hidden></h2>
-      <div id="found" class="cards"></div>
-      <details id="web-found" hidden>
-        <summary class="section-title" id="web-found-summary">Also mentioned elsewhere</summary>
-        <h2 class="section-title">On Civitai</h2>
-        <p class="muted small" id="civitai-note"></p>
-        <div id="civitai-found" class="cards"></div>
-        <h2 class="section-title">On GitHub</h2>
-        <p class="muted small" id="github-note"></p>
-        <ul id="github-found" class="posts"></ul>
-        <h2 class="section-title">On Hacker News</h2>
-        <p class="muted small" id="hn-note"></p>
-        <ul id="hn-found" class="posts"></ul>
-        <h2 class="section-title">On Lemmy</h2>
-        <p class="muted small" id="lemmy-note"></p>
-        <ul id="lemmy-found" class="posts"></ul>
-        <h2 class="section-title">On YouTube</h2>
-        <p class="muted small" id="youtube-note"></p>
-        <ul id="youtube-found" class="posts"></ul>
-        <h2 class="section-title">On Reddit</h2>
-        <p class="muted small" id="reddit-note"></p>
-        <ul id="reddit-found" class="posts"></ul>
-      </details>
       <h2 id="picks-title" class="section-title">Good first picks</h2>
       <div id="picks" class="cards"></div>
       <h2 id="scan-title" class="section-title" hidden>From the scan</h2>
       <div id="models" class="cards"></div>
       <p id="empty" class="muted" hidden></p>
+    </section>
     </section>
   </main>
 

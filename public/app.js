@@ -49,6 +49,7 @@ async function load() {
   renderScanStatus();
   renderTabs();
   render();
+  renderHomeHint();
 }
 
 function renderScanStatus() {
@@ -123,9 +124,9 @@ function renderTabs() {
 
 for (const id of ["#only-runnable", "#only-new", "#search", "#sort", "#since"]) $(id).addEventListener("input", render);
 
-// One search: model names on Hugging Face, plus any scanned model whose
-// gathered notes use the words. Outside sources are asked too and shown
-// collapsed under the results.
+// The search: a plain description of what is wanted. The server ranks
+// models by name, category and what people say, and asks the outside
+// sources at the same time.
 $("#trait-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("#trait").value.trim();
@@ -133,19 +134,17 @@ $("#trait-form").addEventListener("submit", async (e) => {
   if (!q) {
     state.found = null;
     notice("");
+    setMode(state.mode === "browse" ? "browse" : "home");
     render();
     return;
   }
   btn.disabled = true;
   btn.textContent = "Searching";
   try {
-    const [hub, voices] = await Promise.all([api.get(`/api/search?q=${encodeURIComponent(q)}`), api.get(`/api/voices/search?q=${encodeURIComponent(q)}`)]);
-    const known = new Map([...state.models, ...hub.models].map((m) => [m.id, m]));
-    const ids = new Set(hub.models.map((m) => m.id));
-    const fromNotes = voices.hits.filter((h) => known.has(h.id) && !ids.has(h.id)).map((h) => ({ ...known.get(h.id), voiceMatch: h.snippet }));
-    const models = [...hub.models, ...fromNotes];
-    state.found = { q, models, notes: fromNotes.length, web: voices };
-    notice(models.length ? "" : `Nothing on Hugging Face or in the gathered notes matches "${q}".`, models.length ? "info" : "warn");
+    const result = await api.get(`/api/find?q=${encodeURIComponent(q)}`);
+    state.found = { q, models: result.models, web: result, hubError: result.hubError, gathered: result.gathered, scanned: result.scanned, took: result.took };
+    notice(result.hubError ? `Hugging Face did not answer (${result.hubError}); showing what is known locally.` : "", "warn");
+    if (state.mode !== "browse") setMode("results");
   } catch (err) {
     notice(`The search did not finish: ${err.message}`, "bad");
   } finally {
@@ -155,40 +154,37 @@ $("#trait-form").addEventListener("submit", async (e) => {
   }
 });
 
-const SUMMARIZER_PULL = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M";
+for (const chip of document.querySelectorAll("#examples [data-example]")) {
+  chip.addEventListener("click", () => {
+    $("#trait").value = chip.dataset.example;
+    $("#trait-form").requestSubmit();
+  });
+}
 
-// Pulls a small chat model through the same steps a model plan uses, so the
-// summaries can be written rather than lifted.
-$("#get-summarizer").addEventListener("click", async () => {
-  if (!confirm(`HuggingFound will run:\n\nollama pull ${SUMMARIZER_PULL}\n\nabout 2 GB, into Ollama's store. Continue?`)) return;
-  const btn = $("#get-summarizer");
-  btn.disabled = true;
-  btn.textContent = "Installing";
-  const log = $("#voices-log");
-  log.hidden = false;
-  log.textContent = "";
-  try {
-    if (!state.runners.ollama.installed) throw new Error("Ollama is not installed yet; set up any chat model from the Easy list first");
-    if (!state.runners.ollama.running) {
-      const { id } = await api.post("/api/run", { kind: "start-ollama", args: {} });
-      const r = await follow(id, (line) => (log.textContent += line + "\n"));
-      if (r.status !== "done") throw new Error("Ollama did not start");
-    }
-    const { id } = await api.post("/api/run", { kind: "pull-model", args: { name: SUMMARIZER_PULL } });
-    const r = await follow(id, (line) => {
-      log.textContent += line + "\n";
-      log.scrollTop = log.scrollHeight;
-    });
-    if (r.status !== "done") throw new Error("the download did not finish");
-    await load();
-    notice("The summarizing model is installed. Click \"Gather what people say\" to write the summaries.", "ok");
-  } catch (err) {
-    notice(`Could not install the summarizing model: ${err.message}`, "bad");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Install a small model to write the summaries (2 GB)";
-  }
+// Three views: the search page, its results, and everything else.
+function setMode(mode) {
+  state.mode = mode;
+  document.body.dataset.mode = mode;
+  $("#browse").hidden = mode !== "browse";
+  $("#results").hidden = !(state.found && (mode === "results" || mode === "browse"));
+  $("#nav-home").classList.toggle("on", mode !== "browse");
+  $("#nav-browse").classList.toggle("on", mode === "browse");
+}
+$("#nav-home").addEventListener("click", () => setMode(state.found ? "results" : "home"));
+$("#nav-browse").addEventListener("click", () => {
+  setMode("browse");
+  render();
 });
+
+function renderHomeHint() {
+  const v = state.voices;
+  const parts = [];
+  if (!state.scanAt) parts.push("No scan yet, so results come from Hugging Face's own search and the curated picks.");
+  else parts.push(`${state.models.length} models scanned ${relative(state.scanAt)}.`);
+  if (v?.count) parts.push(`What people say is gathered for ${v.count} of them${state.summarizer ? ", summed up by " + state.summarizer.split("/").pop() : ", lines lifted from the comments"}.`);
+  else parts.push("Gather what people say (in Browse) to rank by reviews and show a summary on every card.");
+  $("#home-hint").textContent = parts.join(" ");
+}
 
 function renderVoicesStatus() {
   const v = state.voices;
@@ -258,13 +254,21 @@ function render() {
 
   const keep = (m) => (!onlyRunnable || m.runner?.easy) && (!q || m.id.toLowerCase().includes(q) || (m.voice?.text ?? "").toLowerCase().includes(q));
 
-  // Search results ignore the category tab: the search itself said what
-  // was wanted. Sort and recency still apply.
-  const found = state.found ? sortModels(state.found.models.filter(keep)) : [];
+  // Search results keep the server's relevance order; only the runnable
+  // filter applies to them.
+  const found = state.found ? state.found.models.filter((m) => !onlyRunnable || m.runner?.easy) : [];
   $("#found").innerHTML = found.map(modelCard).join("");
-  $("#found-title").hidden = !state.found;
-  if (state.found) $("#found-title").textContent = `Search: ${state.found.q} (${found.length} of ${state.found.models.length} shown${state.found.notes ? `, ${state.found.notes} found through what people say` : ""})`;
+  $("#results").hidden = !(state.found && (state.mode === "results" || state.mode === "browse"));
+  if (state.found) {
+    const f = state.found;
+    $("#found-title").textContent = `${found.length} model${found.length === 1 ? "" : "s"} for "${f.q}"`;
+    const bySay = f.models.filter((m) => m.why?.includes("what people say") || m.why?.includes("discussions")).length;
+    $("#found-hint").textContent = `Ranked by name, category and what people say; ${bySay} matched on what people say. ${f.gathered ? "" : "Nothing gathered yet: open Browse, scan and gather to rank by reviews. "}${f.took != null ? `${(f.took / 1000).toFixed(1)} s.` : ""}`;
+    $("#found-empty").hidden = found.length > 0;
+    $("#found-empty").textContent = f.models.length ? "Every match needs a Python setup; untick the runnable filter in Browse to see them." : `Nothing matches "${f.q}". Try other words, or Browse the categories.`;
+  }
   renderWebFound(state.found?.web ?? null);
+  renderHomeHint();
 
   const picks = onlyNew || Number($("#since").value) ? [] : state.picks.filter((p) => p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
   $("#picks").innerHTML = picks.map(pickCard).join("");
@@ -275,9 +279,9 @@ function render() {
   $("#scan-title").hidden = models.length === 0;
 
   const empty = $("#empty");
-  if (!picks.length && !models.length && !found.length) {
+  if (!picks.length && !models.length) {
     empty.hidden = false;
-    empty.textContent = state.found ? "Nothing in the search results matches these filters." : state.models.length ? "Nothing matches these filters." : "Run a scan to see what is trending on Hugging Face in this category.";
+    empty.textContent = state.models.length ? "Nothing matches these filters." : "Run a scan to see what is trending on Hugging Face in this category.";
   } else {
     empty.hidden = true;
   }
@@ -365,6 +369,7 @@ function modelCard(m) {
     <div class="author">${esc(m.author)}</div>
     <div class="summary">${esc(m.summary)}</div>
     ${saidHtml(m)}
+    ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
@@ -1067,4 +1072,5 @@ $("#clear-token").addEventListener("click", async () => {
   await load();
 });
 
+setMode("home");
 load().catch((err) => notice(`HuggingFound could not start: ${err.message}`, "bad"));

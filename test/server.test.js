@@ -153,6 +153,18 @@ test("scan results carry a rough speed line and an adult flag", async () => {
   assert.equal(python.speed, "");
 });
 
+test("the front-page find ranks by name, category and what people say, and asks the outside sources", async () => {
+  const found = await (await get("/api/find?q=coding%20help")).json();
+  assert.ok(found.models.length >= 1);
+  assert.equal(found.models[0].id, "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF");
+  assert.ok(found.models[0].why.includes("category"));
+  assert.equal(typeof found.took, "number");
+  assert.ok("civitai" in found && "github" in found, "outside sources ride along");
+  assert.equal((await get("/api/find?q=%20")).status, 400);
+  const speech = await (await get("/api/find?q=transcribe%20meetings")).json();
+  assert.ok(speech.models.some((m) => m.id === "ggerganov/whisper.cpp"));
+});
+
 test("the trait search asks the hub and returns summarized, speed-tagged models", async () => {
   const found = await (await get("/api/search?q=coder")).json();
   assert.equal(found.q, "coder");

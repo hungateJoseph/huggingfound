@@ -14,6 +14,7 @@ import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
 import { cleanSummary, extractiveSummary, summarize, summarizerModel } from "./summarize.js";
+import { rankModels } from "./find.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -25,6 +26,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   const machine = describeMachine();
   const env = () => readEnv(envFile);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
+  const hub_ = hub;
   const civitai = createCivitai({ fetchImpl, base: civitaiBase });
   const hn = createHackerNews({ fetchImpl, base: hnBase });
   const lemmy = createLemmy({ fetchImpl, base: lemmyBase });
@@ -116,6 +118,30 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       fs.mkdirSync(path.dirname(scanFile), { recursive: true });
       fs.writeFileSync(scanFile, JSON.stringify(scan));
       return send(res, 200, scan);
+    }
+    // The front-page search: a plain description of what is wanted, answered
+    // with models ranked by name, category and what people say, plus the
+    // outside sources collapsed underneath.
+    if (req.method === "GET" && url.pathname === "/api/find") {
+      const q = url.searchParams.get("q") ?? "";
+      if (!q.trim()) return send(res, 400, { error: "Say what you are looking for" });
+      const started = Date.now();
+      const index = readVoices(voicesFile);
+      const scan = readScan(scanFile) ?? { models: [] };
+      const scanned = scan.models.map(withVoice);
+      const known = [...new Set([...Object.keys(index), ...scan.models.map((m) => m.id)])];
+      let hub = [];
+      let hubError = null;
+      const [hubResult, asked] = await Promise.all([
+        hub_().search(q).then((models) => models.map(withSpeed).map(withVoice)).catch((err) => {
+          hubError = err.message;
+          return [];
+        }),
+        askSources(q, known, { civitai: true, reddit: true, github: true, hn: true, lemmy: true, youtube: true }),
+      ]);
+      hub = hubResult;
+      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })), voices: index });
+      return send(res, 200, { q, ...ranked, models: ranked.models.slice(0, 60), hubError, gathered: Object.keys(index).length, scanned: scan.models.length, took: Date.now() - started, ...asked });
     }
     if (req.method === "GET" && url.pathname === "/api/search") {
       const q = url.searchParams.get("q") ?? "";

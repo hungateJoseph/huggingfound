@@ -44,9 +44,29 @@ async function step(name, fn) {
 }
 
 await page.goto(base);
+await page.waitForSelector("#home-hint");
+
+await step("the page opens on a single search box", async () => {
+  assert.equal(await page.locator("#trait").isVisible(), true);
+  assert.equal(await page.locator("#browse").isVisible(), false, "the lists stay out of the way");
+  assert.equal(await page.locator("#results").isVisible(), false);
+  assert.match(await page.locator("#home-hint").innerText(), /No scan yet/);
+  await page.click("#examples [data-example='coding help']");
+  await page.waitForSelector("#found .model");
+  assert.equal(await page.locator("#results").isVisible(), true);
+  assert.match(await page.locator("#found-title").innerText(), /coding help/i);
+  const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
+  assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");
+  assert.match(await page.locator("#found .model .why").first().innerText(), /category|name/);
+  await page.fill("#trait", "");
+  await page.click("#trait-go");
+  await page.waitForFunction(() => document.querySelector("#results").hidden);
+});
+
+await page.click("#nav-browse");
 await page.waitForSelector("#picks .model");
 
-await step("the page opens on the easy list with the curated picks", async () => {
+await step("browse shows the easy list with the curated picks", async () => {
   assert.match(await page.locator("#machine-line").innerText(), /GB memory/);
   assert.match(await page.locator(".tab.on").innerText(), /Easy to set up/);
   assert.ok((await page.locator("#picks .model").count()) >= 5);
@@ -112,7 +132,7 @@ await step("a trait search asks the hub and lists what it finds", async () => {
   await page.click("#trait-go");
   await page.waitForSelector("#found .model");
   // The title renders in capitals; innerText follows the CSS.
-  assert.match(await page.locator("#found-title").innerText(), /search: whisper/i);
+  assert.match(await page.locator("#found-title").innerText(), /whisper/i);
   let names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.deepEqual(names, ["whisper.cpp"], "the runnable filter hides the Python-only one");
   await page.uncheck("#only-runnable");
@@ -121,7 +141,7 @@ await step("a trait search asks the hub and lists what it finds", async () => {
   await page.check("#only-runnable");
   await page.fill("#trait", "");
   await page.click("#trait-go");
-  await page.waitForFunction(() => document.querySelector("#found-title").hidden && !document.querySelector("#found .model"));
+  await page.waitForFunction(() => document.querySelector("#results").hidden);
 });
 
 await step("gathering what people say puts summary lines on cards, with More to expand", async () => {
@@ -144,22 +164,22 @@ await step("one search box finds models by name and by what people say", async (
   await page.click("#trait-go");
   await page.waitForSelector("#found .model");
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
-  assert.deepEqual(names, ["Qwen2.5-Coder-7B-Instruct-GGUF"], "found through the gathered notes, not the name");
-  assert.match(await page.locator("#found-title").innerText(), /1 found through what people say/i);
-  assert.match(await page.locator("#found .model .said").innerText(), /rust/i);
+  assert.equal(names[0], "Qwen2.5-Coder-7B-Instruct-GGUF", "the model whose users mention Rust ranks first");
+  assert.match(await page.locator("#found-hint").innerText(), /matched on what people say/i);
+  assert.match(await page.locator("#found .model").first().locator(".said").innerText(), /rust/i);
   assert.equal(await page.locator("#web-found").isVisible(), true, "outside sources are listed, collapsed");
   assert.match(await page.locator("#web-found-summary").innerText(), /also mentioned elsewhere/i);
   await page.click("#web-found-summary");
   assert.match(await page.locator("#reddit-note").innerText(), /app id in Settings/);
   assert.match(await page.locator("#youtube-note").innerText(), /API key in Settings/);
   assert.match(await page.locator("#github-note").innerText(), /did not answer/, "the unreachable stub is reported, not hidden");
-  await page.fill("#trait", "hentai");
+  await page.fill("#trait", "zzzqqq");
   await page.click("#trait-go");
-  await page.waitForSelector("#notice:not([hidden])");
-  assert.match(await page.locator("#notice").innerText(), /Nothing on Hugging Face or in the gathered notes/);
+  await page.waitForSelector("#found-empty:not([hidden])");
+  assert.match(await page.locator("#found-empty").innerText(), /Nothing matches/);
   await page.fill("#trait", "");
   await page.click("#trait-go");
-  await page.waitForFunction(() => document.querySelector("#found-title").hidden);
+  await page.waitForFunction(() => document.querySelector("#results").hidden);
 });
 
 await step("opening a model shows its plan with the install, start and pull steps", async () => {
@@ -345,6 +365,9 @@ await step("settings has the image server field and rejects a bad address", asyn
 
 await step("a reload keeps the scan and reports when it was made", async () => {
   await page.reload();
+  await page.waitForSelector("#home-hint");
+  assert.match(await page.locator("#home-hint").innerText(), /models scanned/);
+  await page.click("#nav-browse");
   await page.waitForSelector("#scan-title:not([hidden])");
   assert.match(await page.locator("#scan-status").innerText(), /Last scan just now/);
 });
