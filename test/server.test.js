@@ -20,11 +20,17 @@ function startStubWeb() {
     if (url.pathname === "/api/v1/models") {
       const q = (url.searchParams.get("query") ?? "").toLowerCase();
       const items = [
-        { id: 11, name: "Pony Realism", type: "Checkpoint", nsfw: true, stats: { thumbsUpCount: 32000, thumbsDownCount: 10, commentCount: 5, downloadCount: 900000 }, tags: ["realistic"], creator: { username: "ann" }, description: "<p>Photo real people, great for roleplay scenes.</p>" },
+        { id: 11, name: "Pony Realism", type: "Checkpoint", nsfw: true, stats: { thumbsUpCount: 32000, thumbsDownCount: 10, commentCount: 5, downloadCount: 900000 }, tags: ["realistic"], creator: { username: "ann" }, description: "<p>Photo real people, great for roleplay scenes.</p>", modelVersions: [{ id: 1101, name: "v2.3" }] },
         { id: 12, name: "Roleplay Faces", type: "LORA", stats: { thumbsUpCount: 50 }, tags: [] },
       ].filter((m) => m.name.toLowerCase().includes(q.split(" ")[0]) || m.description?.toLowerCase().includes(q.split(" ")[0]));
       return res.end(JSON.stringify({ items }));
     }
+    if (url.pathname === "/api/v1/models/11" || url.pathname === "/api/v1/images") return res.end(JSON.stringify({ items: [{ id: 501, username: "pat", nsfw: true, stats: { likeCount: 30, heartCount: 2, commentCount: 1 }, meta: { prompt: "photo of a woman in a garden, roleplay costume" } }] }));
+    if (url.pathname === "/search/issues") return res.end(JSON.stringify({ items: [{ title: "Qwen2.5 Coder 7B Instruct stops mid answer", repository_url: "https://api.github.com/repos/ollama/ollama", state: "open", comments: 3, html_url: "https://github.com/ollama/ollama/issues/9", created_at: "2025-01-01T00:00:00Z", body: "roleplay prompts too" }] }));
+    if (url.pathname === "/api/v1/search") return res.end(JSON.stringify({ hits: [{ title: "Roleplay with local models", points: 50, num_comments: 20, objectID: "77" }] }));
+    if (url.pathname === "/api/v3/search") return res.end(JSON.stringify({ posts: [{ post: { name: "Roleplay model thread", ap_id: "https://lemmy.world/post/5", body: "" }, community: { name: "localllama", actor_id: "https://sh.itjust.works/c/localllama" }, counts: { score: 9, comments: 4 } }] }));
+    if (url.pathname === "/youtube/v3/search") return res.end(JSON.stringify({ items: [{ id: { videoId: "v1" }, snippet: { title: "Qwen2.5 Coder 7B Instruct review", channelTitle: "Cam", publishedAt: "2025-02-02T00:00:00Z", description: "" } }] }));
+    if (url.pathname === "/youtube/v3/videos") return res.end(JSON.stringify({ items: [{ id: "v1", statistics: { viewCount: "999" } }] }));
     if (url.pathname === "/api/v1/access_token") return res.end(JSON.stringify({ access_token: "tok", expires_in: 3600 }));
     if (url.pathname === "/search") {
       if (req.headers.authorization !== "bearer tok") {
@@ -72,7 +78,7 @@ before(async () => {
   web = await startStubWeb();
   envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
   scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
-  server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: web.url, redditAuthBase: web.url, redditApiBase: web.url });
+  server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: web.url, redditAuthBase: web.url, redditApiBase: web.url, githubBase: web.url, hnBase: web.url, lemmyBase: web.url, youtubeBase: web.url });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -316,6 +322,21 @@ test("gathering what people say indexes the scan, and searches and cards use it"
   assert.deepEqual(web1.civitai[0].matched, [], "no scanned model carries that name");
   assert.equal(web1.redditConfigured, false);
   assert.deepEqual(web1.reddit, []);
+  assert.equal(typeof web1.took, "number");
+  assert.equal(web1.github.length, 1);
+  assert.deepEqual(web1.github[0].matched, ["bartowski/Qwen2.5-Coder-7B-Instruct-GGUF"], "the issue names a scanned model");
+  assert.equal(web1.hn[0].url, "https://news.ycombinator.com/item?id=77");
+  assert.equal(web1.lemmy[0].community, "localllama@sh.itjust.works");
+  assert.equal(web1.youtubeConfigured, false);
+  assert.deepEqual(web1.youtube, []);
+  assert.equal((await post("/api/settings", { YOUTUBE_API_KEY: "short" })).status, 400);
+  assert.equal((await post("/api/settings", { YOUTUBE_API_KEY: "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ", GITHUB_TOKEN: "ghp_abcdefghijklmnopqrstuvwxyz" })).status, 200);
+  const st = await (await get("/api/state")).json();
+  assert.match(st.youtubeKey, /^AIza\*+WXYZ$/);
+  assert.match(st.githubToken, /^ghp_\*+wxyz$/);
+  const web1b = await (await get("/api/voices/search?q=roleplay")).json();
+  assert.equal(web1b.youtube.length, 1);
+  assert.equal(web1b.youtube[0].views, 999);
   assert.equal((await post("/api/settings", { REDDIT_CLIENT_ID: "not an id!" })).status, 400);
   assert.equal((await post("/api/settings", { REDDIT_CLIENT_ID: "abc123def456ghi" })).status, 200);
   assert.equal((await (await get("/api/state")).json()).redditApp, "abc1*******6ghi");
@@ -326,12 +347,21 @@ test("gathering what people say indexes the scan, and searches and cards use it"
   const perModel = await (await get("/api/voices/web?id=bartowski/Qwen2.5-Coder-7B-Instruct-GGUF")).json();
   assert.equal(perModel.reddit.length, 1);
   assert.deepEqual(perModel.civitai, [], "a chat model is not looked up on Civitai");
+  assert.equal(perModel.github.length, 1);
+  assert.equal(perModel.hn.length, 1);
+  assert.equal(perModel.lemmy.length, 1);
+  assert.equal(perModel.youtube.length, 1, "the video names the model");
+  assert.equal(typeof perModel.took, "number");
   const imageModel = await (await get("/api/voices/web?id=John6666/pony-realism-v23-sdxl&images=1")).json();
   assert.equal(imageModel.civitai[0].name, "Pony Realism");
   assert.equal(imageModel.civitai[0].thumbsUp, 32000);
+  assert.equal(imageModel.civitaiPrompts.length, 1, "prompts posted under the matching page");
+  assert.match(imageModel.civitaiPrompts[0].prompt, /garden/);
   const cached = JSON.parse(fs.readFileSync(path.join(process.env.HUGGINGFOUND_HOME, "voices.json"), "utf8"));
   assert.ok(cached["John6666/pony-realism-v23-sdxl"].web.data.civitai.length === 1, "off-Hub answers are cached");
-  assert.equal((await post("/api/settings", { REDDIT_CLIENT_ID: "" })).status, 200);
+  const again = await (await get("/api/voices/web?id=John6666/pony-realism-v23-sdxl&images=1")).json();
+  assert.equal(again.cached, true);
+  assert.equal((await post("/api/settings", { REDDIT_CLIENT_ID: "", YOUTUBE_API_KEY: "", GITHUB_TOKEN: "" })).status, 200);
 
   const detail = await (await get("/api/voices?id=bartowski/Llama-3.2-3B-Instruct-GGUF")).json();
   assert.match(detail.card, /great for quick answers/);

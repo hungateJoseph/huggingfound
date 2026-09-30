@@ -15,7 +15,8 @@ const { createServer } = await import("../../src/server.js");
 const stub = await startStubHub();
 const envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
 const scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
-const server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: "http://127.0.0.1:1", redditAuthBase: "http://127.0.0.1:1", redditApiBase: "http://127.0.0.1:1" });
+const dead = "http://127.0.0.1:1";
+const server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -138,6 +139,9 @@ await step("gathering what people say adds a line to cards and a searchable inde
   assert.match(await page.locator("#found .model .voice.match").innerText(), /Rust coding help/);
   assert.equal(await page.locator("#web-found").isVisible(), true, "Civitai and Reddit sections appear with a what-people-say search");
   assert.match(await page.locator("#reddit-note").innerText(), /app id in Settings/);
+  assert.match(await page.locator("#youtube-note").innerText(), /API key in Settings/);
+  assert.match(await page.locator("#github-note").innerText(), /did not answer/, "the unreachable stub is reported, not hidden");
+  assert.match(await page.locator("#found-title").innerText(), /outside sources/i);
   await page.fill("#trait", "hentai");
   await page.click("#trait-go");
   await page.waitForSelector("#notice:not([hidden])");

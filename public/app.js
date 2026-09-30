@@ -33,6 +33,8 @@ async function load() {
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
   state.imageServer = s.imageServer;
   $("#reddit-status").textContent = s.redditApp ? `An app id is saved (${s.redditApp}); Reddit is searched with it.` : "No app id saved; Reddit is skipped.";
+  $("#github-status").textContent = s.githubToken ? `A token is saved (${s.githubToken}); thirty GitHub searches a minute.` : "No token; ten GitHub searches a minute.";
+  $("#youtube-status").textContent = s.youtubeKey ? `A key is saved (${s.youtubeKey}); YouTube is searched with it.` : "No key; YouTube is skipped.";
   state.voices = s.voices;
   renderVoicesStatus();
   $("#image-server").value = s.imageServer;
@@ -230,8 +232,8 @@ function render() {
   const found = state.found ? sortModels(state.found.models.filter(keep)) : [];
   $("#found").innerHTML = found.map(modelCard).join("");
   $("#found-title").hidden = !state.found;
-  renderWebFound(state.found?.web ?? null);
   if (state.found) $("#found-title").textContent = `Search: ${state.found.q} (${found.length} of ${state.found.models.length} shown${state.found.unknown ? `, ${state.found.unknown} more not in the current lists` : ""})`;
+  renderWebFound(state.found?.web ?? null);
 
   const picks = onlyNew || Number($("#since").value) ? [] : state.picks.filter((p) => p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
   $("#picks").innerHTML = picks.map(pickCard).join("");
@@ -264,13 +266,24 @@ function renderWebFound(web) {
     ${m.description ? `<div class="desc">${esc(m.description)}</div>` : ""}
     <div class="chips">${m.matched.map((id) => `<button class="chip" data-open="${esc(id)}">${esc(id.split("/").pop())}</button>`).join("")}<button class="chip" data-hub="${esc(m.name)}">Search the Hub for it</button></div>
   </div>`).join("");
-  $("#reddit-note").textContent = !web.redditConfigured ? "Reddit needs a free app id in Settings before it can be searched." : web.redditError ? `Reddit did not answer: ${web.redditError}` : web.reddit.length ? "Posts from r/LocalLLaMA, r/StableDiffusion, r/SillyTavernAI and related communities. A chip opens a model from the scan that the post names." : "No Reddit posts for these words in the past year.";
-  $("#reddit-found").innerHTML = web.reddit.map((p) => `<li>
+  const postList = (items, who) => items.map((p) => `<li>
     <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>
-    <div class="who">r/${esc(p.subreddit)}, ${fmt(p.score)} points, ${fmt(p.comments)} comments${p.created ? `, ${relative(p.created)}` : ""}</div>
+    <div class="who">${esc(who(p))}${p.created ? `, ${relative(p.created)}` : p.published ? `, ${relative(p.published)}` : ""}</div>
     ${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ""}
-    ${p.matched.length ? `<div class="chips">${p.matched.map((id) => `<button class="chip" data-open="${esc(id)}">${esc(id.split("/").pop())}</button>`).join("")}</div>` : ""}
+    ${p.matched?.length ? `<div class="chips">${p.matched.map((id) => `<button class="chip" data-open="${esc(id)}">${esc(id.split("/").pop())}</button>`).join("")}</div>` : ""}
   </li>`).join("");
+  const note = (name, list, err, configured, filled, empty, setup) => (configured === false ? setup : err ? `${name} did not answer: ${err}` : list.length ? filled : empty);
+  $("#github-note").textContent = note("GitHub", web.github, web.githubError, true, "Issues and pull requests on llama.cpp, Ollama, stable-diffusion.cpp, whisper.cpp, SillyTavern, ComfyUI and related projects. A chip opens a model from the scan that the thread names.", "No GitHub issues mention these words.");
+  $("#github-found").innerHTML = postList(web.github, (p) => `${p.repo}, ${p.kind}, ${p.state}, ${fmt(p.comments)} comments`);
+  $("#hn-note").textContent = note("Hacker News", web.hn, web.hnError, true, "Stories and comments on Hacker News.", "Nothing on Hacker News for these words.");
+  $("#hn-found").innerHTML = postList(web.hn, (p) => `${p.kind}, ${fmt(p.points)} points, ${fmt(p.comments)} comments`);
+  $("#lemmy-note").textContent = note("Lemmy", web.lemmy, web.lemmyError, true, "Posts from Lemmy communities such as localllama, fosai and stable_diffusion.", "No Lemmy posts for these words.");
+  $("#lemmy-found").innerHTML = postList(web.lemmy, (p) => `${p.community}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`);
+  $("#youtube-note").textContent = note("YouTube", web.youtube, web.youtubeError, web.youtubeConfigured, "Videos about these words; the title tells whether it is a review or a demonstration.", "No videos for these words.", "YouTube needs a free API key in Settings before videos can be searched.");
+  $("#youtube-found").innerHTML = postList(web.youtube, (v) => `${v.channel}${v.views != null ? `, ${fmt(v.views)} views` : ""}`);
+  $("#reddit-note").textContent = note("Reddit", web.reddit, web.redditError, web.redditConfigured, "Posts from r/LocalLLaMA, r/StableDiffusion, r/SillyTavernAI and related communities. A chip opens a model from the scan that the post names.", "No Reddit posts for these words in the past year.", "Reddit needs a free app id in Settings before it can be searched.");
+  $("#reddit-found").innerHTML = postList(web.reddit, (p) => `r/${p.subreddit}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`);
+  if (web.took != null) $("#found-title").textContent += ` · ${(web.took / 1000).toFixed(1)} s across ${["civitai", "reddit", "github", "hn", "lemmy", "youtube"].filter((k) => web[`${k}Configured`] !== false).length} outside sources`;
   for (const chip of box.querySelectorAll("button[data-open]")) chip.addEventListener("click", () => openModel(chip.dataset.open));
   for (const chip of box.querySelectorAll("button[data-hub]")) {
     chip.addEventListener("click", () => {
@@ -405,12 +418,20 @@ async function loadVoices(model) {
   const civ = web.civitai.length
     ? `<h4>On Civitai</h4><p class="muted small">Pages whose name matches this model; merges and re-uploads share names, so check the link.</p>` + web.civitai.map((c) => `<div class="civ"><div class="name"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.nsfw ? ' <span class="pill adult">18+</span>' : ""}</div><div class="stats">${fmt(c.thumbsUp)} thumbs up, ${fmt(c.thumbsDown)} down, ${fmt(c.comments)} comments, ${fmt(c.downloads)} downloads${c.creator ? `, by ${esc(c.creator)}` : ""}</div>${c.description ? `<div class="desc">${esc(c.description)}</div>` : ""}</div>`).join("")
     : web.civitaiError ? `<p class="muted small">Civitai did not answer: ${esc(web.civitaiError)}</p>` : isImage ? `<p class="muted small">No matching page on Civitai.</p>` : "";
-  const red = !web.redditConfigured
-    ? `<p class="muted small">Reddit posts need a free app id in Settings.</p>`
-    : web.redditError ? `<p class="muted small">Reddit did not answer: ${esc(web.redditError)}</p>`
-    : web.reddit.length ? `<h4>On Reddit</h4><ul class="posts">${web.reddit.slice(0, 8).map((p) => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a><div class="who">r/${esc(p.subreddit)}, ${fmt(p.score)} points, ${fmt(p.comments)} comments</div>${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ""}</li>`).join("")}</ul>`
-    : `<p class="muted small">No Reddit posts name this model.</p>`;
-  webBox.innerHTML = civ + red;
+  const prompts = web.civitaiPrompts?.length
+    ? `<h4>What people make with it on Civitai</h4><p class="muted small">The most liked pictures posted under the matching page, with the prompts their makers used.</p><ul class="posts">${web.civitaiPrompts.slice(0, 6).map((i) => `<li><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.prompt)}</a><div class="who">${fmt(i.reactions)} reactions, ${fmt(i.comments)} comments${i.user ? `, by ${esc(i.user)}` : ""}${i.nsfw ? ", 18+" : ""}</div></li>`).join("")}</ul>`
+    : "";
+  const section = (title, items, err, configured, who, setup) => configured === false
+    ? `<p class="muted small">${esc(setup)}</p>`
+    : err ? `<p class="muted small">${esc(title)} did not answer: ${esc(err)}</p>`
+    : items.length ? `<h4>On ${esc(title)}</h4><ul class="posts">${items.slice(0, 8).map((p) => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a><div class="who">${esc(who(p))}</div>${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ""}</li>`).join("")}</ul>`
+    : `<p class="muted small">Nothing on ${esc(title)} names this model.</p>`;
+  const gh = section("GitHub", web.github ?? [], web.githubError, true, (p) => `${p.repo}, ${p.kind}, ${p.state}, ${fmt(p.comments)} comments`);
+  const hn = section("Hacker News", web.hn ?? [], web.hnError, true, (p) => `${p.kind}, ${fmt(p.points)} points, ${fmt(p.comments)} comments`);
+  const lem = section("Lemmy", web.lemmy ?? [], web.lemmyError, true, (p) => `${p.community}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`);
+  const yt = section("YouTube", web.youtube ?? [], web.youtubeError, web.youtubeConfigured, (v) => `${v.channel}${v.views != null ? `, ${fmt(v.views)} views` : ""}`, "YouTube videos need a free API key in Settings.");
+  const red = section("Reddit", web.reddit ?? [], web.redditError, web.redditConfigured, (p) => `r/${p.subreddit}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`, "Reddit posts need a free app id in Settings.");
+  webBox.innerHTML = civ + prompts + gh + hn + lem + yt + red + (web.took != null ? `<p class="muted small">Outside sources answered in ${(web.took / 1000).toFixed(1)} s${web.cached ? "" : "; kept for a week"}.</p>` : `<p class="muted small">From the copy kept this week.</p>`);
 }
 
 function stepHtml(s, i) {
@@ -901,6 +922,26 @@ async function renderImageServerStatus() {
   } catch (err) {
     el.textContent = `Could not check the server: ${err.message}`;
   }
+}
+
+for (const [field, key, status, text] of [["#github-token", "GITHUB_TOKEN", "#github-status", (v) => v ? `A token is saved (${v}); thirty GitHub searches a minute.` : "No token; ten GitHub searches a minute."], ["#youtube-key", "YOUTUBE_API_KEY", "#youtube-status", (v) => v ? `A key is saved (${v}); YouTube is searched with it.` : "No key; YouTube is skipped."]]) {
+  const save = field === "#github-token" ? "#save-github" : "#save-youtube";
+  const clear = field === "#github-token" ? "#clear-github" : "#clear-youtube";
+  $(save).addEventListener("click", async () => {
+    const value = $(field).value.trim();
+    try {
+      await api.post("/api/settings", { [key]: value });
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+    $(field).value = "";
+    await load();
+  });
+  $(clear).addEventListener("click", async () => {
+    await api.post("/api/settings", { [key]: "" });
+    await load();
+  });
 }
 
 $("#save-reddit").addEventListener("click", async () => {

@@ -104,7 +104,33 @@ export function createCivitai({ fetchImpl = fetch, base = "https://civitai.com" 
     return scored.slice(0, 3);
   }
 
-  return { search, forModel };
+  // The pictures people post under a model version, with the prompts they
+  // used and how many reactions they got: what the model is used for, in
+  // users' own words.
+  async function images(versionId, { limit = 8 } = {}) {
+    const url = new URL("/api/v1/images", base);
+    url.searchParams.set("modelVersionId", String(versionId));
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("sort", "Most Reactions");
+    const res = await fetchImpl(url, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`Civitai replied HTTP ${res.status}`);
+    const data = await res.json();
+    return (data.items ?? [])
+      .map((i) => {
+        const st = i.stats ?? {};
+        return {
+          prompt: String(i.meta?.prompt ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
+          reactions: (st.likeCount ?? 0) + (st.heartCount ?? 0) + (st.laughCount ?? 0) + (st.cryCount ?? 0),
+          comments: st.commentCount ?? 0,
+          user: i.username ?? "",
+          nsfw: Boolean(i.nsfw),
+          url: `https://civitai.com/images/${i.id}`,
+        };
+      })
+      .filter((i) => i.prompt);
+  }
+
+  return { search, forModel, images };
 }
 
 function item(m) {
@@ -123,6 +149,7 @@ function item(m) {
     creator: m.creator?.username ?? "",
     description: htmlExcerpt(m.description, 400),
     versions: (m.modelVersions ?? []).slice(0, 3).map((v) => v.name),
+    versionIds: (m.modelVersions ?? []).slice(0, 3).map((v) => v.id),
   };
 }
 
@@ -189,4 +216,155 @@ function post(p) {
     created: p.created_utc ? new Date(p.created_utc * 1000).toISOString() : null,
     excerpt: text.length > 300 ? text.slice(0, 300).replace(/\s+\S*$/, "") + "…" : text,
   };
+}
+
+// ---- GitHub issues -------------------------------------------------------------
+
+// The projects whose issue trackers carry "does model X work" reports.
+export const GITHUB_REPOS = ["ggml-org/llama.cpp", "ollama/ollama", "leejet/stable-diffusion.cpp", "ggml-org/whisper.cpp", "SillyTavern/SillyTavern", "comfyanonymous/ComfyUI", "AUTOMATIC1111/stable-diffusion-webui", "oobabooga/text-generation-webui", "lllyasviel/Fooocus", "lmstudio-ai/lmstudio-bug-tracker"];
+
+export function createGithub({ fetchImpl = fetch, base = "https://api.github.com", token = "" } = {}) {
+  async function search(q, { limit = 15 } = {}) {
+    const url = new URL("/search/issues", base);
+    url.searchParams.set("q", `${String(q).slice(0, 150)} ${GITHUB_REPOS.map((r) => `repo:${r}`).join(" ")}`);
+    url.searchParams.set("per_page", String(limit));
+    const headers = { "User-Agent": UA, Accept: "application/vnd.github+json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(15000) });
+    if (res.status === 403 || res.status === 429) throw new Error(token ? "GitHub is rate limiting; try again in a minute" : "GitHub allows ten searches a minute without a token; wait a minute, or add a token in Settings");
+    if (res.status === 401) throw new Error("GitHub rejected the token; check it in Settings");
+    if (!res.ok) throw new Error(`GitHub replied HTTP ${res.status}`);
+    const data = await res.json();
+    return (data.items ?? []).map((i) => ({
+      title: String(i.title ?? ""),
+      repo: String(i.repository_url ?? "").split("/").slice(-2).join("/"),
+      kind: i.pull_request ? "pull request" : "issue",
+      state: i.state ?? "open",
+      comments: i.comments ?? 0,
+      url: i.html_url ?? "",
+      created: i.created_at ?? null,
+      excerpt: excerpt(i.body, 300),
+    }));
+  }
+  async function forModel(id) {
+    return search(`"${plainName(id)}"`, { limit: 10 });
+  }
+  return { search, forModel, configured: () => true };
+}
+
+// ---- Hacker News -------------------------------------------------------------
+
+export function createHackerNews({ fetchImpl = fetch, base = "https://hn.algolia.com" } = {}) {
+  async function search(q, { limit = 15 } = {}) {
+    const url = new URL("/api/v1/search", base);
+    url.searchParams.set("query", String(q).slice(0, 150));
+    url.searchParams.set("tags", "(story,comment)");
+    url.searchParams.set("hitsPerPage", String(limit));
+    const res = await fetchImpl(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`Hacker News replied HTTP ${res.status}`);
+    const data = await res.json();
+    return (data.hits ?? []).map((h) => {
+      const comment = !h.title;
+      const text = excerpt(h.comment_text ?? h.story_text ?? "", 300);
+      return {
+        title: comment ? `Comment on: ${h.story_title ?? "a story"}` : String(h.title),
+        kind: comment ? "comment" : "story",
+        points: h.points ?? 0,
+        comments: h.num_comments ?? 0,
+        url: `https://news.ycombinator.com/item?id=${h.objectID}`,
+        created: h.created_at ?? null,
+        excerpt: text,
+      };
+    });
+  }
+  async function forModel(id) {
+    return search(`"${plainName(id)}"`, { limit: 10 });
+  }
+  return { search, forModel, configured: () => true };
+}
+
+// ---- Lemmy ---------------------------------------------------------------------
+
+export const LEMMY_COMMUNITIES = new Set(["localllama", "fosai", "stable_diffusion", "stable_diffusion_art", "imageai", "selfhosted", "machinelearning", "artificial_intelligence", "opensource", "technology", "ai_", "aigen"]);
+
+export function createLemmy({ fetchImpl = fetch, base = "https://lemmy.world" } = {}) {
+  async function search(q, { limit = 25 } = {}) {
+    const url = new URL("/api/v3/search", base);
+    url.searchParams.set("q", String(q).slice(0, 150));
+    url.searchParams.set("type_", "Posts");
+    url.searchParams.set("sort", "TopAll");
+    url.searchParams.set("limit", String(limit));
+    const res = await fetchImpl(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`Lemmy replied HTTP ${res.status}`);
+    const data = await res.json();
+    return (data.posts ?? [])
+      .filter((p) => LEMMY_COMMUNITIES.has(String(p.community?.name ?? "").toLowerCase()))
+      .map((p) => ({
+        title: String(p.post?.name ?? ""),
+        community: `${p.community?.name ?? ""}@${String(p.community?.actor_id ?? "").split("/")[2] ?? ""}`,
+        score: p.counts?.score ?? 0,
+        comments: p.counts?.comments ?? 0,
+        url: p.post?.ap_id ?? "",
+        created: p.post?.published ?? null,
+        excerpt: excerpt(p.post?.body, 300),
+      }));
+  }
+  async function forModel(id) {
+    return search(`"${plainName(id)}"`, { limit: 20 });
+  }
+  return { search, forModel, configured: () => true };
+}
+
+// ---- YouTube -------------------------------------------------------------------
+
+export function createYoutube({ fetchImpl = fetch, base = "https://www.googleapis.com", key = "" } = {}) {
+  async function search(q, { limit = 10 } = {}) {
+    if (!key) throw new Error("YouTube needs an API key; add one in Settings");
+    const url = new URL("/youtube/v3/search", base);
+    url.searchParams.set("part", "snippet");
+    url.searchParams.set("q", String(q).slice(0, 150));
+    url.searchParams.set("type", "video");
+    url.searchParams.set("maxResults", String(limit));
+    url.searchParams.set("key", key);
+    const res = await fetchImpl(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(15000) });
+    if (res.status === 403) throw new Error("YouTube refused: the key is not allowed to use the Data API, or today's quota is used up");
+    if (res.status === 400) throw new Error("YouTube rejected the API key; check it in Settings");
+    if (!res.ok) throw new Error(`YouTube replied HTTP ${res.status}`);
+    const data = await res.json();
+    const videos = (data.items ?? []).filter((i) => i.id?.videoId).map((i) => ({
+      id: i.id.videoId,
+      title: String(i.snippet?.title ?? ""),
+      channel: String(i.snippet?.channelTitle ?? ""),
+      published: i.snippet?.publishedAt ?? null,
+      url: `https://www.youtube.com/watch?v=${i.id.videoId}`,
+      excerpt: excerpt(i.snippet?.description, 200),
+      views: null,
+    }));
+    if (videos.length) {
+      const stats = new URL("/youtube/v3/videos", base);
+      stats.searchParams.set("part", "statistics");
+      stats.searchParams.set("id", videos.map((v) => v.id).join(","));
+      stats.searchParams.set("key", key);
+      const sres = await fetchImpl(stats, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(15000) });
+      if (sres.ok) {
+        const sdata = await sres.json();
+        const views = new Map((sdata.items ?? []).map((v) => [v.id, Number(v.statistics?.viewCount ?? 0)]));
+        for (const v of videos) v.views = views.get(v.id) ?? null;
+      }
+    }
+    return videos;
+  }
+  // Videos whose title or description names the model.
+  async function forModel(id) {
+    const name = plainName(id);
+    const key = normalize(name);
+    const videos = await search(`${name} review`, { limit: 10 });
+    return key.length >= 6 ? videos.filter((v) => normalize(`${v.title} ${v.excerpt}`).includes(key)) : videos;
+  }
+  return { search, forModel, configured: () => Boolean(key) };
+}
+
+function excerpt(text, max) {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim();
+  return t.length > max ? t.slice(0, max).replace(/\s+\S*$/, "") + "…" : t;
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SAME_MODEL, createCivitai, createReddit, htmlExcerpt, matchKnown, nameWords, plainName, similarity } from "../src/sources.js";
+import { SAME_MODEL, createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, htmlExcerpt, matchKnown, nameWords, plainName, similarity } from "../src/sources.js";
 
 test("plainName drops the author and file suffixes", () => {
   assert.equal(plainName("bartowski/Llama-3.2-3B-Instruct-GGUF"), "Llama 3.2 3B Instruct");
@@ -85,4 +85,75 @@ test("Reddit needs an app id, fetches a token once and searches the model commun
   assert.equal(searches[0].init.headers.Authorization, "bearer tok");
   const rejected = createReddit({ fetchImpl: async () => ({ ok: false, status: 401 }), clientId: "abc123def456" });
   await assert.rejects(rejected.search("x"), /rejected the app id/);
+});
+
+const ok = (body) => ({ ok: true, status: 200, json: async () => body });
+
+test("GitHub issues are searched across the runner projects and rate limits are explained", async () => {
+  const calls = [];
+  const gh = createGithub({ fetchImpl: async (url, init) => { calls.push({ url: String(url), init }); return ok({ items: [{ title: "Llama 3.2 3B outputs garbage", repository_url: "https://api.github.com/repos/ollama/ollama", state: "closed", comments: 9, html_url: "https://github.com/ollama/ollama/issues/1", created_at: "2025-01-01T00:00:00Z", body: "After   updating\nit works." }] }); }, base: "http://stub" });
+  const items = await gh.search("llama");
+  assert.equal(items[0].repo, "ollama/ollama");
+  assert.equal(items[0].kind, "issue");
+  assert.equal(items[0].excerpt, "After updating it works.");
+  assert.ok(decodeURIComponent(calls[0].url).includes("repo:ggml-org/llama.cpp"));
+  assert.equal(calls[0].init.headers.Authorization, undefined);
+  const withToken = createGithub({ fetchImpl: async (url, init) => { calls.push({ url: String(url), init }); return ok({ items: [] }); }, base: "http://stub", token: "ghp_abcdefghijklmnopqrstuvwxyz" });
+  await withToken.forModel("bartowski/Llama-3.2-3B-Instruct-GGUF");
+  assert.equal(calls.at(-1).init.headers.Authorization, "Bearer ghp_abcdefghijklmnopqrstuvwxyz");
+  assert.ok(decodeURIComponent(calls.at(-1).url).replace(/\+/g, " ").includes('"Llama 3.2 3B Instruct"'));
+  await assert.rejects(createGithub({ fetchImpl: async () => ({ ok: false, status: 403 }), base: "http://stub" }).search("x"), /ten searches a minute/);
+});
+
+test("Hacker News stories and comments are both kept, with a link to the item", async () => {
+  const hn = createHackerNews({ fetchImpl: async () => ok({ hits: [{ title: "Show HN: SDXL Lightning demo", points: 444, num_comments: 104, objectID: "1" }, { comment_text: "I run <i>Llama 3.2 3B</i> daily.", story_title: "Local models", points: 12, objectID: "2" }] }), base: "http://stub" });
+  const hits = await hn.search("x");
+  assert.equal(hits[0].kind, "story");
+  assert.equal(hits[0].url, "https://news.ycombinator.com/item?id=1");
+  assert.equal(hits[1].kind, "comment");
+  assert.equal(hits[1].title, "Comment on: Local models");
+  assert.equal(hits[1].excerpt, "I run <i>Llama 3.2 3B</i> daily.");
+});
+
+test("Lemmy posts are kept only from the model communities", async () => {
+  const lemmy = createLemmy({ fetchImpl: async () => ok({ posts: [
+    { post: { name: "Best local model?", ap_id: "https://lemmy.world/post/1", body: "asking" }, community: { name: "localllama", actor_id: "https://sh.itjust.works/c/localllama" }, counts: { score: 40, comments: 12 } },
+    { post: { name: "Cat pictures", ap_id: "https://lemmy.world/post/2" }, community: { name: "cats", actor_id: "https://lemmy.world/c/cats" }, counts: { score: 400, comments: 1 } },
+  ] }), base: "http://stub" });
+  const posts = await lemmy.search("x");
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].community, "localllama@sh.itjust.works");
+  assert.equal(posts[0].score, 40);
+});
+
+test("YouTube needs a key, adds view counts, and per-model keeps only videos naming the model", async () => {
+  const off = createYoutube({ fetchImpl: async () => ok({}), base: "http://stub" });
+  assert.equal(off.configured(), false);
+  await assert.rejects(off.search("x"), /API key/);
+  const yt = createYoutube({ fetchImpl: async (url) => {
+    if (String(url).includes("/youtube/v3/videos")) return ok({ items: [{ id: "a1", statistics: { viewCount: "12345" } }, { id: "b2", statistics: { viewCount: "7" } }] });
+    return ok({ items: [
+      { id: { videoId: "a1" }, snippet: { title: "Llama 3.2 3B Instruct on a laptop", channelTitle: "Cam", publishedAt: "2025-02-02T00:00:00Z", description: "Testing it" } },
+      { id: { videoId: "b2" }, snippet: { title: "Some other model", channelTitle: "Dee", publishedAt: "2025-02-02T00:00:00Z", description: "" } },
+    ] });
+  }, base: "http://stub", key: "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+  const all = await yt.search("llama");
+  assert.equal(all.length, 2);
+  assert.equal(all[0].views, 12345);
+  assert.equal(all[0].url, "https://www.youtube.com/watch?v=a1");
+  const mine = await yt.forModel("bartowski/Llama-3.2-3B-Instruct-GGUF");
+  assert.deepEqual(mine.map((v) => v.id), ["a1"]);
+  await assert.rejects(createYoutube({ fetchImpl: async () => ({ ok: false, status: 403 }), base: "http://stub", key: "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ" }).search("x"), /quota|not allowed/);
+});
+
+test("Civitai image posts carry the prompt and the reactions", async () => {
+  const civ = createCivitai({ fetchImpl: async (url) => {
+    assert.ok(String(url).includes("modelVersionId=42"));
+    return ok({ items: [{ id: 9, username: "pat", nsfw: true, stats: { likeCount: 10, heartCount: 5, commentCount: 2 }, meta: { prompt: "a  portrait,\nsoft light" } }, { id: 10, stats: {}, meta: {} }] });
+  }, base: "http://stub" });
+  const posts = await civ.images(42);
+  assert.equal(posts.length, 1, "posts without a prompt are dropped");
+  assert.equal(posts[0].prompt, "a portrait, soft light");
+  assert.equal(posts[0].reactions, 15);
+  assert.equal(posts[0].url, "https://civitai.com/images/9");
 });

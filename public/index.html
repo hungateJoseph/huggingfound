@@ -95,6 +95,18 @@
         <h2 class="section-title">On Civitai</h2>
         <p class="muted small" id="civitai-note"></p>
         <div id="civitai-found" class="cards"></div>
+        <h2 class="section-title">On GitHub</h2>
+        <p class="muted small" id="github-note"></p>
+        <ul id="github-found" class="posts"></ul>
+        <h2 class="section-title">On Hacker News</h2>
+        <p class="muted small" id="hn-note"></p>
+        <ul id="hn-found" class="posts"></ul>
+        <h2 class="section-title">On Lemmy</h2>
+        <p class="muted small" id="lemmy-note"></p>
+        <ul id="lemmy-found" class="posts"></ul>
+        <h2 class="section-title">On YouTube</h2>
+        <p class="muted small" id="youtube-note"></p>
+        <ul id="youtube-found" class="posts"></ul>
         <h2 class="section-title">On Reddit</h2>
         <p class="muted small" id="reddit-note"></p>
         <ul id="reddit-found" class="posts"></ul>
@@ -148,6 +160,26 @@
       <div class="actions">
         <button class="primary" id="save-image-server">Save</button>
         <button class="ghost" id="clear-image-server">Use this computer</button>
+      </div>
+      <label class="field">
+        <span>GitHub token (optional)</span>
+        <input type="password" id="github-token" autocomplete="off" placeholder="github_pat_... or ghp_...">
+        <small class="muted">GitHub issues on llama.cpp, Ollama, ComfyUI and other projects are searched without a token, ten searches a minute. A token from <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> with no scopes at all raises that to thirty.</small>
+      </label>
+      <p class="muted small" id="github-status"></p>
+      <div class="actions">
+        <button class="primary" id="save-github">Save</button>
+        <button class="ghost" id="clear-github">Remove</button>
+      </div>
+      <label class="field">
+        <span>YouTube API key (optional)</span>
+        <input type="password" id="youtube-key" autocomplete="off" placeholder="AIza...">
+        <small class="muted">Video reviews need a free key: in <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">Google Cloud</a> enable "YouTube Data API v3" on any project, then create an API key under Credentials and paste it here. The free quota allows about a hundred searches a day.</small>
+      </label>
+      <p class="muted small" id="youtube-status"></p>
+      <div class="actions">
+        <button class="primary" id="save-youtube">Save</button>
+        <button class="ghost" id="clear-youtube">Remove</button>
       </div>
       <label class="field">
         <span>Reddit app id (optional)</span>

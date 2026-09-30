@@ -12,7 +12,7 @@ import { buildPlan } from "./plans.js";
 import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
-import { createCivitai, createReddit, matchKnown } from "./sources.js";
+import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -20,11 +20,15 @@ const VOICES_CACHE = new Map();
 const RUNNER_NAMES = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".txt": "text/plain; charset=utf-8" };
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase } = {}) {
   const machine = describeMachine();
   const env = () => readEnv(envFile);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
   const civitai = createCivitai({ fetchImpl, base: civitaiBase });
+  const hn = createHackerNews({ fetchImpl, base: hnBase });
+  const lemmy = createLemmy({ fetchImpl, base: lemmyBase });
+  const github = () => createGithub({ fetchImpl, base: githubBase, token: env().GITHUB_TOKEN || "" });
+  const youtube = () => createYoutube({ fetchImpl, base: youtubeBase, key: env().YOUTUBE_API_KEY || "" });
   let redditClient = { id: null, client: null };
   const reddit = () => {
     const id = env().REDDIT_CLIENT_ID || "";
@@ -60,6 +64,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         token: saved.HF_TOKEN ? mask(saved.HF_TOKEN) : "",
         imageServer: saved.IMAGE_SERVER || "",
         redditApp: saved.REDDIT_CLIENT_ID ? mask(saved.REDDIT_CLIENT_ID) : "",
+        githubToken: saved.GITHUB_TOKEN ? mask(saved.GITHUB_TOKEN) : "",
+        youtubeKey: saved.YOUTUBE_API_KEY ? mask(saved.YOUTUBE_API_KEY) : "",
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
         voices: voicesMeta(),
@@ -73,6 +79,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if ("HF_TOKEN" in body) {
         if (typeof body.HF_TOKEN !== "string") return send(res, 400, { error: "HF_TOKEN must be a string" });
         updates.HF_TOKEN = body.HF_TOKEN.trim();
+      }
+      for (const [key, pattern, what] of [["GITHUB_TOKEN", /^[\w-]{20,255}$/, "a GitHub token"], ["YOUTUBE_API_KEY", /^[\w-]{20,80}$/, "a YouTube API key"]]) {
+        if (key in body) {
+          if (typeof body[key] !== "string") return send(res, 400, { error: `${key} must be a string` });
+          const value = body[key].trim();
+          if (value && !pattern.test(value)) return send(res, 400, { error: `That does not look like ${what}` });
+          updates[key] = value;
+        }
       }
       if ("REDDIT_CLIENT_ID" in body) {
         if (typeof body.REDDIT_CLIENT_ID !== "string") return send(res, 400, { error: "REDDIT_CLIENT_ID must be a string" });
@@ -146,19 +160,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const q = url.searchParams.get("q") ?? "";
       const index = readVoices(voicesFile);
       const known = [...new Set([...Object.keys(index), ...((readScan(scanFile)?.models ?? []).map((m) => m.id))])];
-      // Civitai and Reddit are asked live; either failing is reported, not fatal.
-      const [civ, red] = await Promise.allSettled([civitai.search(q), reddit().configured() ? reddit().search(q) : Promise.reject(new Error("no app id"))]);
-      const civitaiResult = civ.status === "fulfilled" ? civ.value.map((m) => ({ ...m, matched: matchKnown(m.name, known) })) : [];
-      const redditResult = red.status === "fulfilled" ? red.value.map((p) => ({ ...p, matched: matchKnown(`${p.title} ${p.excerpt}`, known) })) : [];
-      return send(res, 200, {
-        q,
-        hits: searchVoices(index, q).slice(0, 100),
-        civitai: civitaiResult,
-        civitaiError: civ.status === "rejected" ? civ.reason.message : null,
-        reddit: redditResult,
-        redditError: red.status === "rejected" ? (reddit().configured() ? red.reason.message : "") : null,
-        redditConfigured: reddit().configured(),
-      });
+      // Every outside source is asked at once; one failing is reported, not fatal.
+      const started = Date.now();
+      const asked = await askSources(q, known, { civitai: true, reddit: true, github: true, hn: true, lemmy: true, youtube: true });
+      return send(res, 200, { q, hits: searchVoices(index, q).slice(0, 100), took: Date.now() - started, ...asked });
     }
     // Off-Hub voices for one model: its Civitai page and Reddit posts, cached for a week.
     if (req.method === "GET" && url.pathname === "/api/voices/web") {
@@ -166,23 +171,22 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
       const index = readVoices(voicesFile);
       const entry = index[id] ?? { at: null, card: "", discussions: [] };
-      const out = { id, civitai: [], civitaiError: null, reddit: [], redditError: null, redditConfigured: reddit().configured() };
-      if (isFresh(entry.web)) {
-        Object.assign(out, entry.web.data);
+      const wantImages = url.searchParams.get("images") === "1";
+      let out;
+      if (isFresh(entry.web) && entry.web.data.version === 2) {
+        out = { id, ...entry.web.data, cached: true };
       } else {
-        const wantImages = url.searchParams.get("images") === "1";
-        const [civ, red] = await Promise.allSettled([wantImages ? civitai.forModel(id) : Promise.resolve([]), reddit().configured() ? reddit().forModel(id) : Promise.resolve([])]);
-        if (civ.status === "fulfilled") out.civitai = civ.value;
-        else out.civitaiError = civ.reason.message;
-        if (red.status === "fulfilled") out.reddit = red.value;
-        else out.redditError = red.reason.message;
-        // Cache only what came back; an error is asked again next time.
-        if (!out.civitaiError && !out.redditError) {
-          index[id] = { ...entry, web: { at: new Date().toISOString(), data: { civitai: out.civitai, reddit: out.reddit } } };
+        const started = Date.now();
+        out = { id, ...(await askSourcesForModel(id, wantImages)), took: Date.now() - started };
+        // Cache only when every source answered; an error is asked again next time.
+        const errors = ["civitaiError", "redditError", "githubError", "hnError", "lemmyError", "youtubeError"].filter((k) => out[k]);
+        if (!errors.length) {
+          index[id] = { ...entry, web: { at: new Date().toISOString(), data: { ...out, version: 2 } } };
           writeVoices(index, voicesFile);
         }
       }
       out.redditConfigured = reddit().configured();
+      out.youtubeConfigured = youtube().configured();
       return send(res, 200, out);
     }
     // The full picture for one model: card excerpt and discussions with their first comments.
@@ -326,6 +330,59 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     } catch {
       return { url, model: null };
     }
+  }
+
+  // Asks the outside sources for a topic, in parallel, and tags each result
+  // with the scanned models it names. Unconfigured sources say so.
+  async function askSources(q, known, which) {
+    const tag = (text) => matchKnown(text, known);
+    const jobs = {
+      civitai: () => civitai.search(q),
+      reddit: () => reddit().search(q),
+      github: () => github().search(q),
+      hn: () => hn.search(q),
+      lemmy: () => lemmy.search(q),
+      youtube: () => youtube().search(q),
+    };
+    const configured = { civitai: true, reddit: reddit().configured(), github: true, hn: true, lemmy: true, youtube: youtube().configured() };
+    const names = Object.keys(jobs).filter((k) => which[k]);
+    const settled = await Promise.allSettled(names.map((k) => (configured[k] ? jobs[k]() : Promise.reject(new Error("not configured")))));
+    const out = {};
+    names.forEach((k, i) => {
+      const r = settled[i];
+      out[k] = r.status === "fulfilled" ? r.value.map((item) => ({ ...item, matched: tag(`${item.title ?? item.name ?? ""} ${item.excerpt ?? item.description ?? ""}`) })) : [];
+      out[`${k}Error`] = r.status === "rejected" ? (configured[k] ? r.reason.message : "") : null;
+      out[`${k}Configured`] = configured[k];
+    });
+    return out;
+  }
+
+  // The same sources asked about one model by name, plus the prompts people
+  // post on Civitai under its best-matching page.
+  async function askSourcesForModel(id, wantImages) {
+    const out = { civitai: [], civitaiError: null, civitaiPrompts: [], reddit: [], redditError: null, github: [], githubError: null, hn: [], hnError: null, lemmy: [], lemmyError: null, youtube: [], youtubeError: null };
+    const jobs = [
+      ["civitai", wantImages ? civitai.forModel(id) : Promise.resolve([])],
+      ["reddit", reddit().configured() ? reddit().forModel(id) : Promise.resolve([])],
+      ["github", github().forModel(id)],
+      ["hn", hn.forModel(id)],
+      ["lemmy", lemmy.forModel(id)],
+      ["youtube", youtube().configured() ? youtube().forModel(id) : Promise.resolve([])],
+    ];
+    const settled = await Promise.allSettled(jobs.map(([, p]) => p));
+    jobs.forEach(([k], i) => {
+      if (settled[i].status === "fulfilled") out[k] = settled[i].value;
+      else out[`${k}Error`] = settled[i].reason.message;
+    });
+    const top = out.civitai[0];
+    if (top?.versionIds?.length) {
+      try {
+        out.civitaiPrompts = await civitai.images(top.versionIds[0]);
+      } catch (err) {
+        out.civitaiError = err.message;
+      }
+    }
+    return out;
   }
 
   function voicesMeta() {
