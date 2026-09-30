@@ -36,6 +36,8 @@ test("extractiveSummary lifts opinionated lines, users first, and never quotes n
   assert.ok(s.long.some((l) => /Refuses some prompts/.test(l)));
   assert.ok(s.long.at(-1).startsWith("Author: "), "the author's claim comes last");
   assert.ok(!s.long.some((l) => /Download the GGUF/.test(l)), "download instructions are noise");
+  const asked = extractiveSummary({ card: "", discussions: [{ num: 1, title: "How much VRAM does the Q4 need?", comments: 5 }, { num: 2, title: "Great quality at Q4, fast on a laptop", comments: 1 }] });
+  assert.match(asked.short[0], /Great quality/, "an opinion outranks a question, however discussed");
   const quiet = extractiveSummary({ card: "A tiny test model for the unit suite.", discussions: [] });
   assert.deepEqual(quiet.short, ["Author: A tiny test model for the unit suite."]);
   assert.deepEqual(extractiveSummary({ card: "", discussions: [] }).short, []);

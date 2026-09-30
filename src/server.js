@@ -70,6 +70,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
         voices: voicesMeta(),
+        summarizer: writtenSummaries ? await summarizerModel(fetchImpl) : null,
         picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })),
         speedTier: speedTier(machine),
       });

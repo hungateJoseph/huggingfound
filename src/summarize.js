@@ -58,7 +58,9 @@ export function extractiveSummary(entry, web = null) {
       if (NOISE.test(s)) continue;
       const hits = (s.match(new RegExp(OPINION.source, "gi")) ?? []).length;
       if (!hits && !/^People make:|thumbs up/.test(s)) continue;
-      scored.push({ s, score: (hits + 0.5) * u.weight * (u.author ? 0.5 : 1), author: Boolean(u.author) });
+      // A question ("how much VRAM?") is not an opinion; it only counts when nothing else does.
+      const question = /\?\s*$/.test(s) || /^(how|what|which|can|does|is there|any(one)?|why|where)\b/i.test(s);
+      scored.push({ s, score: (hits + 0.5) * u.weight * (u.author ? 0.5 : 1) * (question ? 0.15 : 1), author: Boolean(u.author) });
     }
   }
   scored.sort((a, b) => b.score - a.score);

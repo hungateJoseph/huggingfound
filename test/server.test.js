@@ -101,6 +101,7 @@ test("serves the page and the starting state", async () => {
   assert.equal(s.categories.length, 9);
   assert.ok(s.picks.every((p) => typeof p.speed === "string" && p.speed.length > 0));
   assert.equal(s.scan, null);
+  assert.equal(s.summarizer, null, "written summaries are off in the test server");
   assert.equal(s.token, "");
   assert.ok(s.picks.length >= 6);
   assert.ok(!s.envFile.startsWith(os.homedir()) || s.envFile.startsWith("~"));

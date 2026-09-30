@@ -36,6 +36,7 @@ async function load() {
   $("#github-status").textContent = s.githubToken ? `A token is saved (${s.githubToken}); thirty GitHub searches a minute.` : "No token; ten GitHub searches a minute.";
   $("#youtube-status").textContent = s.youtubeKey ? `A key is saved (${s.youtubeKey}); YouTube is searched with it.` : "No key; YouTube is skipped.";
   state.voices = s.voices;
+  state.summarizer = s.summarizer;
   renderVoicesStatus();
   $("#image-server").value = s.imageServer;
   renderImageServerStatus();
@@ -154,11 +155,48 @@ $("#trait-form").addEventListener("submit", async (e) => {
   }
 });
 
+const SUMMARIZER_PULL = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M";
+
+// Pulls a small chat model through the same steps a model plan uses, so the
+// summaries can be written rather than lifted.
+$("#get-summarizer").addEventListener("click", async () => {
+  if (!confirm(`HuggingFound will run:\n\nollama pull ${SUMMARIZER_PULL}\n\nabout 2 GB, into Ollama's store. Continue?`)) return;
+  const btn = $("#get-summarizer");
+  btn.disabled = true;
+  btn.textContent = "Installing";
+  const log = $("#voices-log");
+  log.hidden = false;
+  log.textContent = "";
+  try {
+    if (!state.runners.ollama.installed) throw new Error("Ollama is not installed yet; set up any chat model from the Easy list first");
+    if (!state.runners.ollama.running) {
+      const { id } = await api.post("/api/run", { kind: "start-ollama", args: {} });
+      const r = await follow(id, (line) => (log.textContent += line + "\n"));
+      if (r.status !== "done") throw new Error("Ollama did not start");
+    }
+    const { id } = await api.post("/api/run", { kind: "pull-model", args: { name: SUMMARIZER_PULL } });
+    const r = await follow(id, (line) => {
+      log.textContent += line + "\n";
+      log.scrollTop = log.scrollHeight;
+    });
+    if (r.status !== "done") throw new Error("the download did not finish");
+    await load();
+    notice("The summarizing model is installed. Click \"Gather what people say\" to write the summaries.", "ok");
+  } catch (err) {
+    notice(`Could not install the summarizing model: ${err.message}`, "bad");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Install a small model to write the summaries (2 GB)";
+  }
+});
+
 function renderVoicesStatus() {
   const v = state.voices;
+  $("#get-summarizer").hidden = Boolean(state.summarizer) || !state.runners?.ollama?.installed;
+  const writer = state.summarizer ? `${state.summarizer} writes the lines.` : "No chat model is installed in Ollama, so the lines are lifted from the comments rather than written.";
   $("#voices-status").textContent = v?.count
-    ? `Gathered for ${v.count} model${v.count === 1 ? "" : "s"} (last ${relative(v.at)}). Cards carry a summary; the search box also finds models by what people say.`
-    : "Reads each scanned model's card and community discussions and sums them up in a line or two on every card. A chat model installed in Ollama writes the lines; without one they are lifted from the comments.";
+    ? `Gathered for ${v.count} model${v.count === 1 ? "" : "s"} (last ${relative(v.at)}). Cards carry a summary; the search box also finds models by what people say. ${writer}`
+    : `Reads each scanned model's card and community discussions and sums them up in a line or two on every card. ${writer}`;
 }
 
 $("#gather-voices").addEventListener("click", async () => {
