@@ -32,6 +32,8 @@ async function load() {
   $("#env-path").textContent = s.envFile;
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
   state.imageServer = s.imageServer;
+  state.voices = s.voices;
+  renderVoicesStatus();
   $("#image-server").value = s.imageServer;
   renderImageServerStatus();
   renderRunners();
@@ -117,28 +119,79 @@ function renderTabs() {
 
 for (const id of ["#only-runnable", "#only-new", "#search", "#sort", "#since"]) $(id).addEventListener("input", render);
 
-// A live search on Hugging Face for whatever traits the user types.
+// A live search on Hugging Face for whatever traits the user types, or a
+// search through what people say about the models gathered so far.
 $("#trait-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("#trait").value.trim();
   const btn = $("#trait-go");
   if (!q) {
     state.found = null;
+    notice("");
     render();
     return;
   }
   btn.disabled = true;
   btn.textContent = "Searching";
   try {
-    const result = await api.get(`/api/search?q=${encodeURIComponent(q)}`);
-    state.found = result;
-    notice("");
+    if ($("#trait-mode").value === "voices") {
+      const { hits } = await api.get(`/api/voices/search?q=${encodeURIComponent(q)}`);
+      const known = new Map([...state.models, ...(state.found?.models ?? [])].map((m) => [m.id, m]));
+      const models = hits.filter((h) => known.has(h.id)).map((h) => ({ ...known.get(h.id), voiceMatch: h.snippet }));
+      state.found = { q: `what people say: ${q}`, models, voices: true, unknown: hits.length - models.length };
+      notice(hits.length ? "" : state.voices?.count ? `Nobody in the gathered cards or discussions says "${q}".` : "Nothing gathered yet. Click \"Gather what people say\" first.", hits.length ? "info" : "warn");
+    } else {
+      const result = await api.get(`/api/search?q=${encodeURIComponent(q)}`);
+      state.found = result;
+      notice("");
+    }
   } catch (err) {
     notice(`The search did not finish: ${err.message}`, "bad");
   } finally {
     btn.disabled = false;
     btn.textContent = "Search";
     render();
+  }
+});
+
+$("#trait-mode").addEventListener("change", () => {
+  $("#trait").placeholder = $("#trait-mode").value === "voices"
+    ? "Words people use about a model: roleplay, coding help, japanese, blurry hands..."
+    : "Search Hugging Face for traits: uncensored roleplay 7b, japanese, medical, tiny, vision...";
+});
+
+function renderVoicesStatus() {
+  const v = state.voices;
+  $("#voices-status").textContent = v?.count
+    ? `Gathered for ${v.count} model${v.count === 1 ? "" : "s"} (last ${relative(v.at)}). Cards show a line of it; pick "What people say" in the search box to search it.`
+    : "Reads each scanned model's card and community discussions, so you can search by what people say about a model.";
+}
+
+$("#gather-voices").addEventListener("click", async () => {
+  const btn = $("#gather-voices");
+  btn.disabled = true;
+  btn.textContent = "Gathering";
+  const log = $("#voices-log");
+  log.hidden = false;
+  log.textContent = "";
+  try {
+    const ids = (state.found?.models ?? []).map((m) => m.id);
+    const { id } = await api.post("/api/voices/gather", { ids });
+    await follow(id, (line) => {
+      log.textContent += line + "\n";
+      log.scrollTop = log.scrollHeight;
+    });
+    await load();
+    if (state.scanAt) {
+      const saved = await api.get("/api/models");
+      state.models = saved.models;
+    }
+    render();
+  } catch (err) {
+    notice(`Gathering stopped: ${err.message}`, "bad");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Gather what people say";
   }
 });
 
@@ -167,14 +220,14 @@ function render() {
   }
   blurb.textContent = cat?.blurb ?? "";
 
-  const keep = (m) => (!onlyRunnable || m.runner?.easy) && (!q || m.id.toLowerCase().includes(q));
+  const keep = (m) => (!onlyRunnable || m.runner?.easy) && (!q || m.id.toLowerCase().includes(q) || (m.voice?.text ?? "").toLowerCase().includes(q));
 
   // Search results ignore the category tab: the search itself said what
   // was wanted. Sort and recency still apply.
   const found = state.found ? sortModels(state.found.models.filter(keep)) : [];
   $("#found").innerHTML = found.map(modelCard).join("");
   $("#found-title").hidden = !state.found;
-  if (state.found) $("#found-title").textContent = `Search: ${state.found.q} (${found.length} of ${state.found.models.length} shown)`;
+  if (state.found) $("#found-title").textContent = `Search: ${state.found.q} (${found.length} of ${state.found.models.length} shown${state.found.unknown ? `, ${state.found.unknown} more not in the current lists` : ""})`;
 
   const picks = onlyNew || Number($("#since").value) ? [] : state.picks.filter((p) => p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
   $("#picks").innerHTML = picks.map(pickCard).join("");
@@ -221,6 +274,7 @@ function modelCard(m) {
     <div class="name">${esc(m.name)}</div>
     <div class="author">${esc(m.author)}</div>
     <div class="summary">${esc(m.summary)}</div>
+    ${m.voiceMatch ? `<div class="voice match">${m.voiceMatch.from === "discussion" ? "A discussion titled: " : "The card says: "}${esc(m.voiceMatch.text)}</div>` : m.voice?.text ? `<div class="voice">${esc(m.voice.text)}</div>` : ""}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
@@ -289,12 +343,28 @@ function renderModel(model, plan) {
   if (plan.fit.level === "no") parts.push(`<div class="notice warn">This file is larger than the memory this computer has to spare. It may still download, but it will be slow or fail to load. A smaller model is a better first try.</div>`);
   parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
   parts.push(`<div class="try" id="try"></div>`);
+  parts.push(`<div class="voices" id="voices"><h3>What people say</h3><p class="muted small">Reading the model card and the community discussions</p></div>`);
   body.innerHTML = parts.join("");
+  loadVoices(model).catch((err) => {
+    const box = $("#voices");
+    if (box) box.innerHTML = `<h3>What people say</h3><p class="muted small">Could not read the discussions: ${esc(err.message)}</p>`;
+  });
 
   for (const btn of body.querySelectorAll(".go")) {
     btn.addEventListener("click", () => runStep(model, plan, Number(btn.dataset.index)));
   }
   renderTry(model, plan);
+}
+
+async function loadVoices(model) {
+  const v = await api.get(`/api/voices?id=${encodeURIComponent(model.id)}`);
+  const box = $("#voices");
+  if (!box || state.open !== model.id) return;
+  const card = v.card ? `<details ${v.card.length < 400 ? "open" : ""}><summary>What the author's model card says</summary><p class="card-text">${esc(v.card)}</p></details>` : `<p class="muted small">This repository has no model card text.</p>`;
+  const threads = v.discussions.length
+    ? `<ul>${v.discussions.slice(0, 12).map((d) => `<li><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a> <span class="who">${d.comments} comment${d.comments === 1 ? "" : "s"}${d.status === "closed" ? ", closed" : ""}</span>${(d.comments_text ?? []).map((c) => `<p>${esc(c.author ? c.author + ": " : "")}${esc(c.text)}</p>`).join("")}</li>`).join("")}</ul>`
+    : `<p class="muted small">No community discussions on this repository yet.</p>`;
+  box.innerHTML = `<h3>What people say</h3>${card}${threads}<p class="muted small">From the community tab on Hugging Face; these are other users' words, not a review.</p>`;
 }
 
 function stepHtml(s, i) {

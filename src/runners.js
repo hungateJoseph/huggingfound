@@ -656,6 +656,33 @@ export function recordTiming(key, timing) {
   fs.writeFileSync(TIMINGS_FILE, JSON.stringify(all, null, 2));
 }
 
+// A run driven by server code rather than a command: `work(emit)` does the
+// job and the page follows the same live log.
+export function startCustomRun(text, work) {
+  const id = String(nextRun++);
+  const run = { id, kind: "custom", status: "running", lines: [], listeners: new Set(), result: null, startedAt: Date.now() };
+  runs.set(id, run);
+  const emit = (line) => {
+    run.lines.push(line);
+    if (run.lines.length > 2000) run.lines.shift();
+    for (const l of run.listeners) l(line);
+  };
+  const finish = (status, message) => {
+    run.status = status;
+    if (message) emit(message);
+    for (const l of run.listeners) l(null);
+  };
+  emit(text);
+  Promise.resolve()
+    .then(() => work(emit))
+    .then((result) => {
+      run.result = result ?? null;
+      finish("done", "Done.");
+    })
+    .catch((err) => finish("failed", `Failed: ${err.message}`));
+  return run;
+}
+
 export function getRun(id) {
   return runs.get(id);
 }

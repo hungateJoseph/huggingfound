@@ -256,6 +256,37 @@ test("the image server setting is validated, checked, used for pictures and clea
   assert.deepEqual(Object.keys(local.qualities), ["fast", "default", "max"]);
 });
 
+test("gathering what people say indexes the scan, and searches and cards use it", async () => {
+  const { id } = await (await post("/api/voices/gather", { ids: ["not/scanned"] })).json();
+  const events = await readEvents(`${base}/api/runs/${id}`);
+  assert.equal(events.at(-1).status, "done", JSON.stringify(events));
+  assert.ok(events.some((e) => /have community discussions/.test(e.line ?? "")));
+  const index = JSON.parse(fs.readFileSync(path.join(process.env.HUGGINGFOUND_HOME, "voices.json"), "utf8"));
+  assert.ok(index["bartowski/Llama-3.2-3B-Instruct-GGUF"].discussions.length === 2);
+  assert.ok(index["not/scanned"], "ids the page passes along are gathered too");
+
+  const found = await (await get("/api/voices/search?q=roleplay")).json();
+  assert.deepEqual(found.hits.map((h) => h.id), ["bartowski/Llama-3.2-3B-Instruct-GGUF"]);
+  assert.equal(found.hits[0].snippet.text, "Works well for roleplay and story writing");
+  const rust = await (await get("/api/voices/search?q=rust%20coding")).json();
+  assert.deepEqual(rust.hits.map((h) => h.id), ["bartowski/Qwen2.5-Coder-7B-Instruct-GGUF"]);
+  assert.deepEqual((await (await get("/api/voices/search?q=hentai")).json()).hits, []);
+
+  const { models } = await (await get("/api/models")).json();
+  const llama = models.find((m) => m.id === "bartowski/Llama-3.2-3B-Instruct-GGUF");
+  assert.equal(llama.voice.text, "Works well for roleplay and story writing");
+  assert.equal(llama.talked, 2);
+  const state = await (await get("/api/state")).json();
+  assert.ok(state.voices.count >= MODELS.length);
+
+  const detail = await (await get("/api/voices?id=bartowski/Llama-3.2-3B-Instruct-GGUF")).json();
+  assert.match(detail.card, /great for quick answers/);
+  assert.equal(detail.discussions[0].url, "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/discussions/3");
+  assert.equal(detail.discussions[0].comments_text[0].author, "sam");
+  assert.match(detail.discussions[0].comments_text[0].text, /keeps characters straight/);
+  assert.equal((await get("/api/voices?id=bad")).status, 400);
+});
+
 test("a diffusers repository downloads its parts into one folder and can be removed as one", async () => {
   const id = "John6666/pony-realism-v23-sdxl";
   const before = await (await get(`/api/model?id=${id}`)).json();

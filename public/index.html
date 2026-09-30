@@ -33,6 +33,11 @@
         <button class="primary" id="scan">Scan Hugging Face</button>
         <span class="muted small" id="scan-status">No scan yet. The curated picks below work without one.</span>
       </div>
+      <div class="scan-row">
+        <button class="ghost" id="gather-voices">Gather what people say</button>
+        <span class="muted small" id="voices-status">Reads each scanned model's card and community discussions, so you can search by what people say about a model.</span>
+      </div>
+      <pre class="log small" id="voices-log" hidden></pre>
     </section>
 
     <nav class="tabs" id="tabs"></nav>
@@ -73,9 +78,13 @@
             <option value="90">Last 3 months</option>
           </select>
         </label>
-        <input type="search" id="search" placeholder="Filter these by name">
+        <input type="search" id="search" placeholder="Filter these by name or by what people say">
       </div>
       <form class="trait-search" id="trait-form">
+        <select id="trait-mode" aria-label="What to search">
+          <option value="hub">Model names on Hugging Face</option>
+          <option value="voices">What people say (gathered)</option>
+        </select>
         <input type="search" id="trait" placeholder="Search Hugging Face for traits: uncensored roleplay 7b, japanese, medical, tiny, vision...">
         <button class="primary" type="submit" id="trait-go">Search</button>
       </form>

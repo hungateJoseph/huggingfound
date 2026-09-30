@@ -123,6 +123,29 @@ await step("a trait search asks the hub and lists what it finds", async () => {
   await page.waitForFunction(() => document.querySelector("#found-title").hidden && !document.querySelector("#found .model"));
 });
 
+await step("gathering what people say adds a line to cards and a searchable index", async () => {
+  await page.click("#gather-voices");
+  await page.waitForFunction(() => /Gathered for \d+ models/.test(document.querySelector("#voices-status").textContent));
+  await page.click(".tab[data-tab=easy]");
+  const card = page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" });
+  assert.match(await card.locator(".voice").innerText(), /roleplay and story writing/);
+  await page.selectOption("#trait-mode", "voices");
+  await page.fill("#trait", "rust coding");
+  await page.click("#trait-go");
+  await page.waitForSelector("#found .model");
+  const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(names, ["Qwen2.5-Coder-7B-Instruct-GGUF"]);
+  assert.match(await page.locator("#found .model .voice.match").innerText(), /Rust coding help/);
+  await page.fill("#trait", "hentai");
+  await page.click("#trait-go");
+  await page.waitForSelector("#notice:not([hidden])");
+  assert.match(await page.locator("#notice").innerText(), /Nobody in the gathered/);
+  await page.fill("#trait", "");
+  await page.click("#trait-go");
+  await page.selectOption("#trait-mode", "hub");
+  await page.waitForFunction(() => document.querySelector("#found-title").hidden);
+});
+
 await step("opening a model shows its plan with the install, start and pull steps", async () => {
   await page.click(".tab[data-tab=easy]");
   await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).click();
@@ -133,6 +156,8 @@ await step("opening a model shows its plan with the install, start and pull step
   assert.match(await page.locator("#modal-body .spec").innerText(), /Speed here[\s\S]*words a second/i);
   assert.match(await page.locator("#steps .step code").first().innerText(), /ollama/);
   assert.match(await page.locator("#try").innerText(), /Run the steps above/);
+  await page.waitForFunction(() => /roleplay and story writing/.test(document.querySelector("#voices")?.textContent ?? ""));
+  assert.match(await page.locator("#voices").innerText(), /keeps characters straight/);
 });
 
 await step("running a step asks first, and a dismissed prompt runs nothing", async () => {

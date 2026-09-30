@@ -79,6 +79,27 @@ export function tinySafetensors(names) {
   return Buffer.concat([len, json, ...chunks]);
 }
 
+export const CARDS = {
+  "bartowski/Llama-3.2-3B-Instruct-GGUF": "---\nlicense: llama3.2\ntags:\n- llama\n---\n# Llama 3.2 3B Instruct\n\nA small assistant that is **great for quick answers** and summaries. Runs on a laptop.\n\n```sh\nollama run x\n```\n",
+  "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF": "# Qwen2.5 Coder\n\nTrained on code. People use it for [coding help](https://example.com) and refactoring.",
+  "ggerganov/whisper.cpp": "# whisper.cpp models\n\nggml files for whisper.cpp. Transcribes recordings offline.",
+};
+
+export const DISCUSSIONS = {
+  "bartowski/Llama-3.2-3B-Instruct-GGUF": [
+    { num: 3, title: "Works well for roleplay and story writing", status: "open", numComments: 4, isPullRequest: false },
+    { num: 2, title: "Add Q3 quants", status: "open", numComments: 0, isPullRequest: true },
+    { num: 1, title: "Context length?", status: "closed", numComments: 2, isPullRequest: false },
+  ],
+  "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF": [{ num: 1, title: "Best local model for Rust coding help", status: "open", numComments: 7, isPullRequest: false }],
+};
+
+const THREADS = {
+  "bartowski/Llama-3.2-3B-Instruct-GGUF/3": { num: 3, title: "Works well for roleplay and story writing", status: "open", events: [{ type: "comment", author: { name: "sam" }, data: { latest: { raw: "Tried it for **roleplay** and it keeps characters straight.\nNice." } } }, { type: "title-change" }, { type: "comment", author: { name: "kit" }, data: { latest: { raw: "Same here, good story writing." } } }] },
+  "bartowski/Llama-3.2-3B-Instruct-GGUF/1": { num: 1, title: "Context length?", status: "closed", events: [{ type: "comment", author: { name: "jo" }, data: { latest: { raw: "128k." } } }] },
+  "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/1": { num: 1, title: "Best local model for Rust coding help", status: "open", events: [{ type: "comment", author: { name: "ada" }, data: { latest: { raw: "It explains borrow checker errors better than the 3B." } } }] },
+};
+
 export function startStubHub({ extraModels = [] } = {}) {
   const requests = [];
   const server = http.createServer((req, res) => {
@@ -95,6 +116,21 @@ export function startStubHub({ extraModels = [] } = {}) {
       const search = (url.searchParams.get("search") ?? "").toLowerCase();
       if (search) items = items.filter((m) => search.split(/\s+/).every((t) => m.id.toLowerCase().includes(t)));
       return json(res, 200, items.slice(0, Number(url.searchParams.get("limit") || 100)));
+    }
+    const disc = /^\/api\/models\/([^/]+\/[^/]+)\/discussions(?:\/(\d+))?$/.exec(url.pathname);
+    if (disc) {
+      if (disc[2]) {
+        const t = THREADS[`${disc[1]}/${disc[2]}`];
+        return t ? json(res, 200, t) : json(res, 404, { error: "not found" });
+      }
+      return json(res, 200, { discussions: DISCUSSIONS[disc[1]] ?? [], count: (DISCUSSIONS[disc[1]] ?? []).length });
+    }
+    const raw = /^\/([^/]+\/[^/]+)\/raw\/main\/README\.md$/.exec(url.pathname);
+    if (raw) {
+      const card = CARDS[raw[1]];
+      if (card === undefined) return json(res, 404, { error: "not found" });
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      return res.end(card);
     }
     const detail = /^\/api\/models\/([^/]+\/[^/]+)$/.exec(url.pathname);
     if (detail) {

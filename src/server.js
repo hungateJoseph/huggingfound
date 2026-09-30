@@ -9,14 +9,17 @@ import { createHub } from "./hf.js";
 import { describeMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startRun, stopImageServer, storage, which } from "./runners.js";
+import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
+import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
+// The gathered voices index per file, re-read only when the file changes.
+const VOICES_CACHE = new Map();
 const RUNNER_NAMES = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".txt": "text/plain; charset=utf-8" };
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json") } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json") } = {}) {
   const machine = describeMachine();
   const env = () => readEnv(envFile);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
@@ -50,6 +53,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         imageServer: saved.IMAGE_SERVER || "",
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
+        voices: voicesMeta(),
         picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })),
         speedTier: speedTier(machine),
       });
@@ -86,10 +90,66 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const q = url.searchParams.get("q") ?? "";
       if (!q.trim()) return send(res, 400, { error: "Say what you are looking for" });
       const models = await hub().search(q);
-      return send(res, 200, { q, models: models.map(withSpeed) });
+      return send(res, 200, { q, models: models.map(withSpeed).map(withVoice) });
     }
     if (req.method === "GET" && url.pathname === "/api/models") {
-      return send(res, 200, readScan(scanFile) ?? { at: null, models: [] });
+      const scan = readScan(scanFile) ?? { at: null, models: [] };
+      return send(res, 200, { ...scan, models: scan.models.map(withVoice) });
+    }
+    // Gathers what people say about every model in the scan (and any
+    // search results the page asks for), a card and a discussion list each.
+    if (req.method === "POST" && url.pathname === "/api/voices/gather") {
+      const body = await json(req);
+      const scan = readScan(scanFile) ?? { models: [] };
+      const ids = [...new Set([...scan.models.map((m) => m.id), ...(Array.isArray(body.ids) ? body.ids.filter((id) => /^[\w.-]+\/[\w.-]+$/.test(String(id))) : [])])];
+      const index = readVoices(voicesFile);
+      const todo = ids.filter((id) => !isFresh(index[id]));
+      const run = startCustomRun(`Gathering what people say about ${todo.length} model${todo.length === 1 ? "" : "s"} (${ids.length - todo.length} already gathered this week)`, async (emit) => {
+        let done = 0;
+        const h = hub();
+        const worker = async () => {
+          for (;;) {
+            const id = todo.shift();
+            if (!id) return;
+            index[id] = await gatherVoices(h, id);
+            done++;
+            if (done % 10 === 0 || done === ids.length) {
+              writeVoices(index, voicesFile);
+              emit(`${done} gathered`);
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: 4 }, worker));
+        writeVoices(index, voicesFile);
+        const withTalk = ids.filter((id) => (index[id]?.discussions?.length ?? 0) > 0).length;
+        emit(`${ids.length} models covered; ${withTalk} have community discussions.`);
+      });
+      return send(res, 200, { id: run.id, todo: todo.length, total: ids.length });
+    }
+    // Which models people describe with these words.
+    if (req.method === "GET" && url.pathname === "/api/voices/search") {
+      const q = url.searchParams.get("q") ?? "";
+      const index = readVoices(voicesFile);
+      return send(res, 200, { q, hits: searchVoices(index, q).slice(0, 100) });
+    }
+    // The full picture for one model: card excerpt and discussions with their first comments.
+    if (req.method === "GET" && url.pathname === "/api/voices") {
+      const id = url.searchParams.get("id") ?? "";
+      if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
+      const index = readVoices(voicesFile);
+      if (!isFresh(index[id])) {
+        index[id] = await gatherVoices(hub(), id);
+        writeVoices(index, voicesFile);
+      }
+      const entry = index[id];
+      const h = hub();
+      const threads = await Promise.all(entry.discussions.slice(0, 6).map((d) => h.discussion(id, d.num).catch(() => null)));
+      return send(res, 200, {
+        id,
+        card: entry.card,
+        gatheredAt: entry.at,
+        discussions: entry.discussions.map((d) => ({ ...d, url: `https://huggingface.co/${id}/discussions/${d.num}`, comments_text: threads.find((t) => t?.num === d.num)?.comments?.slice(0, 3) ?? [] })),
+      });
     }
     if (req.method === "GET" && url.pathname === "/api/model") {
       const id = url.searchParams.get("id") ?? "";
@@ -213,6 +273,31 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     } catch {
       return { url, model: null };
     }
+  }
+
+  function voicesMeta() {
+    const index = readVoices(voicesFile);
+    const ids = Object.keys(index);
+    const latest = ids.map((id) => index[id].at).sort().pop() ?? null;
+    return { count: ids.length, at: latest };
+  }
+
+  // The one line of what people say, for a listing card.
+  function withVoice(m) {
+    const entry = readVoicesCached()[m.id];
+    return { ...m, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null };
+  }
+
+  function readVoicesCached() {
+    let mtime = 0;
+    try {
+      mtime = fs.statSync(voicesFile).mtimeMs;
+    } catch {
+      return {};
+    }
+    const cached = VOICES_CACHE.get(voicesFile);
+    if (!cached || cached.mtime !== mtime) VOICES_CACHE.set(voicesFile, { mtime, index: readVoices(voicesFile) });
+    return VOICES_CACHE.get(voicesFile).index;
   }
 
   // A rough speed line for a listing card, from the size guessed off the name.

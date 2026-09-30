@@ -104,7 +104,33 @@ export function createHub({ fetchImpl = fetch, base = "https://huggingface.co", 
     return { ...summarize(m), files, cardData: m.cardData ?? {} };
   }
 
-  return { scan, search, model, list };
+  // The model card as the author wrote it (markdown), empty when there is none.
+  async function card(id) {
+    const res = await fetchImpl(new URL(`/${id}/raw/main/README.md`, base), { headers: headers() });
+    if (!res.ok) return "";
+    return res.text();
+  }
+
+  // The community discussions under a repository, newest first.
+  async function discussions(id, limit = 30) {
+    const res = await fetchImpl(new URL(`/api/models/${id}/discussions?limit=${limit}`, base), { headers: headers() });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.discussions ?? [];
+  }
+
+  // One discussion with its comments, as plain text snippets.
+  async function discussion(id, num) {
+    const res = await fetchImpl(new URL(`/api/models/${id}/discussions/${num}`, base), { headers: headers() });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const comments = (data.events ?? [])
+      .filter((e) => e.type === "comment" && e.data?.latest?.raw)
+      .map((e) => ({ author: e.author?.name ?? "", text: String(e.data.latest.raw).replace(/\s+/g, " ").trim().slice(0, 400) }));
+    return { num: data.num, title: data.title, status: data.status, comments };
+  }
+
+  return { scan, search, model, list, card, discussions, discussion };
 }
 
 // The slice of a Hub model record the app shows and reasons about.

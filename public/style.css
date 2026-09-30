@@ -77,7 +77,23 @@ button.ghost { background: transparent; }
 
 .filters .select { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
 .filters select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
-.trait-search { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 8px; }
+.trait-search { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; margin-bottom: 8px; }
+.trait-search select { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
+@media (max-width: 600px) { .trait-search { grid-template-columns: 1fr; } }
+.model .voice { font-size: 12.5px; color: var(--muted); font-style: italic; }
+.model .voice::before { content: "\201C"; }
+.model .voice::after { content: "\201D"; }
+.model .voice.match { color: var(--accent-ink); font-style: normal; }
+.model .voice.match::before, .model .voice.match::after { content: none; }
+.voices { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.voices h3 { margin-top: 0; }
+.voices .card-text { font-size: 14px; color: var(--muted); }
+.voices details summary { cursor: pointer; color: var(--accent-ink); font-size: 14px; }
+.voices ul { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+.voices li { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+.voices li .who { color: var(--muted); font-size: 12.5px; }
+.voices li p { margin: 6px 0 0; font-size: 13.5px; color: var(--muted); }
+#voices-log { max-height: 90px; margin-bottom: 14px; }
 .trait-search input { font: inherit; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
 .speed-note { margin: 0 0 6px; }
 .model .speed { font-size: 12.5px; color: var(--muted); }
