@@ -69,7 +69,7 @@ test("summarize falls back to extractive lines when the model fails or is absent
 });
 
 test("cleanSummary drops empty headings and filler lines", () => {
-  const cleaned = cleanSummary({ short: ["Users:", "Users: No complaints mentioned."], long: ["Users:", "Users: Great at roleplay", "Users: No complaints mentioned.", "Users: Nothing said yet.", "Author: A small assistant.", "Complaints: none"], by: "x" });
+  const cleaned = cleanSummary({ short: ["Users:", "Users: No complaints mentioned."], long: ["Users:", "Users: Great at roleplay", "Users: No complaints mentioned.", "Users: Nothing said yet.", "Author: A small assistant.", "Complaints: none", "Users: No user comments.", "Users: Strengths:", "Users: Weaknesses"], by: "x" });
   assert.deepEqual(cleaned.long, ["Users: Great at roleplay", "Author: A small assistant."]);
   assert.deepEqual(cleaned.short, ["Users: Great at roleplay", "Author: A small assistant."]);
   assert.equal(cleanSummary(null), null);
