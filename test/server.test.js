@@ -78,7 +78,7 @@ before(async () => {
   web = await startStubWeb();
   envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
   scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
-  server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: web.url, redditAuthBase: web.url, redditApiBase: web.url, githubBase: web.url, hnBase: web.url, lemmyBase: web.url, youtubeBase: web.url });
+  server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: web.url, redditAuthBase: web.url, redditApiBase: web.url, githubBase: web.url, hnBase: web.url, lemmyBase: web.url, youtubeBase: web.url, writtenSummaries: false });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -308,10 +308,15 @@ test("gathering what people say indexes the scan, and searches and cards use it"
   assert.deepEqual(rust.hits.map((h) => h.id), ["bartowski/Qwen2.5-Coder-7B-Instruct-GGUF"]);
   assert.deepEqual((await (await get("/api/voices/search?q=hentai")).json()).hits, []);
 
+  assert.ok(events.some((e) => /lifted from the text for \d+ model/.test(e.line ?? "")));
   const { models } = await (await get("/api/models")).json();
   const llama = models.find((m) => m.id === "bartowski/Llama-3.2-3B-Instruct-GGUF");
   assert.equal(llama.voice.text, "Works well for roleplay and story writing");
   assert.equal(llama.talked, 2);
+  assert.ok(llama.summary.short.length >= 1, "every gathered model carries a summary");
+  assert.ok(llama.summary.short.some((l) => /roleplay/.test(l)));
+  assert.equal(llama.summary.by, "extract");
+  assert.equal((await post("/api/runs/999/cancel", {})).status, 404);
   const state = await (await get("/api/state")).json();
   assert.ok(state.voices.count >= MODELS.length);
 
@@ -368,6 +373,7 @@ test("gathering what people say indexes the scan, and searches and cards use it"
   assert.equal(detail.discussions[0].url, "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/discussions/3");
   assert.equal(detail.discussions[0].comments_text[0].author, "sam");
   assert.match(detail.discussions[0].comments_text[0].text, /keeps characters straight/);
+  assert.ok(detail.summary.long.some((l) => /keeps characters straight/.test(l)), "the comments feed the summary once fetched");
   assert.equal((await get("/api/voices?id=bad")).status, 400);
 });
 

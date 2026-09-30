@@ -9,10 +9,11 @@ import { createHub } from "./hf.js";
 import { describeMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
+import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeFile, removeFolder, removeOllamaModel, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
+import { extractiveSummary, summarize, summarizerModel } from "./summarize.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -20,7 +21,7 @@ const VOICES_CACHE = new Map();
 const RUNNER_NAMES = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".txt": "text/plain; charset=utf-8" };
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true } = {}) {
   const machine = describeMachine();
   const env = () => readEnv(envFile);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
@@ -133,7 +134,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const ids = [...new Set([...scan.models.map((m) => m.id), ...(Array.isArray(body.ids) ? body.ids.filter((id) => /^[\w.-]+\/[\w.-]+$/.test(String(id))) : [])])];
       const index = readVoices(voicesFile);
       const todo = ids.filter((id) => !isFresh(index[id]));
-      const run = startCustomRun(`Gathering what people say about ${todo.length} model${todo.length === 1 ? "" : "s"} (${ids.length - todo.length} already gathered this week)`, async (emit) => {
+      const run = startCustomRun(`Gathering what people say about ${todo.length} model${todo.length === 1 ? "" : "s"} (${ids.length - todo.length} already gathered this week)`, async (emit, cancelled) => {
         let done = 0;
         const h = hub();
         const worker = async () => {
@@ -152,8 +153,13 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         writeVoices(index, voicesFile);
         const withTalk = ids.filter((id) => (index[id]?.discussions?.length ?? 0) > 0).length;
         emit(`${ids.length} models covered; ${withTalk} have community discussions.`);
+        await summarizeAll(ids, index, emit, cancelled);
       });
       return send(res, 200, { id: run.id, todo: todo.length, total: ids.length });
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/runs/") && url.pathname.endsWith("/cancel")) {
+      const id = url.pathname.slice("/api/runs/".length, -"/cancel".length);
+      return cancelRun(id) ? send(res, 200, { ok: true }) : send(res, 404, { error: "No such run" });
     }
     // Which models people describe with these words.
     if (req.method === "GET" && url.pathname === "/api/voices/search") {
@@ -201,12 +207,13 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const entry = index[id];
       const h = hub();
       const threads = await Promise.all(entry.discussions.slice(0, 6).map((d) => h.discussion(id, d.num).catch(() => null)));
-      return send(res, 200, {
-        id,
-        card: entry.card,
-        gatheredAt: entry.at,
-        discussions: entry.discussions.map((d) => ({ ...d, url: `https://huggingface.co/${id}/discussions/${d.num}`, comments_text: threads.find((t) => t?.num === d.num)?.comments?.slice(0, 3) ?? [] })),
-      });
+      const discussions = entry.discussions.map((d) => ({ ...d, url: `https://huggingface.co/${id}/discussions/${d.num}`, comments_text: threads.find((t) => t?.num === d.num)?.comments?.slice(0, 3) ?? [] }));
+      // With the comments in hand the summary can be better than the one from titles alone.
+      const withComments = { ...entry, name: id.split("/").pop(), discussions };
+      const summary = await summarize(withComments, isFresh(entry.web) ? entry.web.data : null, { model: writtenSummaries ? await summarizerModel(fetchImpl) : null, fetchImpl });
+      index[id] = { ...entry, summary };
+      writeVoices(index, voicesFile);
+      return send(res, 200, { id, card: entry.card, gatheredAt: entry.at, discussions, summary });
     }
     if (req.method === "GET" && url.pathname === "/api/model") {
       const id = url.searchParams.get("id") ?? "";
@@ -395,7 +402,44 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // The one line of what people say, for a listing card.
   function withVoice(m) {
     const entry = readVoicesCached()[m.id];
-    return { ...m, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null };
+    return { ...m, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null, summary: entry?.summary ?? null };
+  }
+
+  // Summaries for a list of gathered models: extractive lines for all of
+  // them at once, then, when a chat model is installed, written ones in
+  // scan order until done or stopped.
+  async function summarizeAll(ids, index, emit, cancelled) {
+    let extracted = 0;
+    for (const id of ids) {
+      const entry = index[id];
+      if (!entry) continue;
+      if (!entry.summary || entry.summary.at < entry.at) {
+        entry.summary = { ...extractiveSummary({ ...entry, name: id.split("/").pop() }), at: new Date().toISOString() };
+        extracted++;
+      }
+    }
+    writeVoices(index, voicesFile);
+    emit(`Summary lines lifted from the text for ${extracted} model${extracted === 1 ? "" : "s"}.`);
+    const model = writtenSummaries ? await summarizerModel(fetchImpl) : null;
+    if (!model) {
+      emit("No chat model is installed in Ollama, so the lines are lifted from the comments rather than written. Set up a chat model and gather again for written summaries.");
+      return;
+    }
+    const todo = ids.filter((id) => index[id] && index[id].summary?.by !== model);
+    emit(`Writing summaries with ${model} for ${todo.length} model${todo.length === 1 ? "" : "s"}; stop any time, what is done stays.`);
+    let done = 0;
+    for (const id of todo) {
+      if (cancelled()) break;
+      const entry = index[id];
+      entry.summary = await summarize({ ...entry, name: id.split("/").pop() }, isFresh(entry.web) ? entry.web.data : null, { model, fetchImpl });
+      done++;
+      if (done % 5 === 0) {
+        writeVoices(index, voicesFile);
+        emit(`${done} of ${todo.length} written`);
+      }
+    }
+    writeVoices(index, voicesFile);
+    emit(`${done} summaries written by ${model}.`);
   }
 
   function readVoicesCached() {

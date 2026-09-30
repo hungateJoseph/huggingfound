@@ -16,7 +16,7 @@ const stub = await startStubHub();
 const envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
 const scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
 const dead = "http://127.0.0.1:1";
-const server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead });
+const server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -124,31 +124,41 @@ await step("a trait search asks the hub and lists what it finds", async () => {
   await page.waitForFunction(() => document.querySelector("#found-title").hidden && !document.querySelector("#found .model"));
 });
 
-await step("gathering what people say adds a line to cards and a searchable index", async () => {
+await step("gathering what people say puts summary lines on cards, with More to expand", async () => {
   await page.click("#gather-voices");
   await page.waitForFunction(() => /Gathered for \d+ models/.test(document.querySelector("#voices-status").textContent));
   await page.click(".tab[data-tab=easy]");
   const card = page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" });
-  assert.match(await card.locator(".voice").innerText(), /roleplay and story writing/);
-  await page.selectOption("#trait-mode", "voices");
+  assert.match(await card.locator(".said").innerText(), /roleplay/i);
+  assert.match(await card.locator(".said .line").first().innerText(), /^Users/);
+  await card.locator("button[data-more]").click();
+  await card.locator(".expanded:not([hidden])").waitFor();
+  assert.match(await card.locator(".expanded").innerText(), /lifted from the comments/);
+  assert.equal(await page.locator("#modal").isVisible(), false, "More does not open the model window");
+  await card.locator("button[data-more]").click();
+  assert.equal(await card.locator(".expanded").isVisible(), false);
+});
+
+await step("one search box finds models by name and by what people say", async () => {
   await page.fill("#trait", "rust coding");
   await page.click("#trait-go");
   await page.waitForSelector("#found .model");
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
-  assert.deepEqual(names, ["Qwen2.5-Coder-7B-Instruct-GGUF"]);
-  assert.match(await page.locator("#found .model .voice.match").innerText(), /Rust coding help/);
-  assert.equal(await page.locator("#web-found").isVisible(), true, "Civitai and Reddit sections appear with a what-people-say search");
+  assert.deepEqual(names, ["Qwen2.5-Coder-7B-Instruct-GGUF"], "found through the gathered notes, not the name");
+  assert.match(await page.locator("#found-title").innerText(), /1 found through what people say/i);
+  assert.match(await page.locator("#found .model .said").innerText(), /rust/i);
+  assert.equal(await page.locator("#web-found").isVisible(), true, "outside sources are listed, collapsed");
+  assert.match(await page.locator("#web-found-summary").innerText(), /also mentioned elsewhere/i);
+  await page.click("#web-found-summary");
   assert.match(await page.locator("#reddit-note").innerText(), /app id in Settings/);
   assert.match(await page.locator("#youtube-note").innerText(), /API key in Settings/);
   assert.match(await page.locator("#github-note").innerText(), /did not answer/, "the unreachable stub is reported, not hidden");
-  assert.match(await page.locator("#found-title").innerText(), /outside sources/i);
   await page.fill("#trait", "hentai");
   await page.click("#trait-go");
   await page.waitForSelector("#notice:not([hidden])");
-  assert.match(await page.locator("#notice").innerText(), /Nobody in the gathered/);
+  assert.match(await page.locator("#notice").innerText(), /Nothing on Hugging Face or in the gathered notes/);
   await page.fill("#trait", "");
   await page.click("#trait-go");
-  await page.selectOption("#trait-mode", "hub");
   await page.waitForFunction(() => document.querySelector("#found-title").hidden);
 });
 

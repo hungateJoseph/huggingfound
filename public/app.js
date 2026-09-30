@@ -122,8 +122,9 @@ function renderTabs() {
 
 for (const id of ["#only-runnable", "#only-new", "#search", "#sort", "#since"]) $(id).addEventListener("input", render);
 
-// A live search on Hugging Face for whatever traits the user types, or a
-// search through what people say about the models gathered so far.
+// One search: model names on Hugging Face, plus any scanned model whose
+// gathered notes use the words. Outside sources are asked too and shown
+// collapsed under the results.
 $("#trait-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("#trait").value.trim();
@@ -137,19 +138,13 @@ $("#trait-form").addEventListener("submit", async (e) => {
   btn.disabled = true;
   btn.textContent = "Searching";
   try {
-    if ($("#trait-mode").value === "voices") {
-      const result = await api.get(`/api/voices/search?q=${encodeURIComponent(q)}`);
-      const { hits } = result;
-      const known = new Map([...state.models, ...(state.found?.models ?? [])].map((m) => [m.id, m]));
-      const models = hits.filter((h) => known.has(h.id)).map((h) => ({ ...known.get(h.id), voiceMatch: h.snippet }));
-      state.found = { q: `what people say: ${q}`, models, voices: true, unknown: hits.length - models.length, web: result };
-      const anything = hits.length || result.civitai.length || result.reddit.length;
-      notice(anything ? "" : state.voices?.count ? `Nobody in the gathered cards, discussions, Civitai or Reddit says "${q}".` : "Nothing gathered yet. Click \"Gather what people say\" first; Civitai and Reddit are searched live.", anything ? "info" : "warn");
-    } else {
-      const result = await api.get(`/api/search?q=${encodeURIComponent(q)}`);
-      state.found = result;
-      notice("");
-    }
+    const [hub, voices] = await Promise.all([api.get(`/api/search?q=${encodeURIComponent(q)}`), api.get(`/api/voices/search?q=${encodeURIComponent(q)}`)]);
+    const known = new Map([...state.models, ...hub.models].map((m) => [m.id, m]));
+    const ids = new Set(hub.models.map((m) => m.id));
+    const fromNotes = voices.hits.filter((h) => known.has(h.id) && !ids.has(h.id)).map((h) => ({ ...known.get(h.id), voiceMatch: h.snippet }));
+    const models = [...hub.models, ...fromNotes];
+    state.found = { q, models, notes: fromNotes.length, web: voices };
+    notice(models.length ? "" : `Nothing on Hugging Face or in the gathered notes matches "${q}".`, models.length ? "info" : "warn");
   } catch (err) {
     notice(`The search did not finish: ${err.message}`, "bad");
   } finally {
@@ -159,17 +154,11 @@ $("#trait-form").addEventListener("submit", async (e) => {
   }
 });
 
-$("#trait-mode").addEventListener("change", () => {
-  $("#trait").placeholder = $("#trait-mode").value === "voices"
-    ? "Words people use about a model: roleplay, coding help, japanese, blurry hands..."
-    : "Search Hugging Face for traits: uncensored roleplay 7b, japanese, medical, tiny, vision...";
-});
-
 function renderVoicesStatus() {
   const v = state.voices;
   $("#voices-status").textContent = v?.count
-    ? `Gathered for ${v.count} model${v.count === 1 ? "" : "s"} (last ${relative(v.at)}). Cards show a line of it; pick "What people say" in the search box to search it.`
-    : "Reads each scanned model's card and community discussions, so you can search by what people say about a model.";
+    ? `Gathered for ${v.count} model${v.count === 1 ? "" : "s"} (last ${relative(v.at)}). Cards carry a summary; the search box also finds models by what people say.`
+    : "Reads each scanned model's card and community discussions and sums them up in a line or two on every card. A chat model installed in Ollama writes the lines; without one they are lifted from the comments.";
 }
 
 $("#gather-voices").addEventListener("click", async () => {
@@ -182,6 +171,9 @@ $("#gather-voices").addEventListener("click", async () => {
   try {
     const ids = (state.found?.models ?? []).map((m) => m.id);
     const { id } = await api.post("/api/voices/gather", { ids });
+    const stop = $("#stop-voices");
+    stop.hidden = false;
+    stop.onclick = () => api.post(`/api/runs/${id}/cancel`, {}).catch(() => {});
     await follow(id, (line) => {
       log.textContent += line + "\n";
       log.scrollTop = log.scrollHeight;
@@ -197,6 +189,7 @@ $("#gather-voices").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = "Gather what people say";
+    $("#stop-voices").hidden = true;
   }
 });
 
@@ -232,7 +225,7 @@ function render() {
   const found = state.found ? sortModels(state.found.models.filter(keep)) : [];
   $("#found").innerHTML = found.map(modelCard).join("");
   $("#found-title").hidden = !state.found;
-  if (state.found) $("#found-title").textContent = `Search: ${state.found.q} (${found.length} of ${state.found.models.length} shown${state.found.unknown ? `, ${state.found.unknown} more not in the current lists` : ""})`;
+  if (state.found) $("#found-title").textContent = `Search: ${state.found.q} (${found.length} of ${state.found.models.length} shown${state.found.notes ? `, ${state.found.notes} found through what people say` : ""})`;
   renderWebFound(state.found?.web ?? null);
 
   const picks = onlyNew || Number($("#since").value) ? [] : state.picks.filter((p) => p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
@@ -251,7 +244,20 @@ function render() {
     empty.hidden = true;
   }
 
-  for (const card of document.querySelectorAll(".model")) card.addEventListener("click", () => openModel(card.dataset.id));
+  for (const card of document.querySelectorAll(".model")) {
+    const open = (e) => {
+      if (e.target.closest(".expanded") || e.target.closest("[data-more]")) return;
+      openModel(card.dataset.id);
+    };
+    card.addEventListener("click", open);
+    card.addEventListener("keydown", (e) => {
+      if ((e.key === "Enter" || e.key === " ") && e.target === card) {
+        e.preventDefault();
+        openModel(card.dataset.id);
+      }
+    });
+  }
+  wireMore(document);
 }
 
 // Civitai models and Reddit posts from a "what people say" search.
@@ -283,11 +289,11 @@ function renderWebFound(web) {
   $("#youtube-found").innerHTML = postList(web.youtube, (v) => `${v.channel}${v.views != null ? `, ${fmt(v.views)} views` : ""}`);
   $("#reddit-note").textContent = note("Reddit", web.reddit, web.redditError, web.redditConfigured, "Posts from r/LocalLLaMA, r/StableDiffusion, r/SillyTavernAI and related communities. A chip opens a model from the scan that the post names.", "No Reddit posts for these words in the past year.", "Reddit needs a free app id in Settings before it can be searched.");
   $("#reddit-found").innerHTML = postList(web.reddit, (p) => `r/${p.subreddit}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`);
-  if (web.took != null) $("#found-title").textContent += ` · ${(web.took / 1000).toFixed(1)} s across ${["civitai", "reddit", "github", "hn", "lemmy", "youtube"].filter((k) => web[`${k}Configured`] !== false).length} outside sources`;
+  const count = ["civitai", "reddit", "github", "hn", "lemmy", "youtube"].reduce((t, k) => t + (web[k]?.length ?? 0), 0);
+  $("#web-found-summary").textContent = `Also mentioned elsewhere: ${count} item${count === 1 ? "" : "s"} on Civitai, GitHub, Hacker News, Lemmy, YouTube and Reddit${web.took != null ? ` (${(web.took / 1000).toFixed(1)} s)` : ""}`;
   for (const chip of box.querySelectorAll("button[data-open]")) chip.addEventListener("click", () => openModel(chip.dataset.open));
   for (const chip of box.querySelectorAll("button[data-hub]")) {
     chip.addEventListener("click", () => {
-      $("#trait-mode").value = "hub";
       $("#trait").value = chip.dataset.hub;
       $("#trait-form").requestSubmit();
     });
@@ -305,22 +311,22 @@ function fit(gb) {
 function pickCard(p) {
   const f = fit(p.gb);
   const runner = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[p.runner];
-  return `<button class="model" data-id="${esc(p.id)}">
+  return `<div class="model" role="button" tabindex="0" data-id="${esc(p.id)}">
     <div class="name">${esc(p.id.split("/").pop())}</div>
     <div class="author">${esc(p.id.split("/")[0])}</div>
     <div class="summary">${esc(p.why)}</div>
     ${p.speed ? `<div class="speed">${esc(p.speed)}</div>` : ""}
     <div class="meta"><span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}<span class="pill runner">${runner}</span></div>
-  </button>`;
+  </div>`;
 }
 
 function modelCard(m) {
   const runner = m.runner ? `<span class="pill ${m.runner.easy ? "runner" : ""}">${esc(m.runner.name)}</span>` : "";
-  return `<button class="model" data-id="${esc(m.id)}">
+  return `<div class="model" role="button" tabindex="0" data-id="${esc(m.id)}">
     <div class="name">${esc(m.name)}</div>
     <div class="author">${esc(m.author)}</div>
     <div class="summary">${esc(m.summary)}</div>
-    ${m.voiceMatch ? `<div class="voice match">${m.voiceMatch.from === "discussion" ? "A discussion titled: " : "The card says: "}${esc(m.voiceMatch.text)}</div>` : m.voice?.text ? `<div class="voice">${esc(m.voice.text)}</div>` : ""}
+    ${saidHtml(m)}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
@@ -331,7 +337,47 @@ function modelCard(m) {
       <span>${fmt(m.downloads)} downloads</span>
       <span>${fmt(m.likes)} likes</span>
     </div>
-  </button>`;
+  </div>`;
+}
+
+// The one or two summary lines on a card, with a More button that opens the
+// rest in place.
+function saidHtml(m) {
+  const lines = m.summary?.short ?? [];
+  if (!lines.length) return m.voiceMatch ? `<div class="voice match">${m.voiceMatch.from === "discussion" ? "A discussion titled: " : "The card says: "}${esc(m.voiceMatch.text)}</div>` : "";
+  const more = (m.summary?.long?.length ?? 0) > lines.length || m.talked;
+  return `<div class="said">${lines.map(lineHtml).join("")}${more ? `<button class="ghost more" data-more="${esc(m.id)}">More</button>` : ""}<div class="expanded" hidden></div></div>`;
+}
+
+function lineHtml(line) {
+  const m = /^(Users|Author):\s*(.*)$/.exec(line);
+  if (!m) return `<div class="line"><b>Users</b><span>${esc(line)}</span></div>`;
+  return `<div class="line ${m[1] === "Author" ? "author" : ""}"><b>${m[1] === "Author" ? "Author" : "Users"}</b><span>${esc(m[2])}</span></div>`;
+}
+
+function wireMore(root) {
+  for (const btn of root.querySelectorAll("button[data-more]")) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const card = btn.closest(".model");
+      const box = card.querySelector(".expanded");
+      const m = [...state.models, ...(state.found?.models ?? []), ...state.picks].find((x) => x.id === btn.dataset.more);
+      if (!box.hidden) {
+        box.hidden = true;
+        btn.textContent = "More";
+        return;
+      }
+      const long = m?.summary?.long ?? [];
+      box.innerHTML = `${long.map(lineHtml).join("") || "<span class=\"muted small\">Nothing more gathered.</span>"}<div class="by">${m?.summary?.by && m.summary.by !== "extract" ? `Summed up by ${esc(m.summary.by)} on this computer` : "Lines lifted from the comments; a chat model in Ollama would write them"}${m?.talked ? `, from ${m.talked} discussion${m.talked === 1 ? "" : "s"} and the model card` : ""}. <a href="#" data-open-model="${esc(m?.id ?? "")}">Open the model for every source</a></div>`;
+      box.hidden = false;
+      btn.textContent = "Less";
+      box.querySelector("[data-open-model]")?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openModel(m.id);
+      });
+    });
+  }
 }
 
 function fmt(n) {
@@ -410,7 +456,8 @@ async function loadVoices(model) {
   const threads = v.discussions.length
     ? `<ul>${v.discussions.slice(0, 12).map((d) => `<li><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a> <span class="who">${d.comments} comment${d.comments === 1 ? "" : "s"}${d.status === "closed" ? ", closed" : ""}</span>${(d.comments_text ?? []).map((c) => `<p>${esc(c.author ? c.author + ": " : "")}${esc(c.text)}</p>`).join("")}</li>`).join("")}</ul>`
     : `<p class="muted small">No community discussions on this repository yet.</p>`;
-  box.innerHTML = `<h3>What people say</h3>${card}${threads}<p class="muted small">From the community tab on Hugging Face; these are other users' words, not a review.</p><div class="web" id="voices-web"><p class="muted small">Looking on Civitai and Reddit</p></div>`;
+  const summary = v.summary?.long?.length ? `<div class="said">${v.summary.long.map(lineHtml).join("")}</div><p class="muted small">${v.summary.by !== "extract" ? `Summed up by ${esc(v.summary.by)} on this computer` : "Lines lifted from the comments; a chat model in Ollama would write them"}.</p>` : `<p class="muted small">Nothing said about this model yet.</p>`;
+  box.innerHTML = `<h3>What people say</h3>${summary}<details><summary>Sources on Hugging Face</summary>${card}${threads}<p class="muted small">From the community tab on Hugging Face; these are other users' words, not a review.</p></details><details open><summary>Elsewhere</summary><div class="web" id="voices-web"><p class="muted small">Looking on Civitai, GitHub, Hacker News, Lemmy, YouTube and Reddit</p></div></details>`;
   const isImage = state.plan?.runner === "sd" || (model.categories ?? []).includes("images");
   const web = await api.get(`/api/voices/web?id=${encodeURIComponent(model.id)}${isImage ? "&images=1" : ""}`);
   const webBox = $("#voices-web");

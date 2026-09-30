@@ -660,7 +660,7 @@ export function recordTiming(key, timing) {
 // job and the page follows the same live log.
 export function startCustomRun(text, work) {
   const id = String(nextRun++);
-  const run = { id, kind: "custom", status: "running", lines: [], listeners: new Set(), result: null, startedAt: Date.now() };
+  const run = { id, kind: "custom", status: "running", lines: [], listeners: new Set(), result: null, startedAt: Date.now(), cancelled: false };
   runs.set(id, run);
   const emit = (line) => {
     run.lines.push(line);
@@ -674,13 +674,20 @@ export function startCustomRun(text, work) {
   };
   emit(text);
   Promise.resolve()
-    .then(() => work(emit))
+    .then(() => work(emit, () => run.cancelled))
     .then((result) => {
       run.result = result ?? null;
-      finish("done", "Done.");
+      finish("done", run.cancelled ? "Stopped." : "Done.");
     })
     .catch((err) => finish("failed", `Failed: ${err.message}`));
   return run;
+}
+
+export function cancelRun(id) {
+  const run = runs.get(id);
+  if (!run) return false;
+  run.cancelled = true;
+  return true;
 }
 
 export function getRun(id) {

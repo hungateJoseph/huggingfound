@@ -35,7 +35,8 @@
       </div>
       <div class="scan-row">
         <button class="ghost" id="gather-voices">Gather what people say</button>
-        <span class="muted small" id="voices-status">Reads each scanned model's card and community discussions, so you can search by what people say about a model.</span>
+        <button class="ghost" id="stop-voices" hidden>Stop</button>
+        <span class="muted small" id="voices-status">Reads each scanned model's card and community discussions and sums them up in a line or two on every card. A chat model installed in Ollama writes the lines; without one they are lifted from the comments.</span>
       </div>
       <pre class="log small" id="voices-log" hidden></pre>
     </section>
@@ -81,17 +82,14 @@
         <input type="search" id="search" placeholder="Filter these by name or by what people say">
       </div>
       <form class="trait-search" id="trait-form">
-        <select id="trait-mode" aria-label="What to search">
-          <option value="hub">Model names on Hugging Face</option>
-          <option value="voices">What people say (gathered)</option>
-        </select>
-        <input type="search" id="trait" placeholder="Search Hugging Face for traits: uncensored roleplay 7b, japanese, medical, tiny, vision...">
+        <input type="search" id="trait" placeholder="Search Hugging Face: uncensored roleplay 7b, japanese, medical, tiny, vision, good hands...">
         <button class="primary" type="submit" id="trait-go">Search</button>
       </form>
       <p class="muted small speed-note">Speed lines are rough guesses for this computer from the model's size. The first run is slower while things load; a measured time replaces the guess after a real run.</p>
       <h2 id="found-title" class="section-title" hidden></h2>
       <div id="found" class="cards"></div>
-      <div id="web-found" hidden>
+      <details id="web-found" hidden>
+        <summary class="section-title" id="web-found-summary">Also mentioned elsewhere</summary>
         <h2 class="section-title">On Civitai</h2>
         <p class="muted small" id="civitai-note"></p>
         <div id="civitai-found" class="cards"></div>
@@ -110,7 +108,7 @@
         <h2 class="section-title">On Reddit</h2>
         <p class="muted small" id="reddit-note"></p>
         <ul id="reddit-found" class="posts"></ul>
-      </div>
+      </details>
       <h2 id="picks-title" class="section-title">Good first picks</h2>
       <div id="picks" class="cards"></div>
       <h2 id="scan-title" class="section-title" hidden>From the scan</h2>
