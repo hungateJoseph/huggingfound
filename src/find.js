@@ -40,6 +40,23 @@ function summaryText(m) {
   return (m.summary?.long ?? []).join(" ");
 }
 
+const NEGATIVE = /\b(not|isn't|isnt|doesn't|doesnt|can't|cant|cannot|never|no|poor|bad|worse|worst|refuse[sd]?|fail(s|ed)?|broken|useless|disappoint\w*|struggle[sd]?|unsuitable|lacks?)\b/i;
+
+// The summary lines that use the words, split into praise and complaint so
+// "not suitable for creative work" does not rank a model first for
+// "creative writing".
+function saidHits(words, m) {
+  let positive = 0;
+  let negative = 0;
+  for (const line of m.summary?.long ?? []) {
+    const hits = coverage(words, line);
+    if (!hits) continue;
+    if (/^Users:/.test(line) && NEGATIVE.test(line)) negative += hits;
+    else positive += hits;
+  }
+  return { positive, negative };
+}
+
 // `hub` is the Hub's own name search (in its order), `scanned` the scan with
 // summaries attached, `voices` the gathered index by id.
 export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {} }) {
@@ -73,14 +90,18 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {} 
     }
     if (hubIndex != null && hubIndex >= 0) score += Math.max(0, 1 - hubIndex / 20);
     const said = summaryText(m);
-    const saidHits = coverage(words, said);
-    if (saidHits) {
-      score += 3.5 * saidHits;
+    const { positive, negative } = saidHits(words, m);
+    if (positive) {
+      score += 3.5 * positive;
       why.push("what people say");
+    }
+    if (negative) {
+      score += positive ? 0 : 0.8 * negative;
+      why.push("mixed reviews");
     }
     const notes = voiceText(voices[m.id]);
     const noteHits = notes ? coverage(words, notes) : 0;
-    if (noteHits && !saidHits) {
+    if (noteHits && !positive && !negative) {
       score += 1.5 * noteHits;
       why.push("discussions");
     }
@@ -99,8 +120,9 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {} 
     if (!said && !notes) score -= 1;
     // A model that matches nothing but a broad category only stays when the
     // search was mostly about that category.
-    if (!nameHits && !saidHits && !noteHits && !catHit && !sources.has("hub")) continue;
-    if (!nameHits && !saidHits && !noteHits && catHit && words.length > 3 && !sources.has("hub")) score -= 1;
+    const anySaid = positive || negative;
+    if (!nameHits && !anySaid && !noteHits && !catHit && !sources.has("hub")) continue;
+    if (!nameHits && !anySaid && !noteHits && catHit && words.length > 3 && !sources.has("hub")) score -= 1;
     ranked.push({ ...m, score: Math.round(score * 100) / 100, why });
   }
   ranked.sort((a, b) => b.score - a.score || (b.likes ?? 0) - (a.likes ?? 0));

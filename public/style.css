@@ -275,5 +275,6 @@ body[data-mode="results"] .trait-search.big, body[data-mode="browse"] .trait-sea
 .why { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .why span { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #efece5; color: var(--muted); }
 .why span.say { background: var(--accent-soft); color: var(--accent-ink); }
+.why span.mixed { background: var(--warn-soft); color: var(--warn); }
 #found-hint { margin: -4px 0 12px; }
 @media (max-width: 600px) { #home h1 { font-size: 30px; } .views { margin-left: 8px; } }

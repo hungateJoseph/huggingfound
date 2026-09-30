@@ -40,3 +40,12 @@ test("Hub name hits, discussions and curated picks all say why they are there", 
   assert.equal(speech[0].id, "ggerganov/whisper.cpp");
   assert.ok(speech[0].why.includes("curated pick") && speech[0].why.includes("category"));
 });
+
+test("a complaint that uses the words ranks below praise and is marked mixed", () => {
+  const praised = { id: "a/story-writer", name: "story-writer", categories: ["chat"], runner: { id: "ollama", easy: true }, likes: 10, summary: { long: ["Users: Excellent for creative writing and stories"] } };
+  const panned = { id: "b/creative-rogue", name: "creative-rogue", categories: ["chat"], runner: { id: "ollama", easy: true }, likes: 500, summary: { long: ["Users: Not suitable for creative writing, low quality"] } };
+  const { models } = rankModels("creative writing", { hub: [], scanned: [panned, praised] });
+  assert.equal(models[0].id, praised.id);
+  assert.ok(models[1].why.includes("mixed reviews"));
+  assert.ok(!models[1].why.includes("what people say"));
+});

@@ -369,7 +369,7 @@ function modelCard(m) {
     <div class="author">${esc(m.author)}</div>
     <div class="summary">${esc(m.summary)}</div>
     ${saidHtml(m)}
-    ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
+    ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : w === "mixed reviews" ? "mixed" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
