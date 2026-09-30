@@ -123,10 +123,11 @@ export async function modelSummary(model, entry, web, fetchImpl = fetch) {
 // Filler a chat model tends to add ("Users: No complaints mentioned.") and
 // empty headings are dropped; the rest is trimmed to a readable length.
 const FILLER = /^(users|author):\s*(no (user )?(complaints?|comments?|issues?|concerns?|problems?|feedback|reviews?)( (were |are )?(mentioned|reported|noted|found|available|yet))?\.?|none( mentioned| reported)?\.?|nothing (said|mentioned|reported|to report|useful)( yet)?\.?|n\/a\.?|not (mentioned|specified|available)\.?|(strengths?|weaknesses?|complaints?|pros|cons)\s*:?)\s*$/i;
+const SELF_REFUSAL = /^(users|author):\s*(i can'?t|i cannot|i'?m (not able|unable)|i am (not able|unable)|sorry,? (but )?i|as an ai)/i;
 export function cleanLines(lines) {
   return lines
     .map((l) => String(l).trim())
-    .filter((l) => /^(users|author):\s*\S/i.test(l) && !FILLER.test(l) && !/^nothing said yet/i.test(l) && !/:\s*$/.test(l))
+    .filter((l) => /^(users|author):\s*\S/i.test(l) && !FILLER.test(l) && !SELF_REFUSAL.test(l) && !/^nothing said yet/i.test(l) && !/:\s*$/.test(l))
     .map((l) => tidy(l, 130))
     .slice(0, 5);
 }

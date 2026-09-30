@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { intentCategories, queryWords, rankModels } from "../src/find.js";
 
-const chat = { id: "bartowski/Llama-3.2-3B-Instruct-GGUF", name: "Llama-3.2-3B-Instruct-GGUF", categories: ["easy", "chat"], runner: { id: "ollama", easy: true }, likes: 400, summary: { long: ["Users: Works well for roleplay and story writing", "Users: Refuses some prompts"] } };
+const chat = { id: "bartowski/Llama-3.2-3B-Instruct-GGUF", name: "Llama-3.2-3B-Instruct-GGUF", categories: ["easy", "chat"], runner: { id: "ollama", easy: true }, likes: 400, summary: { long: ["Users: Works well for roleplay and story writing", "Users: Sometimes repeats itself"] } };
 const coder = { id: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF", name: "Qwen2.5-Coder-7B-Instruct-GGUF", categories: ["easy", "coding", "chat"], runner: { id: "ollama", easy: true }, likes: 120, summary: { long: ["Users: Best local model for Rust coding help"] } };
 const python = { id: "meta-llama/Llama-3.1-8B-Instruct", name: "Llama-3.1-8B-Instruct", categories: ["chat"], runner: { id: "python-transformers", easy: false }, likes: 4000, summary: null };
 const image = { id: "John6666/pony-realism-v23-sdxl", name: "pony-realism-v23-sdxl", categories: ["easy", "images", "nsfw-images"], runner: { id: "sd", easy: true }, likes: 90, summary: { long: ["Users: Realistic people, good hands"] } };
@@ -48,4 +48,15 @@ test("a complaint that uses the words ranks below praise and is marked mixed", (
   assert.equal(models[0].id, praised.id);
   assert.ok(models[1].why.includes("mixed reviews"));
   assert.ok(!models[1].why.includes("what people say"));
+});
+
+test("models users report as refusing are hidden unless asked for, and marked when shown", () => {
+  const prude = { id: "c/polite-chat", name: "polite-chat", categories: ["chat"], runner: { id: "ollama", easy: true }, likes: 900, summary: { long: ["Users: Great for creative writing", "Users: Refuses anything spicy, says it is against its guidelines"] } };
+  const hidden = rankModels("creative writing", { hub: [], scanned: [prude, chat] });
+  assert.ok(!hidden.models.some((m) => m.id === prude.id));
+  assert.equal(hidden.hiddenRefusing, 1);
+  const shown = rankModels("creative writing", { hub: [], scanned: [prude, chat], hideRefusing: false });
+  const p = shown.models.find((m) => m.id === prude.id);
+  assert.ok(p && p.why.includes("users report refusals"));
+  assert.ok(shown.models.findIndex((m) => m.id === chat.id) < shown.models.findIndex((m) => m.id === prude.id), "even when shown it ranks below a model with no such reports");
 });

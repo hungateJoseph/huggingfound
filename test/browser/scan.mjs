@@ -38,8 +38,19 @@ async function step(name, fn) {
   } catch (err) {
     failed++;
     console.log(`FAIL ${name}\n     ${err.message.split("\n")[0]}`);
-    // Close whatever the failed step left open so the next steps start clean.
+    // Close whatever the failed step left open and reset the filters, so the next steps start clean.
     await page.keyboard.press("Escape").catch(() => {});
+    await page.evaluate(() => {
+      for (const [id, value] of [["#since", "0"], ["#sort", "trending"]]) {
+        const el = document.querySelector(id);
+        if (el && el.value !== value) {
+          el.value = value;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+      const runnable = document.querySelector("#only-runnable");
+      if (runnable && !runnable.checked) runnable.click();
+    }).catch(() => {});
   }
 }
 
@@ -118,7 +129,7 @@ await step("NSFW tabs, sorting and recency work on the scan", async () => {
   await page.click(".tab[data-tab=chat]");
   await page.selectOption("#sort", "likes");
   names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
-  assert.equal(names[0], "Llama-3.2-3B-Instruct-GGUF", "most liked runnable chat model first");
+  assert.equal(names[0], "Polite-Chat-7B-GGUF", "most liked runnable chat model first");
   await page.selectOption("#since", "30");
   names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.deepEqual(names, ["Cydonia-24B-v2-GGUF"], "only the model released this month");
@@ -167,6 +178,16 @@ await step("one search box finds models by name and by what people say", async (
   assert.equal(names[0], "Qwen2.5-Coder-7B-Instruct-GGUF", "the model whose users mention Rust ranks first");
   assert.match(await page.locator("#found-hint").innerText(), /matched on what people say/i);
   assert.match(await page.locator("#found .model").first().locator(".said").innerText(), /rust/i);
+  await page.fill("#trait", "chat");
+  await page.click("#trait-go");
+  await page.waitForSelector("#toggle-refusing");
+  assert.match(await page.locator("#found-hint").innerText(), /hidden because users report the model refuses/);
+  assert.equal(await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).count(), 0, "hidden by default");
+  await page.click("#toggle-refusing");
+  await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).waitFor();
+  assert.match(await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).innerText(), /Users report refusals/);
+  await page.click("#toggle-refusing");
+  await page.waitForFunction(() => document.querySelectorAll("#found .model").length > 0 && !document.querySelector("#found .model .pill.no"));
   assert.equal(await page.locator("#web-found").isVisible(), true, "outside sources are listed, collapsed");
   assert.match(await page.locator("#web-found-summary").innerText(), /also mentioned elsewhere/i);
   await page.click("#web-found-summary");

@@ -141,8 +141,8 @@ $("#trait-form").addEventListener("submit", async (e) => {
   btn.disabled = true;
   btn.textContent = "Searching";
   try {
-    const result = await api.get(`/api/find?q=${encodeURIComponent(q)}`);
-    state.found = { q, models: result.models, web: result, hubError: result.hubError, gathered: result.gathered, scanned: result.scanned, took: result.took };
+    const result = await api.get(`/api/find?q=${encodeURIComponent(q)}${state.showRefusing ? "&showRefusing=1" : ""}`);
+    state.found = { q, models: result.models, web: result, hubError: result.hubError, gathered: result.gathered, scanned: result.scanned, took: result.took, hiddenRefusing: result.hiddenRefusing, hideRefusing: result.hideRefusing };
     notice(result.hubError ? `Hugging Face did not answer (${result.hubError}); showing what is known locally.` : "", "warn");
     if (state.mode !== "browse") setMode("results");
   } catch (err) {
@@ -263,7 +263,13 @@ function render() {
     const f = state.found;
     $("#found-title").textContent = `${found.length} model${found.length === 1 ? "" : "s"} for "${f.q}"`;
     const bySay = f.models.filter((m) => m.why?.includes("what people say") || m.why?.includes("discussions")).length;
-    $("#found-hint").textContent = `Ranked by name, category and what people say; ${bySay} matched on what people say. ${f.gathered ? "" : "Nothing gathered yet: open Browse, scan and gather to rank by reviews. "}${f.took != null ? `${(f.took / 1000).toFixed(1)} s.` : ""}`;
+    const hidden = f.hiddenRefusing ? ` <a href="#" id="toggle-refusing">${f.hideRefusing ? `${f.hiddenRefusing} hidden because users report the model refuses requests; show them` : "Hide models users report as refusing"}</a>.` : "";
+    $("#found-hint").innerHTML = `Ranked by name, category and what people say; ${bySay} matched on what people say. ${f.gathered ? "" : "Nothing gathered yet: open Browse, scan and gather to rank by reviews. "}${f.took != null ? `${(f.took / 1000).toFixed(1)} s.` : ""}${hidden}`;
+    $("#toggle-refusing")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.showRefusing = !state.showRefusing;
+      $("#trait-form").requestSubmit();
+    });
     $("#found-empty").hidden = found.length > 0;
     $("#found-empty").textContent = f.models.length ? "Every match needs a Python setup; untick the runnable filter in Browse to see them." : `Nothing matches "${f.q}". Try other words, or Browse the categories.`;
   }
@@ -369,11 +375,12 @@ function modelCard(m) {
     <div class="author">${esc(m.author)}</div>
     <div class="summary">${esc(m.summary)}</div>
     ${saidHtml(m)}
-    ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : w === "mixed reviews" ? "mixed" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
+    ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : w === "mixed reviews" || w === "users report refusals" ? "mixed" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
       ${m.adult ? '<span class="pill adult">18+</span>' : ""}
+      ${m.refusals?.refuses ? `<span class="pill no" title="${esc(m.refusals.example ?? "")}">Users report refusals</span>` : ""}
       ${m.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}
       ${m.gated ? '<span class="pill gated">Gated</span>' : ""}
       ${runner}

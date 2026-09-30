@@ -1,4 +1,5 @@
 import { voiceText } from "./voices.js";
+import { refusalSignals } from "./refusals.js";
 
 // Ranks models for a plain-language search ("model good for creative
 // writing", "anime images", "porn writing") by how well the name, the
@@ -59,7 +60,7 @@ function saidHits(words, m) {
 
 // `hub` is the Hub's own name search (in its order), `scanned` the scan with
 // summaries attached, `voices` the gathered index by id.
-export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {} }) {
+export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {}, hideRefusing = true }) {
   const words = queryWords(q);
   const intents = intentCategories(q);
   const byId = new Map();
@@ -77,9 +78,17 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {} 
   for (const p of picks) add({ ...p, name: p.id.split("/").pop(), author: p.id.split("/")[0], summary: null, runner: { id: p.runner, easy: true }, categories: p.categories, likes: 0, downloads: 0, isPick: true }, "pick");
 
   const ranked = [];
+  let hiddenRefusing = 0;
   for (const { m, sources, hubIndex } of byId.values()) {
     const why = [];
     let score = 0;
+    // People who report the model refuses requests: hidden by default.
+    const refusal = m.refusals ?? refusalSignals({ ...(voices[m.id] ?? {}), name: m.name, id: m.id }, m.summary);
+    if (refusal.refuses) {
+      hiddenRefusing++;
+      if (hideRefusing) continue;
+      why.push("users report refusals");
+    }
     // What people say weighs most, then the category the words point at,
     // then the name; popularity and being runnable settle ties, and a
     // repository nobody has reviewed cannot outrank one people vouch for.
@@ -123,8 +132,11 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {} 
     const anySaid = positive || negative;
     if (!nameHits && !anySaid && !noteHits && !catHit && !sources.has("hub")) continue;
     if (!nameHits && !anySaid && !noteHits && catHit && words.length > 3 && !sources.has("hub")) score -= 1;
+    // Shown on request, a model people say refuses still sits well below the rest.
+    if (refusal.refuses) score = score / 2 - 1;
     ranked.push({ ...m, score: Math.round(score * 100) / 100, why });
   }
   ranked.sort((a, b) => b.score - a.score || (b.likes ?? 0) - (a.likes ?? 0));
-  return { words, intents: [...intents], models: ranked };
+  // `hiddenRefusing` is the number of models people report as refusing, whether hidden or shown.
+  return { words, intents: [...intents], models: ranked, hiddenRefusing };
 }

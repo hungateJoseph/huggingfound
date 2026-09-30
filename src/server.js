@@ -15,6 +15,7 @@ import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices 
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
 import { cleanSummary, extractiveSummary, summarize, summarizerModel } from "./summarize.js";
 import { rankModels } from "./find.js";
+import { refusalSignals } from "./refusals.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -140,8 +141,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         askSources(q, known, { civitai: true, reddit: true, github: true, hn: true, lemmy: true, youtube: true }),
       ]);
       hub = hubResult;
-      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })), voices: index });
-      return send(res, 200, { q, ...ranked, models: ranked.models.slice(0, 60), hubError, gathered: Object.keys(index).length, scanned: scan.models.length, took: Date.now() - started, ...asked });
+      const hideRefusing = url.searchParams.get("showRefusing") !== "1";
+      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })), voices: index, hideRefusing });
+      return send(res, 200, { q, ...ranked, models: ranked.models.slice(0, 60), hideRefusing, hubError, gathered: Object.keys(index).length, scanned: scan.models.length, took: Date.now() - started, ...asked });
     }
     if (req.method === "GET" && url.pathname === "/api/search") {
       const q = url.searchParams.get("q") ?? "";
@@ -429,7 +431,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // The one line of what people say, for a listing card.
   function withVoice(m) {
     const entry = readVoicesCached()[m.id];
-    return { ...m, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null, summary: cleanSummary(entry?.summary ?? null) };
+    const summary = cleanSummary(entry?.summary ?? null);
+    return { ...m, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null, summary, refusals: entry ? refusalSignals({ ...entry, name: m.name, id: m.id }, summary) : null };
   }
 
   // Summaries for a list of gathered models: extractive lines for all of

@@ -165,6 +165,21 @@ test("the front-page find ranks by name, category and what people say, and asks 
   assert.ok(speech.models.some((m) => m.id === "ggerganov/whisper.cpp"));
 });
 
+test("a model users report as refusing is left out of results unless asked for", async () => {
+  // Refusal reports live in the gathered discussions, so gather first.
+  const { id: runId } = await (await post("/api/voices/gather", {})).json();
+  await readEvents(`${base}/api/runs/${runId}`);
+  const chat = await (await get("/api/find?q=chat")).json();
+  assert.ok(!chat.models.some((m) => m.id === "polite/Polite-Chat-7B-GGUF"), "hidden by default");
+  assert.equal(chat.hiddenRefusing, 1);
+  const shown = await (await get("/api/find?q=chat&showRefusing=1")).json();
+  const polite = shown.models.find((m) => m.id === "polite/Polite-Chat-7B-GGUF");
+  assert.ok(polite && polite.why.includes("users report refusals"));
+  assert.match(polite.refusals.example, /against its guidelines/);
+  const { models } = await (await get("/api/models")).json();
+  assert.equal(models.find((m) => m.id === "polite/Polite-Chat-7B-GGUF").refusals.refuses, true, "browse cards carry the mark too");
+});
+
 test("the trait search asks the hub and returns summarized, speed-tagged models", async () => {
   const found = await (await get("/api/search?q=coder")).json();
   assert.equal(found.q, "coder");
