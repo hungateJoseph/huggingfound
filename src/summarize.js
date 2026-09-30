@@ -97,7 +97,7 @@ export async function summarizerModel(fetchImpl = fetch) {
 const PROMPT = `You summarize what people say about an AI model for someone choosing a model to run at home.
 Write at most 5 lines. Each line under 100 characters, plain words, no markdown, no quotes, no names of commenters.
 Start user opinions with "Users:" (strengths first, then complaints). If there are no user comments, write one line starting with "Author:" that says what the author claims.
-Do not invent anything that is not in the text. If the text has nothing useful, write exactly: Nothing said yet.`;
+Do not invent anything that is not in the text. Never write a line saying there are no complaints or nothing to report; leave it out. If the text has nothing useful at all, write exactly: Nothing said yet.`;
 
 export async function modelSummary(model, entry, web, fetchImpl = fetch) {
   const { users, author } = collectVoices(entry, web);
@@ -111,14 +111,30 @@ export async function modelSummary(model, entry, web, fetchImpl = fetch) {
   });
   if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}`);
   const data = await res.json();
-  const lines = String(data.message?.content ?? "")
-    .split("\n")
-    .map((l) => l.replace(/^[\s*\-•\d.)]+/, "").trim())
-    .filter((l) => l.length > 3 && !/^nothing said yet/i.test(l))
-    .map((l) => (/^(users?|author|complaints?)\s*:/i.test(l) ? l.replace(/^(users?)\s*:/i, "Users:").replace(/^author\s*:/i, "Author:").replace(/^complaints?\s*:/i, "Users:") : `Users: ${l}`))
-    .map((l) => tidy(l, 120))
-    .slice(0, 5);
+  const lines = cleanLines(
+    String(data.message?.content ?? "")
+      .split("\n")
+      .map((l) => l.replace(/^[\s*\-•\d.)]+/, "").trim())
+      .map((l) => (/^(users?|author|complaints?|strengths?|weaknesses?)\s*:/i.test(l) ? l.replace(/^(users?|strengths?|weaknesses?|complaints?)\s*:/i, "Users:").replace(/^author\s*:/i, "Author:") : `Users: ${l}`)),
+  );
   return { short: lines.slice(0, 2), long: lines, by: model, sources: users.length };
+}
+
+// Filler a chat model tends to add ("Users: No complaints mentioned.") and
+// empty headings are dropped; the rest is trimmed to a readable length.
+const FILLER = /^(users|author):\s*(no (complaints?|issues?|concerns?|problems?)( (were |are )?(mentioned|reported|noted|found))?\.?|none( mentioned| reported)?\.?|nothing (said|mentioned|reported|to report|useful)( yet)?\.?|n\/a\.?|not (mentioned|specified|available)\.?)\s*$/i;
+export function cleanLines(lines) {
+  return lines
+    .map((l) => String(l).trim())
+    .filter((l) => /^(users|author):\s*\S/i.test(l) && !FILLER.test(l) && !/^nothing said yet/i.test(l))
+    .map((l) => tidy(l, 130))
+    .slice(0, 5);
+}
+
+export function cleanSummary(summary) {
+  if (!summary) return summary;
+  const long = cleanLines(summary.long ?? []);
+  return { ...summary, long, short: long.slice(0, 2) };
 }
 
 // The summary for one model: by the local chat model when there is one and

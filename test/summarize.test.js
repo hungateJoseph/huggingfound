@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-sum-"));
-const { collectVoices, extractiveSummary, modelSummary, summarize } = await import("../src/summarize.js");
+const { cleanSummary, collectVoices, extractiveSummary, modelSummary, summarize } = await import("../src/summarize.js");
 
 const entry = {
   name: "Llama-3.2-3B-Instruct-GGUF",
@@ -66,4 +66,17 @@ test("summarize falls back to extractive lines when the model fails or is absent
   const none = await summarize(entry, null, { model: null });
   assert.equal(none.by, "extract");
   assert.ok(none.at);
+});
+
+test("cleanSummary drops empty headings and filler lines", () => {
+  const cleaned = cleanSummary({ short: ["Users:", "Users: No complaints mentioned."], long: ["Users:", "Users: Great at roleplay", "Users: No complaints mentioned.", "Users: Nothing said yet.", "Author: A small assistant.", "Complaints: none"], by: "x" });
+  assert.deepEqual(cleaned.long, ["Users: Great at roleplay", "Author: A small assistant."]);
+  assert.deepEqual(cleaned.short, ["Users: Great at roleplay", "Author: A small assistant."]);
+  assert.equal(cleanSummary(null), null);
+});
+
+test("modelSummary drops the filler a model adds", async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ message: { content: "Users:\n- Good for coding\nUsers: No complaints mentioned.\nAuthor: Trained on code." } }) });
+  const s = await modelSummary("m", entry, null, fetchImpl);
+  assert.deepEqual(s.long, ["Users: Good for coding", "Author: Trained on code."]);
 });

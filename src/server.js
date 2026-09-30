@@ -13,7 +13,7 @@ import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeIma
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
-import { extractiveSummary, summarize, summarizerModel } from "./summarize.js";
+import { cleanSummary, extractiveSummary, summarize, summarizerModel } from "./summarize.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -214,7 +214,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const summary = await summarize(withComments, isFresh(entry.web) ? entry.web.data : null, { model: writtenSummaries ? await summarizerModel(fetchImpl) : null, fetchImpl });
       index[id] = { ...entry, summary };
       writeVoices(index, voicesFile);
-      return send(res, 200, { id, card: entry.card, gatheredAt: entry.at, discussions, summary });
+      return send(res, 200, { id, card: entry.card, gatheredAt: entry.at, discussions, summary: cleanSummary(summary) });
     }
     if (req.method === "GET" && url.pathname === "/api/model") {
       const id = url.searchParams.get("id") ?? "";
@@ -403,7 +403,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // The one line of what people say, for a listing card.
   function withVoice(m) {
     const entry = readVoicesCached()[m.id];
-    return { ...m, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null, summary: entry?.summary ?? null };
+    return { ...m, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null, summary: cleanSummary(entry?.summary ?? null) };
   }
 
   // Summaries for a list of gathered models: extractive lines for all of
