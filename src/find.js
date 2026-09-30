@@ -63,22 +63,25 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {} 
   for (const { m, sources, hubIndex } of byId.values()) {
     const why = [];
     let score = 0;
-    const nameHits = coverage(words, `${m.id} ${m.summary?.long ? "" : ""}`);
+    // What people say weighs most, then the category the words point at,
+    // then the name; popularity and being runnable settle ties, and a
+    // repository nobody has reviewed cannot outrank one people vouch for.
+    const nameHits = coverage(words, m.id);
     if (nameHits) {
-      score += 3 * nameHits;
+      score += 1.5 * nameHits;
       why.push("name");
     }
-    if (hubIndex != null && hubIndex >= 0) score += Math.max(0, 2 - hubIndex / 15);
+    if (hubIndex != null && hubIndex >= 0) score += Math.max(0, 1 - hubIndex / 20);
     const said = summaryText(m);
     const saidHits = coverage(words, said);
     if (saidHits) {
-      score += 2.5 * saidHits;
+      score += 3.5 * saidHits;
       why.push("what people say");
     }
     const notes = voiceText(voices[m.id]);
     const noteHits = notes ? coverage(words, notes) : 0;
     if (noteHits && !saidHits) {
-      score += 1.2 * noteHits;
+      score += 1.5 * noteHits;
       why.push("discussions");
     }
     const catHit = (m.categories ?? []).some((c) => intents.has(c));
@@ -87,12 +90,13 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {} 
       why.push("category");
     }
     if (m.isPick) {
-      score += 0.5;
+      score += 1;
       why.push("curated pick");
     }
     if (m.runner?.easy) score += 1;
     else score -= 1.5;
-    score += Math.log10((m.likes ?? 0) + 1) / 4;
+    score += Math.log10((m.likes ?? 0) + 1) / 2 + Math.log10((m.downloads ?? 0) + 1) / 6;
+    if (!said && !notes) score -= 1;
     // A model that matches nothing but a broad category only stays when the
     // search was mostly about that category.
     if (!nameHits && !saidHits && !noteHits && !catHit && !sources.has("hub")) continue;
