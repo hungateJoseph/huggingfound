@@ -4,7 +4,7 @@ Find open-source models on Hugging Face, see which ones your computer can run, a
 
 - **Scan** Hugging Face for what is trending and what is new, then browse it by what you want to do: easy to set up, chat and writing, coding, math and reasoning, understanding images, making images, speech to text.
 - **Know the wait.** Every model shows a rough speed line for this computer: words per second for chat, minutes per image, seconds per minute of audio. It is a guess from the file size and the hardware; after a real run the measured time takes its place.
-- **Hear what people say.** "Gather what people say" reads each scanned model's card and its community discussions on Hugging Face. Cards then carry a line of it, the model window lists the discussions with their first comments, and the search box can search those words instead of model names ("roleplay", "coding help", "blurry hands"). These are other users' words as written on the Hub, not a review.
+- **Hear what people say.** "Gather what people say" reads each scanned model's card and its community discussions on Hugging Face. Cards then carry a line of it, the model window lists the discussions with their first comments, and the search box can search those words instead of model names ("roleplay", "coding help", "blurry hands"). These are other users' words as written on the Hub, not a review. The same search also asks Civitai (thumbs up, comments and downloads for image models, most of which are mirrored on the Hub) and, with a free Reddit app id in Settings, r/LocalLLaMA, r/StableDiffusion, r/SillyTavernAI and related communities; posts that name a scanned model link to it. A model's window shows its Civitai pages and Reddit posts too.
 - **Find what you want.** Tabs for NSFW writing and NSFW images alongside the rest, sort by trending, user likes, downloads or newest, narrow to this week or month, or type the traits you are after ("uncensored roleplay 7b", "japanese", "medical") to search Hugging Face directly.
 - **See the fit.** Every model card shows whether the file fits in this computer's memory, before you download anything.
 - **Set the model's instructions.** The chat box has an optional system message (persona and rules) that is sent before every conversation and remembered per model.
@@ -39,7 +39,7 @@ Everything it saves lives in `~/HuggingFound`:
 | `scan.json` | The last scan, so the next one can say what is new |
 | `timings.json` | How long real runs took, shown in place of the guesses |
 | `voices.json` | Model cards and discussion lists gathered for the search by what people say |
-| `.env` | Your Hugging Face token and the image server address, if you set them |
+| `.env` | Your Hugging Face token, the image server address and the Reddit app id, if you set them |
 
 Chat models pulled through Ollama live in Ollama's own store. Set `HUGGINGFOUND_HOME` to keep all of it somewhere else.
 

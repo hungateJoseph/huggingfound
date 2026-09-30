@@ -12,6 +12,7 @@ import { buildPlan } from "./plans.js";
 import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, removeFile, removeFolder, removeOllamaModel, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
+import { createCivitai, createReddit, matchKnown } from "./sources.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -19,10 +20,17 @@ const VOICES_CACHE = new Map();
 const RUNNER_NAMES = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".txt": "text/plain; charset=utf-8" };
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json") } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase } = {}) {
   const machine = describeMachine();
   const env = () => readEnv(envFile);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
+  const civitai = createCivitai({ fetchImpl, base: civitaiBase });
+  let redditClient = { id: null, client: null };
+  const reddit = () => {
+    const id = env().REDDIT_CLIENT_ID || "";
+    if (redditClient.id !== id) redditClient = { id, client: createReddit({ fetchImpl, clientId: id, authBase: redditAuthBase, apiBase: redditApiBase }) };
+    return redditClient.client;
+  };
   const details = new Map();
 
   return http.createServer(async (req, res) => {
@@ -51,6 +59,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         runners: await detect(fetchImpl),
         token: saved.HF_TOKEN ? mask(saved.HF_TOKEN) : "",
         imageServer: saved.IMAGE_SERVER || "",
+        redditApp: saved.REDDIT_CLIENT_ID ? mask(saved.REDDIT_CLIENT_ID) : "",
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
         voices: voicesMeta(),
@@ -64,6 +73,12 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if ("HF_TOKEN" in body) {
         if (typeof body.HF_TOKEN !== "string") return send(res, 400, { error: "HF_TOKEN must be a string" });
         updates.HF_TOKEN = body.HF_TOKEN.trim();
+      }
+      if ("REDDIT_CLIENT_ID" in body) {
+        if (typeof body.REDDIT_CLIENT_ID !== "string") return send(res, 400, { error: "REDDIT_CLIENT_ID must be a string" });
+        const value = body.REDDIT_CLIENT_ID.trim();
+        if (value && !/^[\w-]{10,40}$/.test(value)) return send(res, 400, { error: "That does not look like a Reddit app id" });
+        updates.REDDIT_CLIENT_ID = value;
       }
       if ("IMAGE_SERVER" in body) {
         if (typeof body.IMAGE_SERVER !== "string") return send(res, 400, { error: "IMAGE_SERVER must be a string" });
@@ -130,7 +145,45 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     if (req.method === "GET" && url.pathname === "/api/voices/search") {
       const q = url.searchParams.get("q") ?? "";
       const index = readVoices(voicesFile);
-      return send(res, 200, { q, hits: searchVoices(index, q).slice(0, 100) });
+      const known = [...new Set([...Object.keys(index), ...((readScan(scanFile)?.models ?? []).map((m) => m.id))])];
+      // Civitai and Reddit are asked live; either failing is reported, not fatal.
+      const [civ, red] = await Promise.allSettled([civitai.search(q), reddit().configured() ? reddit().search(q) : Promise.reject(new Error("no app id"))]);
+      const civitaiResult = civ.status === "fulfilled" ? civ.value.map((m) => ({ ...m, matched: matchKnown(m.name, known) })) : [];
+      const redditResult = red.status === "fulfilled" ? red.value.map((p) => ({ ...p, matched: matchKnown(`${p.title} ${p.excerpt}`, known) })) : [];
+      return send(res, 200, {
+        q,
+        hits: searchVoices(index, q).slice(0, 100),
+        civitai: civitaiResult,
+        civitaiError: civ.status === "rejected" ? civ.reason.message : null,
+        reddit: redditResult,
+        redditError: red.status === "rejected" ? (reddit().configured() ? red.reason.message : "") : null,
+        redditConfigured: reddit().configured(),
+      });
+    }
+    // Off-Hub voices for one model: its Civitai page and Reddit posts, cached for a week.
+    if (req.method === "GET" && url.pathname === "/api/voices/web") {
+      const id = url.searchParams.get("id") ?? "";
+      if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
+      const index = readVoices(voicesFile);
+      const entry = index[id] ?? { at: null, card: "", discussions: [] };
+      const out = { id, civitai: [], civitaiError: null, reddit: [], redditError: null, redditConfigured: reddit().configured() };
+      if (isFresh(entry.web)) {
+        Object.assign(out, entry.web.data);
+      } else {
+        const wantImages = url.searchParams.get("images") === "1";
+        const [civ, red] = await Promise.allSettled([wantImages ? civitai.forModel(id) : Promise.resolve([]), reddit().configured() ? reddit().forModel(id) : Promise.resolve([])]);
+        if (civ.status === "fulfilled") out.civitai = civ.value;
+        else out.civitaiError = civ.reason.message;
+        if (red.status === "fulfilled") out.reddit = red.value;
+        else out.redditError = red.reason.message;
+        // Cache only what came back; an error is asked again next time.
+        if (!out.civitaiError && !out.redditError) {
+          index[id] = { ...entry, web: { at: new Date().toISOString(), data: { civitai: out.civitai, reddit: out.reddit } } };
+          writeVoices(index, voicesFile);
+        }
+      }
+      out.redditConfigured = reddit().configured();
+      return send(res, 200, out);
     }
     // The full picture for one model: card excerpt and discussions with their first comments.
     if (req.method === "GET" && url.pathname === "/api/voices") {

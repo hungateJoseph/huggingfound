@@ -32,6 +32,7 @@ async function load() {
   $("#env-path").textContent = s.envFile;
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
   state.imageServer = s.imageServer;
+  $("#reddit-status").textContent = s.redditApp ? `An app id is saved (${s.redditApp}); Reddit is searched with it.` : "No app id saved; Reddit is skipped.";
   state.voices = s.voices;
   renderVoicesStatus();
   $("#image-server").value = s.imageServer;
@@ -135,11 +136,13 @@ $("#trait-form").addEventListener("submit", async (e) => {
   btn.textContent = "Searching";
   try {
     if ($("#trait-mode").value === "voices") {
-      const { hits } = await api.get(`/api/voices/search?q=${encodeURIComponent(q)}`);
+      const result = await api.get(`/api/voices/search?q=${encodeURIComponent(q)}`);
+      const { hits } = result;
       const known = new Map([...state.models, ...(state.found?.models ?? [])].map((m) => [m.id, m]));
       const models = hits.filter((h) => known.has(h.id)).map((h) => ({ ...known.get(h.id), voiceMatch: h.snippet }));
-      state.found = { q: `what people say: ${q}`, models, voices: true, unknown: hits.length - models.length };
-      notice(hits.length ? "" : state.voices?.count ? `Nobody in the gathered cards or discussions says "${q}".` : "Nothing gathered yet. Click \"Gather what people say\" first.", hits.length ? "info" : "warn");
+      state.found = { q: `what people say: ${q}`, models, voices: true, unknown: hits.length - models.length, web: result };
+      const anything = hits.length || result.civitai.length || result.reddit.length;
+      notice(anything ? "" : state.voices?.count ? `Nobody in the gathered cards, discussions, Civitai or Reddit says "${q}".` : "Nothing gathered yet. Click \"Gather what people say\" first; Civitai and Reddit are searched live.", anything ? "info" : "warn");
     } else {
       const result = await api.get(`/api/search?q=${encodeURIComponent(q)}`);
       state.found = result;
@@ -227,6 +230,7 @@ function render() {
   const found = state.found ? sortModels(state.found.models.filter(keep)) : [];
   $("#found").innerHTML = found.map(modelCard).join("");
   $("#found-title").hidden = !state.found;
+  renderWebFound(state.found?.web ?? null);
   if (state.found) $("#found-title").textContent = `Search: ${state.found.q} (${found.length} of ${state.found.models.length} shown${state.found.unknown ? `, ${state.found.unknown} more not in the current lists` : ""})`;
 
   const picks = onlyNew || Number($("#since").value) ? [] : state.picks.filter((p) => p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
@@ -246,6 +250,35 @@ function render() {
   }
 
   for (const card of document.querySelectorAll(".model")) card.addEventListener("click", () => openModel(card.dataset.id));
+}
+
+// Civitai models and Reddit posts from a "what people say" search.
+function renderWebFound(web) {
+  const box = $("#web-found");
+  box.hidden = !web;
+  if (!web) return;
+  $("#civitai-note").textContent = web.civitaiError ? `Civitai did not answer: ${web.civitaiError}` : web.civitai.length ? "Image models on Civitai matching these words, with their thumbs up and comment counts. Many are mirrored on Hugging Face; a chip opens the copy from the scan, or search the Hub for the name." : "Nothing on Civitai for these words.";
+  $("#civitai-found").innerHTML = web.civitai.map((m, i) => `<div class="civ">
+    <div class="name"><a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.name)}</a> <span class="pill">${esc(m.type)}</span>${m.nsfw ? ' <span class="pill adult">18+</span>' : ""}</div>
+    <div class="stats">${fmt(m.thumbsUp)} thumbs up, ${fmt(m.thumbsDown)} down, ${fmt(m.comments)} comments, ${fmt(m.downloads)} downloads${m.creator ? `, by ${esc(m.creator)}` : ""}</div>
+    ${m.description ? `<div class="desc">${esc(m.description)}</div>` : ""}
+    <div class="chips">${m.matched.map((id) => `<button class="chip" data-open="${esc(id)}">${esc(id.split("/").pop())}</button>`).join("")}<button class="chip" data-hub="${esc(m.name)}">Search the Hub for it</button></div>
+  </div>`).join("");
+  $("#reddit-note").textContent = !web.redditConfigured ? "Reddit needs a free app id in Settings before it can be searched." : web.redditError ? `Reddit did not answer: ${web.redditError}` : web.reddit.length ? "Posts from r/LocalLLaMA, r/StableDiffusion, r/SillyTavernAI and related communities. A chip opens a model from the scan that the post names." : "No Reddit posts for these words in the past year.";
+  $("#reddit-found").innerHTML = web.reddit.map((p) => `<li>
+    <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>
+    <div class="who">r/${esc(p.subreddit)}, ${fmt(p.score)} points, ${fmt(p.comments)} comments${p.created ? `, ${relative(p.created)}` : ""}</div>
+    ${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ""}
+    ${p.matched.length ? `<div class="chips">${p.matched.map((id) => `<button class="chip" data-open="${esc(id)}">${esc(id.split("/").pop())}</button>`).join("")}</div>` : ""}
+  </li>`).join("");
+  for (const chip of box.querySelectorAll("button[data-open]")) chip.addEventListener("click", () => openModel(chip.dataset.open));
+  for (const chip of box.querySelectorAll("button[data-hub]")) {
+    chip.addEventListener("click", () => {
+      $("#trait-mode").value = "hub";
+      $("#trait").value = chip.dataset.hub;
+      $("#trait-form").requestSubmit();
+    });
+  }
 }
 
 function fit(gb) {
@@ -364,7 +397,20 @@ async function loadVoices(model) {
   const threads = v.discussions.length
     ? `<ul>${v.discussions.slice(0, 12).map((d) => `<li><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a> <span class="who">${d.comments} comment${d.comments === 1 ? "" : "s"}${d.status === "closed" ? ", closed" : ""}</span>${(d.comments_text ?? []).map((c) => `<p>${esc(c.author ? c.author + ": " : "")}${esc(c.text)}</p>`).join("")}</li>`).join("")}</ul>`
     : `<p class="muted small">No community discussions on this repository yet.</p>`;
-  box.innerHTML = `<h3>What people say</h3>${card}${threads}<p class="muted small">From the community tab on Hugging Face; these are other users' words, not a review.</p>`;
+  box.innerHTML = `<h3>What people say</h3>${card}${threads}<p class="muted small">From the community tab on Hugging Face; these are other users' words, not a review.</p><div class="web" id="voices-web"><p class="muted small">Looking on Civitai and Reddit</p></div>`;
+  const isImage = state.plan?.runner === "sd" || (model.categories ?? []).includes("images");
+  const web = await api.get(`/api/voices/web?id=${encodeURIComponent(model.id)}${isImage ? "&images=1" : ""}`);
+  const webBox = $("#voices-web");
+  if (!webBox || state.open !== model.id) return;
+  const civ = web.civitai.length
+    ? `<h4>On Civitai</h4><p class="muted small">Pages whose name matches this model; merges and re-uploads share names, so check the link.</p>` + web.civitai.map((c) => `<div class="civ"><div class="name"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.nsfw ? ' <span class="pill adult">18+</span>' : ""}</div><div class="stats">${fmt(c.thumbsUp)} thumbs up, ${fmt(c.thumbsDown)} down, ${fmt(c.comments)} comments, ${fmt(c.downloads)} downloads${c.creator ? `, by ${esc(c.creator)}` : ""}</div>${c.description ? `<div class="desc">${esc(c.description)}</div>` : ""}</div>`).join("")
+    : web.civitaiError ? `<p class="muted small">Civitai did not answer: ${esc(web.civitaiError)}</p>` : isImage ? `<p class="muted small">No matching page on Civitai.</p>` : "";
+  const red = !web.redditConfigured
+    ? `<p class="muted small">Reddit posts need a free app id in Settings.</p>`
+    : web.redditError ? `<p class="muted small">Reddit did not answer: ${esc(web.redditError)}</p>`
+    : web.reddit.length ? `<h4>On Reddit</h4><ul class="posts">${web.reddit.slice(0, 8).map((p) => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a><div class="who">r/${esc(p.subreddit)}, ${fmt(p.score)} points, ${fmt(p.comments)} comments</div>${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ""}</li>`).join("")}</ul>`
+    : `<p class="muted small">No Reddit posts name this model.</p>`;
+  webBox.innerHTML = civ + red;
 }
 
 function stepHtml(s, i) {
@@ -856,6 +902,22 @@ async function renderImageServerStatus() {
     el.textContent = `Could not check the server: ${err.message}`;
   }
 }
+
+$("#save-reddit").addEventListener("click", async () => {
+  const value = $("#reddit-app").value.trim();
+  try {
+    await api.post("/api/settings", { REDDIT_CLIENT_ID: value });
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  $("#reddit-app").value = "";
+  await load();
+});
+$("#clear-reddit").addEventListener("click", async () => {
+  await api.post("/api/settings", { REDDIT_CLIENT_ID: "" });
+  await load();
+});
 
 $("#save-image-server").addEventListener("click", async () => {
   const value = $("#image-server").value.trim();

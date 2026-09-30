@@ -12,6 +12,33 @@ import http from "node:http";
 
 // A stand-in sd-server: reports one loaded model and answers txt2img with a 1 by 1 PNG.
 const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+// Stand-ins for Civitai and Reddit.
+function startStubWeb() {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://stub");
+    res.setHeader("Content-Type", "application/json");
+    if (url.pathname === "/api/v1/models") {
+      const q = (url.searchParams.get("query") ?? "").toLowerCase();
+      const items = [
+        { id: 11, name: "Pony Realism", type: "Checkpoint", nsfw: true, stats: { thumbsUpCount: 32000, thumbsDownCount: 10, commentCount: 5, downloadCount: 900000 }, tags: ["realistic"], creator: { username: "ann" }, description: "<p>Photo real people, great for roleplay scenes.</p>" },
+        { id: 12, name: "Roleplay Faces", type: "LORA", stats: { thumbsUpCount: 50 }, tags: [] },
+      ].filter((m) => m.name.toLowerCase().includes(q.split(" ")[0]) || m.description?.toLowerCase().includes(q.split(" ")[0]));
+      return res.end(JSON.stringify({ items }));
+    }
+    if (url.pathname === "/api/v1/access_token") return res.end(JSON.stringify({ access_token: "tok", expires_in: 3600 }));
+    if (url.pathname === "/search") {
+      if (req.headers.authorization !== "bearer tok") {
+        res.statusCode = 401;
+        return res.end("{}");
+      }
+      return res.end(JSON.stringify({ data: { children: [{ data: { title: "Qwen2.5 Coder 7B Instruct is my roleplay coding buddy", subreddit: "LocalLLaMA", score: 88, num_comments: 12, permalink: "/r/LocalLLaMA/comments/2/y/", created_utc: 1700000000, selftext: "" } }] } }));
+    }
+    res.statusCode = 404;
+    res.end("{}");
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` })));
+}
+
 function startStubImageServer() {
   const requests = [];
   const server = http.createServer((req, res) => {
@@ -39,11 +66,13 @@ let base;
 let envFile;
 let scanFile;
 
+let web;
 before(async () => {
   stub = await startStubHub();
+  web = await startStubWeb();
   envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
   scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
-  server = createServer({ envFile, scanFile, hubBase: stub.base });
+  server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: web.url, redditAuthBase: web.url, redditApiBase: web.url });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -51,6 +80,7 @@ before(async () => {
 after(() => {
   server.close();
   stub.server.close();
+  web.server.close();
 });
 
 const get = (p) => fetch(base + p);
@@ -278,6 +308,30 @@ test("gathering what people say indexes the scan, and searches and cards use it"
   assert.equal(llama.talked, 2);
   const state = await (await get("/api/state")).json();
   assert.ok(state.voices.count >= MODELS.length);
+
+  // Civitai answers without a key; Reddit waits for an app id, then answers.
+  const web1 = await (await get("/api/voices/search?q=roleplay")).json();
+  assert.equal(web1.civitai.length, 2);
+  assert.equal(web1.civitai[0].name, "Pony Realism");
+  assert.deepEqual(web1.civitai[0].matched, [], "no scanned model carries that name");
+  assert.equal(web1.redditConfigured, false);
+  assert.deepEqual(web1.reddit, []);
+  assert.equal((await post("/api/settings", { REDDIT_CLIENT_ID: "not an id!" })).status, 400);
+  assert.equal((await post("/api/settings", { REDDIT_CLIENT_ID: "abc123def456ghi" })).status, 200);
+  assert.equal((await (await get("/api/state")).json()).redditApp, "abc1*******6ghi");
+  const web2 = await (await get("/api/voices/search?q=roleplay")).json();
+  assert.equal(web2.redditConfigured, true);
+  assert.equal(web2.reddit.length, 1);
+  assert.deepEqual(web2.reddit[0].matched, ["bartowski/Qwen2.5-Coder-7B-Instruct-GGUF"], "the post names a scanned model");
+  const perModel = await (await get("/api/voices/web?id=bartowski/Qwen2.5-Coder-7B-Instruct-GGUF")).json();
+  assert.equal(perModel.reddit.length, 1);
+  assert.deepEqual(perModel.civitai, [], "a chat model is not looked up on Civitai");
+  const imageModel = await (await get("/api/voices/web?id=John6666/pony-realism-v23-sdxl&images=1")).json();
+  assert.equal(imageModel.civitai[0].name, "Pony Realism");
+  assert.equal(imageModel.civitai[0].thumbsUp, 32000);
+  const cached = JSON.parse(fs.readFileSync(path.join(process.env.HUGGINGFOUND_HOME, "voices.json"), "utf8"));
+  assert.ok(cached["John6666/pony-realism-v23-sdxl"].web.data.civitai.length === 1, "off-Hub answers are cached");
+  assert.equal((await post("/api/settings", { REDDIT_CLIENT_ID: "" })).status, 200);
 
   const detail = await (await get("/api/voices?id=bartowski/Llama-3.2-3B-Instruct-GGUF")).json();
   assert.match(detail.card, /great for quick answers/);

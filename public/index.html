@@ -91,6 +91,14 @@
       <p class="muted small speed-note">Speed lines are rough guesses for this computer from the model's size. The first run is slower while things load; a measured time replaces the guess after a real run.</p>
       <h2 id="found-title" class="section-title" hidden></h2>
       <div id="found" class="cards"></div>
+      <div id="web-found" hidden>
+        <h2 class="section-title">On Civitai</h2>
+        <p class="muted small" id="civitai-note"></p>
+        <div id="civitai-found" class="cards"></div>
+        <h2 class="section-title">On Reddit</h2>
+        <p class="muted small" id="reddit-note"></p>
+        <ul id="reddit-found" class="posts"></ul>
+      </div>
       <h2 id="picks-title" class="section-title">Good first picks</h2>
       <div id="picks" class="cards"></div>
       <h2 id="scan-title" class="section-title" hidden>From the scan</h2>
@@ -140,6 +148,16 @@
       <div class="actions">
         <button class="primary" id="save-image-server">Save</button>
         <button class="ghost" id="clear-image-server">Use this computer</button>
+      </div>
+      <label class="field">
+        <span>Reddit app id (optional)</span>
+        <input type="text" id="reddit-app" autocomplete="off" placeholder="paste the id under your app's name">
+        <small class="muted">Reddit refuses anonymous requests, so searching what people say on r/LocalLLaMA, r/StableDiffusion and r/SillyTavernAI needs a free app id: on <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> choose "create app", type "installed app", any name, redirect URI http://localhost, then copy the id shown under the app's name. No secret and no login are needed. Civitai works without a key.</small>
+      </label>
+      <p class="muted small" id="reddit-status"></p>
+      <div class="actions">
+        <button class="primary" id="save-reddit">Save</button>
+        <button class="ghost" id="clear-reddit">Remove</button>
       </div>
       <div class="runners">
         <h3>What is installed</h3>

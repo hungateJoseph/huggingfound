@@ -94,6 +94,18 @@ button.ghost { background: transparent; }
 .voices li .who { color: var(--muted); font-size: 12.5px; }
 .voices li p { margin: 6px 0 0; font-size: 13.5px; color: var(--muted); }
 #voices-log { max-height: 90px; margin-bottom: 14px; }
+.posts { list-style: none; padding: 0; margin: 0 0 20px; display: grid; gap: 8px; }
+.posts li { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: 14px; }
+.posts li .who { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.posts li p { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.chip { font: inherit; font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--accent-soft); color: var(--accent-ink); cursor: pointer; }
+.civ { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.civ .name { font-weight: 600; }
+.civ .stats { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.civ .desc { color: var(--muted); font-size: 13px; }
+.civ .actions { margin-top: 4px; }
+.voices .web { margin-top: 12px; }
 .trait-search input { font: inherit; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
 .speed-note { margin: 0 0 6px; }
 .model .speed { font-size: 12.5px; color: var(--muted); }
