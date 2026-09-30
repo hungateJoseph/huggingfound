@@ -130,7 +130,10 @@ button.ghost { background: transparent; }
 .local li { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; font-size: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
 .local li .what { min-width: 0; overflow-wrap: anywhere; }
 .local li .size { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
-.local li button { font-size: 13px; padding: 5px 10px; }
+.local li button, .storage li button { font-size: 13px; padding: 5px 10px; }
+.local li .link, .storage li .link { text-align: left; border: 0; background: transparent; padding: 0; font: inherit; color: var(--accent-ink); cursor: pointer; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.local li .link:hover, .storage li .link:hover { text-decoration-color: var(--accent); }
+.row-actions { display: inline-flex; gap: 6px; }
 .disk { margin: 12px 0 0; font-size: 14px; }
 .disk b { font-variant-numeric: tabular-nums; }
 .disk .bar { display: block; height: 8px; border-radius: 999px; background: #efece5; margin-top: 6px; overflow: hidden; }
@@ -161,6 +164,7 @@ button.ghost { background: transparent; }
 
 .storage ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
 .storage li { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; font-size: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
+.storage li .link { text-align: left; }
 .storage li .what { min-width: 0; overflow-wrap: anywhere; }
 .storage li .size { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
 .storage button, .try-head button.remove { font-size: 13px; padding: 5px 10px; }

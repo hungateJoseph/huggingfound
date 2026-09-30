@@ -190,7 +190,7 @@ await step("settings lists downloaded models with sizes and removes one", async 
   assert.match(await page.locator("#storage-total").innerText(), /GB in \d+ model/);
   const before = await page.locator("#storage-list li").count();
   acceptDialogs = true;
-  await row.locator("button").click();
+  await row.locator("button[data-remove]").click();
   await page.waitForFunction((n) => document.querySelectorAll("#storage-list li").length === n - 1, before);
   acceptDialogs = false;
   assert.equal(await row.count(), 0);
@@ -210,9 +210,15 @@ await step("the main page scans this computer, shows free space, and removing a 
   assert.match(await page.locator("#disk-line").innerText(), /\d+(\.\d)? GB free of \d+ GB on this drive/);
   assert.match(await page.locator("#machine-line").innerText(), /GB free on disk/);
   assert.match(await page.locator("#scan-local").innerText(), /Scan again/);
+  await row.locator("button.use").click();
+  await page.waitForSelector("#steps .step");
+  assert.equal(await page.locator("#modal-title").innerText(), "Qwen2.5-Coder-7B-Instruct-GGUF", "Use opens the model ready to try");
+  const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
+  assert.equal(done.at(-1), true, "the download step is already done");
+  await page.click("#close-modal");
   const before = await page.locator("#local-list li").count();
   acceptDialogs = true;
-  await row.locator("button").click();
+  await row.locator("button[data-remove]").click();
   await page.waitForFunction((n) => document.querySelectorAll("#local-list li").length === n - 1, before);
   acceptDialogs = false;
   assert.equal(fs.existsSync(dir), false);

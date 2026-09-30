@@ -449,13 +449,20 @@ function renderRemove(box, model, plan) {
 async function renderStorage(targets = ["local", "settings"]) {
   const st = await api.get("/api/storage");
   state.storage = st;
+  // Which repository a row belongs to, so a click can open it ready to use.
+  const repoOfOllama = (name) => {
+    const hf = /^hf\.co\/([^/:]+\/[^/:]+)/.exec(name);
+    if (hf) return hf[1];
+    const local = name.split(":")[0].toLowerCase();
+    return st.files.find((f) => f.repo.split("/").pop().toLowerCase().replace(/-gguf$/, "") === local)?.repo ?? null;
+  };
   const rows = [
-    ...st.files.map((f) => ({ what: `${f.repo}/${f.file}`, gb: f.gb, body: { kind: "file", repo: f.repo, file: f.file } })),
-    ...st.ollama.map((m) => ({ what: `${m.name} (Ollama)`, gb: m.gb, body: { kind: "ollama", name: m.name } })),
+    ...st.files.map((f) => ({ what: `${f.repo}/${f.file}`, gb: f.gb, open: f.repo, body: { kind: "file", repo: f.repo, file: f.file } })),
+    ...st.ollama.map((m) => ({ what: `${m.name} (Ollama)`, gb: m.gb, open: repoOfOllama(m.name), body: { kind: "ollama", name: m.name } })),
   ];
   if (st.outputs > 0.001) rows.push({ what: "Generated pictures, transcripts and uploaded recordings", gb: st.outputs, body: { kind: "outputs" }, label: "Clear" });
-  const summary = rows.length ? `${st.totalGb.toFixed(1)} GB in ${st.files.length + st.ollama.length} model${st.files.length + st.ollama.length === 1 ? "" : "s"}. Removing one keeps the runner; the model can be downloaded again later.` : "No models downloaded yet.";
-  const list = rows.map((r, i) => `<li><span class="what">${esc(r.what)}</span><span class="size">${r.gb.toFixed(2)} GB</span><button class="ghost" data-remove="${i}">${r.label ?? "Remove"}</button></li>`).join("");
+  const summary = rows.length ? `${st.totalGb.toFixed(1)} GB in ${st.files.length + st.ollama.length} model${st.files.length + st.ollama.length === 1 ? "" : "s"}. Click a model to use it. Removing one keeps the runner; the model can be downloaded again later.` : "No models downloaded yet.";
+  const list = rows.map((r, i) => `<li class="${r.open ? "openable" : ""}">${r.open ? `<button class="what link" data-open="${i}" title="Open ${esc(r.open)}">${esc(r.what)}</button>` : `<span class="what">${esc(r.what)}</span>`}<span class="size">${r.gb.toFixed(2)} GB</span><span class="row-actions">${r.open ? `<button class="primary use" data-open="${i}">Use</button>` : ""}<button class="ghost" data-remove="${i}">${r.label ?? "Remove"}</button></span></li>`).join("");
   const disk = st.disk.freeGb != null
     ? `<b>${st.disk.freeGb.toFixed(1)} GB free</b> of ${st.disk.totalGb.toFixed(0)} GB on this drive; models use ${st.totalGb.toFixed(1)} GB.<span class="bar"><i class="models" style="width:${Math.min(100, (st.totalGb / st.disk.totalGb) * 100).toFixed(2)}%"></i><i style="width:${Math.max(0, Math.min(100, ((st.disk.totalGb - st.disk.freeGb - st.totalGb) / st.disk.totalGb) * 100)).toFixed(2)}%"></i></span>`
     : "";
@@ -475,7 +482,13 @@ async function renderStorage(targets = ["local", "settings"]) {
     places.push($("#storage-list"));
   }
   for (const place of places) {
-    for (const btn of place.querySelectorAll("button")) {
+    for (const btn of place.querySelectorAll("button[data-open]")) {
+      btn.addEventListener("click", () => {
+        $("#settings").hidden = true;
+        openModel(rows[Number(btn.dataset.open)].open);
+      });
+    }
+    for (const btn of place.querySelectorAll("button[data-remove]")) {
       btn.addEventListener("click", async () => {
         const row = rows[Number(btn.dataset.remove)];
         const question = row.body.kind === "outputs" ? "Delete all generated pictures, transcripts and uploaded recordings?" : `Delete ${row.what} from this computer?`;
