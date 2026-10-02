@@ -16,7 +16,26 @@ const stub = await startStubHub();
 const envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
 const scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
 const dead = "http://127.0.0.1:1";
-const server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false });
+// Ollama is not installed here; its chat endpoint is answered by a slow
+// stand-in so the chat box can be driven while a reply is still arriving.
+const REPLY_WORDS = 40;
+const fetchImpl = (url, init) => {
+  if (String(url).endsWith("/api/chat")) {
+    const stream = new ReadableStream({
+      async start(controller) {
+        for (let i = 0; i < REPLY_WORDS; i++) {
+          controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: `word${i} ` } })}\n`));
+          await new Promise((r) => setTimeout(r, 60));
+        }
+        controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ done: true, eval_count: REPLY_WORDS, eval_duration: 2e9 })}\n`));
+        controller.close();
+      },
+    });
+    return Promise.resolve(new Response(stream, { status: 200 }));
+  }
+  return fetch(url, init);
+};
+const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -391,6 +410,73 @@ await step("a reload keeps the scan and reports when it was made", async () => {
   await page.click("#nav-browse");
   await page.waitForSelector("#scan-title:not([hidden])");
   assert.match(await page.locator("#scan-status").innerText(), /Last scan just now/);
+});
+
+await step("a conversation survives re-renders, an outside click and closing the window, and scrolling up is not undone while a reply streams", async () => {
+  const id = "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF";
+  // The plan says every step is done and the model answers through Ollama, as if it had been pulled.
+  await page.route((u) => u.pathname === "/api/model" && u.searchParams.get("id") === id, async (route) => {
+    const data = await (await route.fetch()).json();
+    for (const s of data.plan.steps) s.done = true;
+    data.plan.tryWith = { kind: "chat", model: "qwen-test" };
+    data.plan.remove = [];
+    await route.fulfill({ json: data });
+  });
+  // An earlier conversation is on this computer already, long enough to need scrolling.
+  await page.evaluate(() => {
+    const old = [];
+    for (let i = 0; i < 12; i++) old.push({ role: "user", content: `earlier question ${i}` }, { role: "assistant", content: `earlier answer ${i}\nwith a second line` });
+    localStorage.setItem("chat:qwen-test", JSON.stringify(old));
+  });
+  await page.click("#nav-browse");
+  await page.click(".tab[data-tab=chat]");
+  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().click();
+  await page.waitForSelector("#chat-send");
+  assert.equal(await page.locator("#messages .msg").count(), 24, "the earlier conversation is back");
+  assert.match(await page.locator("#messages .msg").last().innerText(), /earlier answer 11/);
+
+  await page.fill("#chat-text", "hello there");
+  await page.click("#chat-send");
+  await page.waitForFunction(() => /word3 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
+  // Scroll up while the reply is still arriving; new words must not drag the view back down.
+  await page.evaluate(() => (document.querySelector("#messages").scrollTop = 0));
+  await page.waitForFunction(() => /word9 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
+  assert.ok((await page.evaluate(() => document.querySelector("#messages").scrollTop)) < 10, "the view stays where the reader put it");
+  assert.equal(await page.locator("#chat-send").isDisabled(), true);
+
+  // A click beside the window used to close it and throw the conversation away.
+  await page.mouse.click(8, 8);
+  assert.equal(await page.locator("#modal").isVisible(), true, "the model window stays open");
+  // Re-drawing the try box, as a finished step does, keeps the reply that is still streaming.
+  await page.evaluate(() => renderTry(state.model, state.plan));
+  await page.waitForSelector("#chat-live");
+  assert.match(await page.locator("#chat-live").innerText(), /word\d+ /);
+  assert.equal(await page.locator("#chat-send").isDisabled(), true, "still busy after the re-render");
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
+  assert.equal(await page.locator("#chat-live").count(), 0);
+  assert.match(await page.locator("#messages .msg").last().innerText(), /word0 .*word39 /s, "the whole reply landed in the transcript");
+  const scrolled = await page.evaluate(() => {
+    const m = document.querySelector("#messages");
+    m.scrollTop = m.scrollHeight;
+    return m.scrollHeight - m.scrollTop - m.clientHeight < 2;
+  });
+  assert.ok(scrolled);
+
+  // Closing and reopening the model brings the conversation back, reply included.
+  await page.click("#close-modal");
+  assert.equal(await page.locator("#modal").isVisible(), false);
+  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().click();
+  await page.waitForSelector("#chat-send");
+  assert.equal(await page.locator("#messages .msg").count(), 26);
+  assert.match(await page.locator("#messages .msg").last().innerText(), /word39 /);
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("chat:qwen-test"))).length, 26, "kept on this computer");
+
+  // New chat starts over.
+  await page.click("#chat-clear");
+  await page.waitForFunction(() => document.querySelectorAll("#messages .msg").length === 0);
+  assert.equal(await page.evaluate(() => localStorage.getItem("chat:qwen-test")), "[]");
+  await page.keyboard.press("Escape");
+  await page.unroute((u) => u.pathname === "/api/model" && u.searchParams.get("id") === id);
 });
 
 await step("no errors reached the console", () => {

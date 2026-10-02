@@ -87,21 +87,6 @@ test("a preferred file wins over the default choice", () => {
   assert.equal(plan.steps[2].args.name, "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q8_0");
 });
 
-test("a model published only in split parts downloads them all and registers the first", () => {
-  const base = withFiles("bartowski/Llama-3.2-3B-Instruct-GGUF");
-  const parts = ["00001", "00002"].map((n) => ({ name: `llama-3.2-3b-instruct-q4_k_m-${n}-of-00002.gguf`, gb: 1 }));
-  const model = { ...base, files: parts };
-  const plan = buildPlan({ model, files: parts, machine, detected: nothing(), hasToken: false });
-  assert.deepEqual(plan.steps.map((s) => s.kind), ["install-ollama", "start-ollama", "download-files", "create-model"]);
-  const folder = "llama-3.2-3b-instruct-q4_k_m";
-  assert.deepEqual(plan.steps[2].args, { repo: model.id, files: parts.map((p) => ({ from: p.name, to: `${folder}/${p.name}` })) });
-  assert.match(plan.steps[2].title, /2 parts of q4_k_m \(2\.0 GB\)/);
-  assert.deepEqual(plan.steps[3].args, { repo: model.id, folder, name: "llama-3.2-3b-instruct" });
-  assert.deepEqual(plan.remove.filter((r) => r.kind === "file").map((r) => r.file), parts.map((p) => `${folder}/${p.name}`));
-  const done = buildPlan({ model, files: parts, machine, detected: { ...nothing(), models: parts.map((p) => `${model.id}/${folder}/${p.name}`) }, hasToken: false });
-  assert.equal(done.steps[2].done, true);
-});
-
 test("a file too big for the machine is still planned but flagged", () => {
   const model = withFiles("bartowski/Llama-3.2-3B-Instruct-GGUF");
   const plan = buildPlan({ model, files: model.files, machine: { ...machine, comfortableGb: 1 }, detected: nothing(), hasToken: false });

@@ -461,6 +461,7 @@ async function openModel(id) {
 
 function renderModel(model, plan) {
   state.plan = plan;
+  state.model = model;
   const sub = [model.author, model.summary, model.gated ? "gated" : ""].filter(Boolean).join(" · ");
   $("#modal-sub").innerHTML = `${esc(sub)} · <a href="${esc(model.url)}" target="_blank" rel="noopener">Open on Hugging Face</a>`;
   const body = $("#modal-body");
@@ -764,7 +765,41 @@ $("#scan-local").addEventListener("click", async () => {
   }
 });
 
+// Conversations outlive the window. Closing it, re-drawing the try box after
+// a step, or reloading the page brings the transcript back, and a reply that
+// is still streaming keeps going and lands in the transcript.
+const chats = new Map();
+function chatFor(modelName) {
+  let chat = chats.get(modelName);
+  if (!chat) {
+    let saved = [];
+    try {
+      saved = JSON.parse(localStorage.getItem(`chat:${modelName}`) || "[]");
+    } catch {
+      // no storage or a broken entry
+    }
+    chat = { messages: Array.isArray(saved) ? saved.filter((m) => m && m.role !== "system" && typeof m.content === "string") : [], reply: null, busy: false };
+    chats.set(modelName, chat);
+  }
+  return chat;
+}
+function saveChat(modelName, chat) {
+  try {
+    localStorage.setItem(`chat:${modelName}`, JSON.stringify(chat.messages.filter((m) => m.role !== "system").slice(-200)));
+  } catch {
+    // no storage
+  }
+}
+
+// Scrolls a box to its end only when the reader was already there, so
+// scrolling up through earlier messages is not undone by every new token.
+function nearBottom(el) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+}
+
 function renderChat(box, modelName) {
+  const chat = chatFor(modelName);
+  box.dataset.model = modelName;
   let savedSystem = "";
   try {
     savedSystem = localStorage.getItem(`system:${modelName}`) || "";
@@ -778,14 +813,33 @@ function renderChat(box, modelName) {
       <small class="muted">Sent before every conversation as the system message; models follow this far more than a request typed into the chat. It sets a persona and rules, and it cannot change what a model was trained to refuse.</small>
     </details>
     <div class="chat">
-      <div class="messages" id="messages"><div class="msg assistant">Ready. Ask anything; the answer comes from ${esc(modelName)} on this computer.</div></div>
+      <div class="chat-tools"><span class="muted small">${chat.messages.length ? "The conversation is kept on this computer until you start a new one." : `Ask anything; the answer comes from ${esc(modelName)} on this computer.`}</span><button class="ghost" id="chat-clear">New chat</button></div>
+      <div class="messages" id="messages"></div>
       <div class="chat-input">
         <textarea id="chat-text" placeholder="Type a message" rows="2"></textarea>
-        <button class="primary" id="chat-send">Send</button>
+        <button class="primary" id="chat-send" ${chat.busy ? "disabled" : ""}>Send</button>
       </div>
     </div>`;
-  const messages = [];
+  const list = $("#messages");
+  for (const m of chat.messages) if (m.role !== "system") addMsg(m.role, m.content);
+  if (chat.busy) {
+    const out = addMsg("assistant", chat.reply ?? "");
+    out.id = "chat-live";
+    if (!chat.reply) out.classList.add("pending");
+  }
+  list.scrollTop = list.scrollHeight;
+  const messages = chat.messages;
+  const mine = () => $("#try")?.dataset.model === modelName;
+  const paint = (text, pending = false) => {
+    const el = $("#chat-live");
+    if (!el) return;
+    const stick = nearBottom(el.parentElement);
+    el.textContent = text;
+    el.classList.toggle("pending", pending);
+    if (stick) el.parentElement.scrollTop = el.parentElement.scrollHeight;
+  };
   const send = async () => {
+    if (chat.busy) return;
     const text = $("#chat-text").value.trim();
     if (!text) return;
     $("#chat-text").value = "";
@@ -799,16 +853,21 @@ function renderChat(box, modelName) {
     else if (system) messages[0].content = system;
     else if (messages[0]?.role === "system") messages.shift();
     messages.push({ role: "user", content: text });
+    saveChat(modelName, chat);
     addMsg("user", text);
     const out = addMsg("assistant", "");
+    out.id = "chat-live";
+    out.classList.add("pending");
+    chat.busy = true;
+    chat.reply = "";
     $("#chat-send").disabled = true;
+    let reply = "";
     try {
       const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: modelName, messages }) });
       if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
-      let reply = "";
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -820,18 +879,33 @@ function renderChat(box, modelName) {
           const j = JSON.parse(line);
           if (j.error) throw new Error(j.error);
           reply += j.message?.content ?? "";
-          out.textContent = reply;
-          out.parentElement.scrollTop = out.parentElement.scrollHeight;
+          chat.reply = reply;
+          paint(reply);
         }
       }
       messages.push({ role: "assistant", content: reply });
+      saveChat(modelName, chat);
     } catch (err) {
-      out.textContent = `Something went wrong: ${err.message}`;
+      paint(`${reply}${reply ? "\n\n" : ""}Something went wrong: ${err.message}`);
+      if (reply) {
+        messages.push({ role: "assistant", content: reply });
+        saveChat(modelName, chat);
+      }
     } finally {
-      $("#chat-send").disabled = false;
+      chat.busy = false;
+      chat.reply = null;
+      $("#chat-live")?.removeAttribute("id");
+      if (mine()) $("#chat-send").disabled = false;
     }
   };
   $("#chat-send").addEventListener("click", send);
+  $("#chat-clear").addEventListener("click", () => {
+    if (chat.busy) return;
+    chat.messages.length = 0;
+    saveChat(modelName, chat);
+    renderChat(box, modelName);
+    renderRemove(box, state.model, state.plan);
+  });
   $("#chat-text").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -981,14 +1055,11 @@ $("#close-modal").addEventListener("click", () => {
   $("#modal").hidden = true;
   state.open = null;
 });
-for (const id of ["#modal", "#settings"]) {
-  $(id).addEventListener("click", (e) => {
-    if (e.target === e.currentTarget) {
-      e.currentTarget.hidden = true;
-      if (id === "#modal") state.open = null;
-    }
-  });
-}
+// A click beside the model window used to close it; now only Close and
+// Escape do, so a stray click does not take a conversation away.
+$("#settings").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.hidden = true;
+});
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     $("#modal").hidden = true;

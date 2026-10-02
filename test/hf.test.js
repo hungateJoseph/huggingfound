@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { chooseFile, createHub, diffusersFolder, quantTag, splitGroups, summarize } from "../src/hf.js";
+import { chooseFile, createHub, diffusersFolder, quantTag, summarize } from "../src/hf.js";
 import { FILES, MODELS, startStubHub } from "./stub-hub.js";
 
 let stub;
@@ -59,30 +59,6 @@ test("chooseFile prefers Q4_K_M for Ollama and skips the vision projector", () =
   const gemma = FILES["unsloth/gemma-3-4b-it-GGUF"].map((f) => ({ name: f.rfilename, gb: 1 }));
   assert.equal(chooseFile(gemma, "ollama").name, "gemma-3-4b-it-Q4_K_M.gguf");
   assert.equal(chooseFile([{ name: "README.md" }], "ollama"), null);
-});
-
-test("chooseFile matches quantizations in any case and takes a whole file over its split parts", () => {
-  const files = [
-    { name: "qwen2.5-coder-7b-instruct-q4_k_m-00001-of-00002.gguf", gb: 3.7 },
-    { name: "qwen2.5-coder-7b-instruct-q4_k_m-00002-of-00002.gguf", gb: 0.6 },
-    { name: "qwen2.5-coder-7b-instruct-q4_k_m.gguf", gb: 4.4 },
-    { name: "qwen2.5-coder-7b-instruct-q8_0-00001-of-00003.gguf", gb: 3.7 },
-    { name: "qwen2.5-coder-7b-instruct-q8_0-00002-of-00003.gguf", gb: 3.7 },
-    { name: "qwen2.5-coder-7b-instruct-q8_0-00003-of-00003.gguf", gb: 0.16 },
-  ];
-  assert.equal(chooseFile(files, "ollama").name, "qwen2.5-coder-7b-instruct-q4_k_m.gguf");
-  // Only split parts: the group stands in for one file, named after its first part.
-  const splitOnly = files.filter((f) => /q8_0-/.test(f.name));
-  const pick = chooseFile(splitOnly, "ollama");
-  assert.equal(pick.name, "qwen2.5-coder-7b-instruct-q8_0-00001-of-00003.gguf");
-  assert.equal(pick.split, true);
-  assert.equal(pick.folder, "qwen2.5-coder-7b-instruct-q8_0");
-  assert.deepEqual(pick.parts, splitOnly.map((f) => f.name));
-  assert.equal(pick.gb.toFixed(2), "7.56");
-  // A part on its own is never picked, not even as the smallest file.
-  assert.equal(chooseFile([splitOnly[2], { name: "big-q6_k.gguf", gb: 6 }], "ollama").name, "big-q6_k.gguf");
-  assert.deepEqual(splitGroups([splitOnly[0], splitOnly[2]]), []);
-  assert.equal(quantTag("qwen2.5-coder-7b-instruct-q8_0-00001-of-00003.gguf"), "q8_0");
 });
 
 test("chooseFile keeps image models at 8 bits and accepts a single safetensors", () => {

@@ -234,16 +234,14 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       return { argv: [needOllama(), "pull", name], text: `Downloading ${name} through Ollama` };
     }
     case "create-model": {
-      // One file, or a folder holding the parts of a split file: Ollama
-      // joins the parts when the Modelfile points at their folder.
       const repo = String(args.repo ?? "");
-      const file = String(args.file ?? args.folder ?? "");
+      const file = String(args.file ?? "");
       const name = String(args.name ?? "");
       if (!REPO_RE.test(repo) || !FILE_RE.test(file) || !OLLAMA_NAME_RE.test(name)) throw new Error("Bad model arguments");
       const modelfile = path.join(path.dirname(modelPath(repo, file)), "Modelfile");
       fs.mkdirSync(path.dirname(modelfile), { recursive: true });
       fs.writeFileSync(modelfile, `FROM ${modelPath(repo, file)}\n`);
-      return { argv: [needOllama(), "create", name, "-f", modelfile], text: `Registering ${args.folder ? `the parts in ${file}` : file} with Ollama as ${name}` };
+      return { argv: [needOllama(), "create", name, "-f", modelfile], text: `Registering ${file} with Ollama as ${name}` };
     }
     case "download-file": {
       const repo = String(args.repo ?? "");
@@ -257,7 +255,7 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       // their .fp16 suffix).
       const repo = String(args.repo ?? "");
       const files = Array.isArray(args.files) ? args.files : [];
-      if (!REPO_RE.test(repo) || files.length === 0 || files.length > 16) throw new Error("Bad file arguments");
+      if (!REPO_RE.test(repo) || files.length === 0 || files.length > 8) throw new Error("Bad file arguments");
       const downloads = files.map((f) => {
         const from = String(f.from ?? "");
         const to = String(f.to ?? from);

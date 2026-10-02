@@ -240,6 +240,10 @@ details#web-found summary { cursor: pointer; margin-top: 8px; }
 .msg { padding: 9px 12px; border-radius: 10px; max-width: 90%; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
 .msg.user { background: var(--accent-soft); justify-self: end; }
 .msg.assistant { background: var(--bg); justify-self: start; }
+.msg.pending { color: var(--muted); }
+.msg.pending:empty::before { content: "Thinking"; }
+.chat-tools { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.chat-tools button { font-size: 13px; padding: 5px 10px; }
 .chat-input, .prompt-input { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
 .chat-input textarea, .prompt-input textarea { min-height: 44px; resize: vertical; }
 .result-image { max-width: 100%; border-radius: 10px; margin-top: 10px; border: 1px solid var(--line); }
