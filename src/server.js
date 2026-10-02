@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { CATEGORIES } from "./categorize.js";
 import { mask, readEnv, writeEnv } from "./envfile.js";
 import { createHub } from "./hf.js";
-import { describeMachine } from "./machine.js";
+import { describeMachine, hostedMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
 import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeFile, removeFolder, removeOllamaModel, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
@@ -23,9 +23,25 @@ const VOICES_CACHE = new Map();
 const RUNNER_NAMES = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".txt": "text/plain; charset=utf-8" };
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true } = {}) {
-  const machine = describeMachine();
-  const env = () => readEnv(envFile);
+// Keys the hosted site takes from the process environment rather than a file.
+const HOSTED_ENV_KEYS = ["HF_TOKEN", "GITHUB_TOKEN", "YOUTUBE_API_KEY", "REDDIT_CLIENT_ID"];
+
+// What a public copy of the site must not do: run programs, download models,
+// write settings or touch the disk it runs on. Those belong on the visitor's
+// own computer, where HuggingFound does them.
+const NOT_HOSTED = new Set(["/api/settings", "/api/scan", "/api/voices/gather", "/api/storage", "/api/remove", "/api/image-server", "/api/unload", "/api/run", "/api/chat", "/api/upload", "/api/result"]);
+
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12) } = {}) {
+  // A hosted copy does not know the visitor's computer; it describes a
+  // typical laptop and leaves the running to HuggingFound on their machine.
+  const machine = hosted ? hostedMachine() : describeMachine();
+  if (hosted) writtenSummaries = false;
+  const env = () => {
+    const saved = readEnv(envFile);
+    if (!hosted) return saved;
+    for (const key of HOSTED_ENV_KEYS) if (process.env[key]) saved[key] = process.env[key];
+    return saved;
+  };
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
   const hub_ = hub;
   const civitai = createCivitai({ fetchImpl, base: civitaiBase });
@@ -40,14 +56,21 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     return redditClient.client;
   };
   const details = new Map();
+  let refreshing = null;
+  let lastRefresh = null;
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     try {
       if (url.pathname.startsWith("/api/")) {
+        // Only the page itself may call the API: the local addresses, or the
+        // host the hosted site is served from.
         const origin = req.headers.origin;
-        if (origin && !origin.startsWith("http://localhost") && !origin.startsWith("http://127.0.0.1")) {
+        if (origin && !origin.startsWith("http://localhost") && !origin.startsWith("http://127.0.0.1") && !(hosted && sameHost(origin, req.headers.host))) {
           return send(res, 403, { error: "Forbidden" });
+        }
+        if (hosted && (NOT_HOSTED.has(url.pathname) || url.pathname.startsWith("/api/runs/"))) {
+          return send(res, 403, { error: "Not on the hosted site. Run HuggingFound on your own computer to download and try models." });
         }
         return await api(req, res, url);
       }
@@ -58,13 +81,87 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
   });
 
+  // The hosted site scans the Hub and gathers what people say by itself, on
+  // a timer, since visitors cannot start either.
+  if (hosted && refreshHours > 0) {
+    const scan = readScan(scanFile, { meta: true });
+    const age = scan?.at ? Date.now() - new Date(scan.at).getTime() : Infinity;
+    const first = Math.max(5000, refreshHours * 3600e3 - age);
+    setTimeout(() => {
+      refresh();
+      setInterval(refresh, refreshHours * 3600e3).unref();
+    }, first).unref();
+  }
+  server.refresh = refresh;
+  return server;
+
+  // One pass: the scan, then the voices for every model in it.
+  async function refresh() {
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
+      try {
+        await scanHub();
+        const scan = readScan(scanFile) ?? { models: [] };
+        const run = gatherAll(scan.models.map((m) => m.id));
+        await run.finished;
+        lastRefresh = new Date().toISOString();
+      } catch (err) {
+        console.error(`Refresh failed: ${err.message}`);
+      } finally {
+        refreshing = null;
+      }
+    })();
+    return refreshing;
+  }
+
+  async function scanHub() {
+    const previous = readScan(scanFile);
+    const known = new Set((previous?.models ?? []).map((m) => m.id));
+    const models = await hub().scan();
+    const scan = { at: new Date().toISOString(), models: models.map((m) => ({ ...withSpeed(m), isNew: previous ? !known.has(m.id) : false })) };
+    fs.mkdirSync(path.dirname(scanFile), { recursive: true });
+    fs.writeFileSync(scanFile, JSON.stringify(scan));
+    return scan;
+  }
+
+  // Gathers what people say about these models (and summarizes it) as a
+  // cancellable run; models gathered this week are skipped.
+  function gatherAll(ids) {
+    const index = readVoices(voicesFile);
+    const todo = ids.filter((id) => !isFresh(index[id]));
+    const run = startCustomRun(`Gathering what people say about ${todo.length} model${todo.length === 1 ? "" : "s"} (${ids.length - todo.length} already gathered this week)`, async (emit, cancelled) => {
+      let done = 0;
+      const h = hub();
+      const worker = async () => {
+        for (;;) {
+          const id = todo.shift();
+          if (!id) return;
+          index[id] = await gatherVoices(h, id);
+          done++;
+          if (done % 10 === 0 || done === ids.length) {
+            writeVoices(index, voicesFile);
+            emit(`${done} gathered`);
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: 4 }, worker));
+      writeVoices(index, voicesFile);
+      const withTalk = ids.filter((id) => (index[id]?.discussions?.length ?? 0) > 0).length;
+      emit(`${ids.length} models covered; ${withTalk} have community discussions.`);
+      await summarizeAll(ids, index, emit, cancelled);
+    });
+    return { ...run, todo: todo.length, total: ids.length };
+  }
+
   async function api(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/state") {
       const saved = env();
       return send(res, 200, {
         machine,
+        hosted,
+        refresh: hosted ? { hours: refreshHours, last: lastRefresh } : null,
         categories: CATEGORIES,
-        runners: await detect(fetchImpl),
+        runners: hosted ? noRunners() : await detect(fetchImpl),
         token: saved.HF_TOKEN ? mask(saved.HF_TOKEN) : "",
         imageServer: saved.IMAGE_SERVER || "",
         redditApp: saved.REDDIT_CLIENT_ID ? mask(saved.REDDIT_CLIENT_ID) : "",
@@ -112,13 +209,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       return send(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/api/scan") {
-      const previous = readScan(scanFile);
-      const known = new Set((previous?.models ?? []).map((m) => m.id));
-      const models = await hub().scan();
-      const scan = { at: new Date().toISOString(), models: models.map((m) => ({ ...withSpeed(m), isNew: previous ? !known.has(m.id) : false })) };
-      fs.mkdirSync(path.dirname(scanFile), { recursive: true });
-      fs.writeFileSync(scanFile, JSON.stringify(scan));
-      return send(res, 200, scan);
+      return send(res, 200, await scanHub());
     }
     // The front-page search: a plain description of what is wanted, answered
     // with models ranked by name, category and what people say, plus the
@@ -161,30 +252,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const body = await json(req);
       const scan = readScan(scanFile) ?? { models: [] };
       const ids = [...new Set([...scan.models.map((m) => m.id), ...(Array.isArray(body.ids) ? body.ids.filter((id) => /^[\w.-]+\/[\w.-]+$/.test(String(id))) : [])])];
-      const index = readVoices(voicesFile);
-      const todo = ids.filter((id) => !isFresh(index[id]));
-      const run = startCustomRun(`Gathering what people say about ${todo.length} model${todo.length === 1 ? "" : "s"} (${ids.length - todo.length} already gathered this week)`, async (emit, cancelled) => {
-        let done = 0;
-        const h = hub();
-        const worker = async () => {
-          for (;;) {
-            const id = todo.shift();
-            if (!id) return;
-            index[id] = await gatherVoices(h, id);
-            done++;
-            if (done % 10 === 0 || done === ids.length) {
-              writeVoices(index, voicesFile);
-              emit(`${done} gathered`);
-            }
-          }
-        };
-        await Promise.all(Array.from({ length: 4 }, worker));
-        writeVoices(index, voicesFile);
-        const withTalk = ids.filter((id) => (index[id]?.discussions?.length ?? 0) > 0).length;
-        emit(`${ids.length} models covered; ${withTalk} have community discussions.`);
-        await summarizeAll(ids, index, emit, cancelled);
-      });
-      return send(res, 200, { id: run.id, todo: todo.length, total: ids.length });
+      const run = gatherAll(ids);
+      return send(res, 200, { id: run.id, todo: run.todo, total: run.total });
     }
     if (req.method === "POST" && url.pathname.startsWith("/api/runs/") && url.pathname.endsWith("/cancel")) {
       const id = url.pathname.slice("/api/runs/".length, -"/cancel".length);
@@ -256,7 +325,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (pick && !model.gatedBlocked) model.runner = { id: pick.runner, name: RUNNER_NAMES[pick.runner], easy: true };
       const plan = model.gatedBlocked
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
-        : buildPlan({ model, files: model.files, machine, detected: await detect(fetchImpl), hasToken: Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: readTimings(), imageServer: await remoteImageServer() });
+        : buildPlan({ model, files: model.files, machine, detected: hosted ? noRunners() : await detect(fetchImpl), hasToken: !hosted && Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer() });
       return send(res, 200, { model, plan });
     }
     if (req.method === "GET" && url.pathname === "/api/storage") {
@@ -432,7 +501,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   function withVoice(m) {
     const entry = readVoicesCached()[m.id];
     const summary = cleanSummary(entry?.summary ?? null);
-    return { ...m, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null, summary, refusals: entry ? refusalSignals({ ...entry, name: m.name, id: m.id }, summary) : null };
+    // The Hub's one-line description keeps its own field; `summary` is what people say.
+    const blurb = typeof m.summary === "string" ? m.summary : (m.blurb ?? "");
+    return { ...m, blurb, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null, summary, refusals: entry ? refusalSignals({ ...entry, name: m.name, id: m.id }, summary) : null };
   }
 
   // Summaries for a list of gathered models: extractive lines for all of
@@ -502,6 +573,21 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     });
     return wav;
   }
+}
+
+// Whether a request's Origin names the host the page was served from.
+function sameHost(origin, host) {
+  try {
+    return Boolean(host) && new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+// The runner report for a computer that has nothing installed: what the
+// hosted site shows, since it cannot see the visitor's machine.
+function noRunners() {
+  return { brew: false, winget: false, ffmpeg: false, ollama: { installed: false, running: false, models: [] }, whisper: { installed: false }, sd: { installed: false, server: false, loaded: null }, models: [] };
 }
 
 function readScan(file, { meta = false } = {}) {

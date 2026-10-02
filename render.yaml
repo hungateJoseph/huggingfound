@@ -1,0 +1,39 @@
+# Render deployment ("Blueprint") for the hosted copy of HuggingFound. The
+# service is defined here, in the repository, rather than clicked into a
+# dashboard. Keys are marked `sync: false`, so Render asks for them and keeps
+# them encrypted; all of them are optional.
+
+services:
+  - type: web
+    name: huggingfound
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter # the free plan has no disk and sleeps between visits
+    region: oregon # or frankfurt, singapore, ohio, whichever is closer
+    healthCheckPath: /
+
+    # The scan of Hugging Face and what people say about each model live
+    # here, so a redeploy keeps the catalogue instead of rebuilding it.
+    disk:
+      name: huggingfound-data
+      mountPath: /var/data
+      sizeGB: 1
+
+    envVars:
+      # --- Optional keys: Render prompts for these -----------------------
+      - key: HF_TOKEN # a Hugging Face read token; raises the Hub's rate limit
+        sync: false
+      - key: GITHUB_TOKEN # thirty GitHub searches a minute instead of ten
+        sync: false
+      - key: YOUTUBE_API_KEY # video reviews; without it YouTube is skipped
+        sync: false
+
+      # --- Fixed values ----------------------------------------------------
+      - key: HUGGINGFOUND_HOSTED
+        value: "1"
+      - key: HUGGINGFOUND_HOME
+        value: /var/data
+      - key: HUGGINGFOUND_REFRESH_HOURS # how often the catalogue is rescanned
+        value: "12"
+      - key: PORT
+        value: "4188"

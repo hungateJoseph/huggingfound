@@ -27,7 +27,9 @@ async function check(res) {
 
 async function load() {
   const s = await api.get("/api/state");
-  Object.assign(state, { machine: s.machine, categories: s.categories, runners: s.runners, picks: s.picks });
+  Object.assign(state, { machine: s.machine, categories: s.categories, runners: s.runners, picks: s.picks, hosted: Boolean(s.hosted), refresh: s.refresh });
+  document.body.dataset.hosted = s.hosted ? "1" : "";
+  if (s.hosted) renderHostedCopy();
   renderDiskLine();
   $("#env-path").textContent = s.envFile;
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
@@ -52,8 +54,21 @@ async function load() {
   renderHomeHint();
 }
 
+// The words that change when the site is a public copy rather than the app
+// on this computer: nothing runs here, so the page points at the app.
+function renderHostedCopy() {
+  $("#home-lead").textContent = "Say it in plain words. HuggingFound looks through Hugging Face, the model cards, the community discussions and the wider web, and ranks what fits by what people say about it. Pick one, and HuggingFound on your computer downloads and runs it.";
+  $("#browse .intro h1").textContent = "Open models, running on your computer.";
+  $("#browse .intro .lead").textContent = `This catalogue is scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours, with what people say about each model summed up on its card. Fit and speed are shown for a typical 16 GB laptop. Chat models run through Ollama, images through stable-diffusion.cpp and speech through whisper.cpp, all on your own computer.`;
+  $("#only-runnable-text").textContent = "Only models that run with Ollama, whisper.cpp or stable-diffusion.cpp";
+}
+
 function renderScanStatus() {
   const el = $("#scan-status");
+  if (state.hosted) {
+    el.textContent = state.scanAt ? `Catalogue scanned ${relative(state.scanAt)}: ${state.models.length} models. It refreshes every ${state.refresh?.hours ?? 12} hours.` : "The catalogue is being scanned for the first time; check back in a few minutes.";
+    return;
+  }
   if (!state.scanAt) {
     el.textContent = "No scan yet. The curated picks below work without one.";
     return;
@@ -182,6 +197,7 @@ function renderHomeHint() {
   if (!state.scanAt) parts.push("No scan yet, so results come from Hugging Face's own search and the curated picks.");
   else parts.push(`${state.models.length} models scanned ${relative(state.scanAt)}.`);
   if (v?.count) parts.push(`What people say is gathered for ${v.count} of them${state.summarizer ? ", summed up by " + state.summarizer.split("/").pop() : ", lines lifted from the comments"}.`);
+  else if (state.hosted) parts.push("What people say is gathered after each scan.");
   else parts.push("Gather what people say (in Browse) to rank by reviews and show a summary on every card.");
   $("#home-hint").textContent = parts.join(" ");
 }
@@ -351,6 +367,11 @@ function renderWebFound(web) {
 function fit(gb) {
   const room = state.machine.comfortableGb;
   if (!gb) return { level: "unknown", text: "Size after scan" };
+  if (state.hosted) {
+    if (gb <= room * 0.6) return { level: "good", text: `Runs on a 16 GB laptop, ${gb.toFixed(1)} GB` };
+    if (gb <= room) return { level: "tight", text: `Needs 16 GB with apps closed, ${gb.toFixed(1)} GB` };
+    return { level: "no", text: `Needs 32 GB or a big GPU, ${gb.toFixed(1)} GB` };
+  }
   if (gb <= room * 0.6) return { level: "good", text: `Fits easily, ${gb.toFixed(1)} GB` };
   if (gb <= room) return { level: "tight", text: `Fits, close other apps, ${gb.toFixed(1)} GB` };
   return { level: "no", text: `Too big, ${gb.toFixed(1)} GB` };
@@ -373,7 +394,7 @@ function modelCard(m) {
   return `<div class="model" role="button" tabindex="0" data-id="${esc(m.id)}">
     <div class="name">${esc(m.name)}</div>
     <div class="author">${esc(m.author)}</div>
-    <div class="summary">${esc(m.summary)}</div>
+    <div class="summary">${esc(m.blurb ?? (typeof m.summary === "string" ? m.summary : ""))}</div>
     ${saidHtml(m)}
     ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : w === "mixed reviews" || w === "users report refusals" ? "mixed" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
@@ -469,7 +490,8 @@ function renderModel(model, plan) {
 
   if (!plan.runnable) {
     parts.push(`<div class="notice ${plan.gated ? "info" : "warn"}">${esc(plan.reason)}${plan.link ? ` <a href="${esc(plan.link)}" target="_blank" rel="noopener">${plan.gated ? "Open the model page" : "Search for a GGUF version"}</a>` : ""}</div>`);
-    if (plan.gated) parts.push(`<div class="actions"><button class="ghost" id="open-settings-from-model">Add a token in Settings</button></div>`);
+    if (plan.gated && state.hosted) parts.push(`<p class="muted small">On your computer, HuggingFound's Settings take a Hugging Face read token, and this plan unlocks there.</p>`);
+    else if (plan.gated) parts.push(`<div class="actions"><button class="ghost" id="open-settings-from-model">Add a token in Settings</button></div>`);
     body.innerHTML = parts.join("");
     body.querySelector("#open-settings-from-model")?.addEventListener("click", () => ($("#settings").hidden = false));
     return;
@@ -478,14 +500,18 @@ function renderModel(model, plan) {
   parts.push(`<div class="spec">
     <div><b>File</b>${plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : esc(plan.file.name)}</div>
     <div><b>Size</b>${plan.file.gb ? plan.file.gb.toFixed(2) + " GB" : "unknown"}</div>
-    <div><b>On this computer</b><span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span></div>
+    <div><b>${state.hosted ? "Memory" : "On this computer"}</b><span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span></div>
     <div><b>Runs with</b>${{ ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[plan.runner]}</div>
-    <div><b>Speed here</b>${esc(plan.speed?.text ?? "")}${plan.measured ? `<span class="measured">${esc(plan.measured)}</span>` : ""}</div>
+    <div><b>${state.hosted ? "Speed" : "Speed here"}</b>${esc(plan.speed?.text ?? "")}${plan.measured ? `<span class="measured">${esc(plan.measured)}</span>` : ""}</div>
   </div>
-  <p class="muted small">Speed is a rough guess from the file size and this computer's hardware. The first run is slower while the model loads${plan.runner === "sd" ? " and the graphics shaders compile" : ""}; after a real run the measured time shows here.</p>`);
-  if (plan.fit.level === "no") parts.push(`<div class="notice warn">This file is larger than the memory this computer has to spare. It may still download, but it will be slow or fail to load. A smaller model is a better first try.</div>`);
+  <p class="muted small">${state.hosted ? "Speed is a rough guess from the file size for a typical laptop without a separate GPU; a GPU or Apple Silicon is several times faster." : `Speed is a rough guess from the file size and this computer's hardware. The first run is slower while the model loads${plan.runner === "sd" ? " and the graphics shaders compile" : ""}; after a real run the measured time shows here.`}</p>`);
+  if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "This file is larger than a typical laptop has to spare; it wants 32 GB of memory or a big GPU." : "This file is larger than the memory this computer has to spare. It may still download, but it will be slow or fail to load. A smaller model is a better first try."}</div>`);
+  if (state.hosted) parts.push(`<h3>How to run it</h3><p class="muted small">These are the steps HuggingFound does for you on your computer, one click each. They can also be done by hand.</p>`);
   parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
-  parts.push(`<div class="try" id="try"></div>`);
+  if (state.hosted) parts.push(`<div class="get-app hosted-only"><b>Run HuggingFound on your computer</b> to do these with one click and try the model in a chat, image or transcription box right here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
+cd huggingfound
+npm start</code></div>`);
+  if (!state.hosted) parts.push(`<div class="try" id="try"></div>`);
   parts.push(`<div class="voices" id="voices"><h3>What people say</h3><p class="muted small">Reading the model card and the community discussions</p></div>`);
   body.innerHTML = parts.join("");
   loadVoices(model).catch((err) => {
@@ -540,7 +566,7 @@ function stepHtml(s, i) {
       <div class="text">${esc(s.text)}</div>
       ${s.command ? `<code>${esc(s.command)}</code>` : ""}
     </div>
-    <button class="go ${s.done ? "ghost" : "primary"}" data-index="${i}" ${s.done ? "disabled" : ""}>${s.done ? "Done" : "Run this step"}</button>
+    ${state.hosted ? "" : `<button class="go ${s.done ? "ghost" : "primary"}" data-index="${i}" ${s.done ? "disabled" : ""}>${s.done ? "Done" : "Run this step"}</button>`}
   </li>`;
 }
 
@@ -747,6 +773,10 @@ async function renderStorage(targets = ["local", "settings"]) {
 function renderDiskLine() {
   const st = state.storage;
   const m = state.machine;
+  if (state.hosted) {
+    $("#machine-line").textContent = "Fit and speed shown for a typical 16 GB laptop. Run HuggingFound on your computer to see them for your machine.";
+    return;
+  }
   const free = st?.disk?.freeGb != null ? ` ${st.disk.freeGb.toFixed(0)} GB free on disk.` : "";
   $("#machine-line").textContent = `${m.os}, ${m.ramGb} GB memory, ${m.gpu}. Room for models up to about ${m.comfortableGb} GB.${free}`;
 }

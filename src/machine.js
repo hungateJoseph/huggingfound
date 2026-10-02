@@ -35,6 +35,12 @@ export function describeMachine() {
   };
 }
 
+// What the hosted site assumes about the visitor's computer: a typical
+// 16 GB laptop with no separate GPU. The fit and speed lines say so.
+export function hostedMachine() {
+  return { platform: "any", arch: "any", os: "a typical laptop", cpu: "", cores: 8, ramGb: 16, gpu: "no separate GPU", appleSilicon: false, comfortableGb: 9, hosted: true };
+}
+
 export function platformName(platform) {
   return { darwin: "macOS", win32: "Windows", linux: "Linux" }[platform] ?? platform;
 }
@@ -42,6 +48,11 @@ export function platformName(platform) {
 // How a model of `sizeGb` fits on a machine with `comfortableGb` to spare.
 export function fitFor(sizeGb, machine) {
   if (!sizeGb) return { level: "unknown", text: "Size unknown until scanned" };
+  if (machine.hosted) {
+    if (sizeGb <= machine.comfortableGb * 0.6) return { level: "good", text: `Runs on a 16 GB laptop (${sizeGb.toFixed(1)} GB)` };
+    if (sizeGb <= machine.comfortableGb) return { level: "tight", text: `Needs 16 GB of memory with other apps closed (${sizeGb.toFixed(1)} GB)` };
+    return { level: "no", text: `Needs 32 GB of memory or a big GPU (${sizeGb.toFixed(1)} GB)` };
+  }
   if (sizeGb <= machine.comfortableGb * 0.6) return { level: "good", text: `Fits easily (${sizeGb.toFixed(1)} GB)` };
   if (sizeGb <= machine.comfortableGb) return { level: "tight", text: `Fits, close other apps (${sizeGb.toFixed(1)} GB)` };
   return { level: "no", text: `Too big for this machine (${sizeGb.toFixed(1)} GB, room for about ${machine.comfortableGb} GB)` };

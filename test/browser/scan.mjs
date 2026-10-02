@@ -479,6 +479,15 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.unroute((u) => u.pathname === "/api/model" && u.searchParams.get("id") === id);
 });
 
+await step("cards keep the Hub's one-line description once what people say is gathered", async () => {
+  await page.click("#nav-browse");
+  await page.click(".tab[data-tab=chat]");
+  const blurbs = await page.$$eval("#models .model .summary", (els) => els.map((e) => e.textContent));
+  assert.ok(blurbs.length > 0);
+  assert.ok(blurbs.every((b) => !/object Object/.test(b)), blurbs.join(" | "));
+  assert.ok(blurbs.some((b) => b.trim().length > 0), "the description is still there");
+});
+
 await step("no errors reached the console", () => {
   assert.deepEqual(errors, [], errors.join(" | "));
 });

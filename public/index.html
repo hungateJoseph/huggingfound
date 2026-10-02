@@ -20,7 +20,7 @@
       </nav>
       <div class="top-right">
         <span class="muted small" id="machine-line"></span>
-        <button class="ghost" id="open-settings">Settings</button>
+        <button class="ghost local-only" id="open-settings">Settings</button>
       </div>
     </div>
   </header>
@@ -85,22 +85,28 @@
         speech through whisper.cpp. Nothing leaves your computer except the downloads.
       </p>
       <div class="scan-row">
-        <button class="primary" id="scan">Scan Hugging Face</button>
+        <button class="primary local-only" id="scan">Scan Hugging Face</button>
         <span class="muted small" id="scan-status">No scan yet. The curated picks below work without one.</span>
       </div>
       <div class="scan-row">
-        <button class="ghost" id="gather-voices">Gather what people say</button>
-        <button class="ghost" id="stop-voices" hidden>Stop</button>
-        <button class="ghost" id="get-summarizer" hidden>Install a small model to write the summaries (2 GB)</button>
-        <span class="muted small" id="voices-status">Reads each scanned model's card and community discussions and sums them up in a line or two on every card. A chat model installed in Ollama writes the lines; without one they are lifted from the comments.</span>
+        <button class="ghost local-only" id="gather-voices">Gather what people say</button>
+        <button class="ghost local-only" id="stop-voices" hidden>Stop</button>
+        <button class="ghost local-only" id="get-summarizer" hidden>Install a small model to write the summaries (2 GB)</button>
+        <span class="muted small local-only" id="voices-status">Reads each scanned model's card and community discussions and sums them up in a line or two on every card. A chat model installed in Ollama writes the lines; without one they are lifted from the comments.</span>
       </div>
-      <pre class="log small" id="voices-log" hidden></pre>
+      <pre class="log small local-only" id="voices-log" hidden></pre>
+      <div class="get-app hosted-only" id="get-app">
+        <b>To download and try a model, run HuggingFound on your computer.</b> It is free and open source, needs Node 20 or newer, and keeps everything in a folder of its own:
+        <code>git clone https://github.com/hungateJoseph/huggingfound.git
+cd huggingfound
+npm start</code>
+      </div>
     </section>
 
     <nav class="tabs" id="tabs"></nav>
 
 
-    <section class="local" id="local">
+    <section class="local local-only" id="local">
       <div class="local-head">
         <div>
           <h2>On this computer</h2>
@@ -116,7 +122,7 @@
 
     <section id="lists">
       <div class="filters">
-        <label class="check"><input type="checkbox" id="only-runnable" checked> Only models this computer can run</label>
+        <label class="check"><input type="checkbox" id="only-runnable" checked> <span id="only-runnable-text">Only models this computer can run</span></label>
         <label class="check"><input type="checkbox" id="only-new"> Only new since the last scan</label>
         <label class="select">Sort by
           <select id="sort">

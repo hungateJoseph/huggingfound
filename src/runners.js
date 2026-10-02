@@ -661,6 +661,9 @@ export function recordTiming(key, timing) {
 export function startCustomRun(text, work) {
   const id = String(nextRun++);
   const run = { id, kind: "custom", status: "running", lines: [], listeners: new Set(), result: null, startedAt: Date.now(), cancelled: false };
+  // Settles when the work is over, for callers that wait rather than watch.
+  let settle;
+  run.finished = new Promise((resolve) => (settle = resolve));
   runs.set(id, run);
   const emit = (line) => {
     run.lines.push(line);
@@ -671,6 +674,7 @@ export function startCustomRun(text, work) {
     run.status = status;
     if (message) emit(message);
     for (const l of run.listeners) l(null);
+    settle(status);
   };
   emit(text);
   Promise.resolve()

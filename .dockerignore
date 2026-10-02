@@ -1,0 +1,9 @@
+# Keep the build context small and never copy local state into the image.
+node_modules
+test
+.git
+.gitignore
+.github
+.DS_Store
+*.log
+*.md

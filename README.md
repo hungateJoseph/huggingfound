@@ -17,6 +17,10 @@ Find open-source models on Hugging Face, see which ones your computer can run, a
 
 Chat, coding, math and vision models run through [Ollama](https://ollama.com). Image models run through [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp). Speech models run through [whisper.cpp](https://github.com/ggerganov/whisper.cpp). All three are open source and run entirely on your machine.
 
+## A hosted copy
+
+The same code can be served on the web as a catalogue: search, browse and what people say work as on a computer, the server rescans Hugging Face on a timer, and a model's window shows the steps to run it instead of running them. Nothing installs, downloads or chats on the server; the page points at running HuggingFound on your own computer for that. Set `HUGGINGFOUND_HOSTED=1` to serve that copy; `Dockerfile`, `render.yaml` and [DEPLOY.md](DEPLOY.md) have the rest.
+
 ## Run it
 
 Needs Node 20 or newer.

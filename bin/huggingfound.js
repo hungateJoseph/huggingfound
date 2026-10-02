@@ -20,19 +20,27 @@ which ones this computer can run, and get them running step by step.
 Models, settings and results live in ${tildify(DATA_DIR)}.
 
   --browser   open in the default browser instead of a window
-  --no-open   just start the server and print the address`);
+  --no-open   just start the server and print the address
+  --host      the address to listen on (127.0.0.1 unless hosted)
+
+Set HUGGINGFOUND_HOSTED=1 to serve a public copy that only searches and
+browses; it refreshes its catalogue every HUGGINGFOUND_REFRESH_HOURS (12).`);
   process.exit(0);
 }
 
 const port = Number(flag("--port", process.env.PORT || 4188));
+const hosted = process.env.HUGGINGFOUND_HOSTED === "1";
+// On a computer the server answers only that computer; the hosted copy
+// answers the network it is deployed on.
+const host = flag("--host", process.env.HOST || (hosted ? "0.0.0.0" : "127.0.0.1"));
 const envFile = path.join(DATA_DIR, ".env");
 const server = createServer({ envFile });
 
-server.listen(port, "127.0.0.1", () => {
-  const url = `http://127.0.0.1:${port}/`;
-  console.log(`HuggingFound is running at ${url}`);
+server.listen(port, host, () => {
+  const url = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}/`;
+  console.log(`HuggingFound is running at ${url}${hosted ? " (hosted mode: nothing runs here; the catalogue refreshes on a timer)" : ""}`);
   console.log(`Files go to ${tildify(DATA_DIR)}`);
-  if (args.includes("--no-open")) return;
+  if (args.includes("--no-open") || hosted) return;
   if (args.includes("--browser") || !openWindow(url)) openBrowser(url);
 });
 

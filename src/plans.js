@@ -50,7 +50,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   const mergedName = file.folder ? `${model.name.replace(/[^\w.-]/g, "-")}.safetensors` : null;
   const downloaded = detected.models.includes(`${model.id}/${mergedName ?? file.name}`);
   const steps = [];
-  const os = platformName(machine.platform);
+  const os = machine.hosted ? "your system" : platformName(machine.platform);
 
   if (runner.id === "ollama") {
     const quant = quantTag(file.name);
@@ -179,6 +179,11 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 }
 
 function installNote(runner, machine, detected) {
+  // The hosted site does not know the visitor's system, so it names every one.
+  if (machine.hosted) {
+    if (runner === "ollama") return "HuggingFound downloads the official build for your system into ~/HuggingFound/bin; by hand, get it from ollama.com/download.";
+    return "HuggingFound builds it into ~/HuggingFound/bin on a Mac or Linux (needs git and a C compiler) and downloads a ready-made build on Windows.";
+  }
   if (runner === "ollama") {
     if (machine.platform === "linux") return "Installed with the official script from ollama.com.";
     return `HuggingFound downloads the official release build for ${platformName(machine.platform)} into ~/HuggingFound/bin. No package manager, nothing else touched.`;
@@ -188,6 +193,11 @@ function installNote(runner, machine, detected) {
 }
 
 function displayCommand(kind, machine) {
+  if (machine.hosted) {
+    if (kind === "install-ollama") return "download Ollama for your system from ollama.com/download";
+    if (kind === "install-whisper") return "git clone github.com/ggerganov/whisper.cpp and build it with CMake, or download whisper-bin-x64.zip on Windows";
+    return "";
+  }
   if (kind === "install-ollama") return { darwin: "download ollama-darwin.tgz from github.com/ollama/ollama/releases", win32: "download ollama-windows-amd64.zip from github.com/ollama/ollama/releases", linux: "curl -fsSL https://ollama.com/install.sh | sh" }[machine.platform];
   if (kind === "install-whisper") return machine.platform === "win32" ? "download whisper-bin-x64.zip from the whisper.cpp releases" : "git clone github.com/ggerganov/whisper.cpp and build it with CMake";
   return "";
