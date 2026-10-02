@@ -54,7 +54,9 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 
   if (runner.id === "ollama") {
     const quant = quantTag(file.name);
-    const viaPull = !model.gated && quant;
+    // Split files are fetched part by part and registered from disk, which
+    // is the path known to join them.
+    const viaPull = !model.gated && quant && !file.split;
     const localName = model.name.toLowerCase().replace(/-gguf$/i, "").replace(/[^a-z0-9.-]/g, "-");
     const ollamaName = viaPull ? `hf.co/${model.id}:${quant}` : localName;
     steps.push({
@@ -80,6 +82,15 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
         done: detected.ollama.models.some((m) => m.toLowerCase() === ollamaName.toLowerCase()),
         command: `ollama pull ${ollamaName}`,
       });
+    } else if (file.split) {
+      steps.push({
+        kind: "download-files",
+        args: { repo: model.id, files: file.parts.map((name) => ({ from: name, to: `${file.folder}/${name}` })) },
+        title: `Download ${file.parts.length} parts of ${quant ?? file.name} (${file.gb ? file.gb.toFixed(1) + " GB" : "size unknown"})`,
+        text: `${model.name} is published as ${file.parts.length} files; they go in a folder of their own, which Ollama joins into one model. ${model.gated ? "Uses your Hugging Face token because the model is gated. " : ""}${fit.text}.`,
+        done: file.parts.every((name) => detected.models.includes(`${model.id}/${file.folder}/${name}`)),
+        command: `download to ~/HuggingFound/models/${model.id}/${file.folder}/`,
+      });
     } else {
       steps.push({
         kind: "download-file",
@@ -89,16 +100,18 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
         done: downloaded,
         command: `download to ~/HuggingFound/models/${model.id}/${file.name}`,
       });
+    }
+    if (!viaPull) {
       steps.push({
         kind: "create-model",
-        args: { repo: model.id, file: file.name, name: localName },
+        args: file.split ? { repo: model.id, folder: file.folder, name: localName } : { repo: model.id, file: file.name, name: localName },
         title: "Register it with Ollama",
         text: "Tells Ollama where the file is so it can load it by name.",
         done: detected.ollama.models.some((m) => m.startsWith(localName)),
         command: `ollama create ${localName} -f Modelfile`,
       });
     }
-    const remove = viaPull ? [{ kind: "ollama", name: ollamaName }] : [{ kind: "ollama", name: localName }, { kind: "file", repo: model.id, file: file.name }];
+    const remove = viaPull ? [{ kind: "ollama", name: ollamaName }] : [{ kind: "ollama", name: localName }, ...(file.split ? file.parts.map((name) => `${file.folder}/${name}`) : [file.name]).map((name) => ({ kind: "file", repo: model.id, file: name }))];
     const measured = timings[ollamaName] ?? null;
     return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(measured), steps, tryWith: { kind: "chat", model: ollamaName }, remove };
   }

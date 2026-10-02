@@ -162,11 +162,15 @@ export function summarize(m) {
 // sensible quantization wins. Images and speech have their own rules.
 export function chooseFile(files, runnerId) {
   if (runnerId === "ollama" || runnerId === "sd") {
-    const ggufs = files.filter((f) => /\.gguf$/i.test(f.name) && !/mmproj/i.test(f.name) && (runnerId !== "sd" || (f.gb ?? 1) >= 0.8));
+    const all = files.filter((f) => /\.gguf$/i.test(f.name) && !/mmproj/i.test(f.name));
+    // A GGUF split into numbered parts only loads when every part is there,
+    // so the parts count as one file; a whole file of the same quantization
+    // is taken first.
+    const ggufs = [...all.filter((f) => !SPLIT_RE.test(f.name)), ...splitGroups(all)].filter((f) => runnerId !== "sd" || (f.gb ?? 1) >= 0.8);
     // Chat models are fine around 4 bits. Image models lose detail below 8.
-    const preferred = runnerId === "sd" ? ["Q8_0", "F16", "f16", "Q5_0", "Q4_0"] : ["Q4_K_M", "Q4_K_S", "Q4_0", "Q5_K_M", "IQ4_XS", "Q8_0", "F16", "f16"];
+    const preferred = runnerId === "sd" ? ["Q8_0", "F16", "Q5_0", "Q4_0"] : ["Q4_K_M", "Q4_K_S", "Q4_0", "Q5_K_M", "IQ4_XS", "Q8_0", "F16"];
     for (const q of preferred) {
-      const hit = ggufs.find((f) => f.name.includes(q));
+      const hit = ggufs.find((f) => f.name.toUpperCase().includes(q));
       if (hit) return hit;
     }
     if (ggufs.length) return ggufs.sort((a, b) => (a.gb ?? 0) - (b.gb ?? 0))[0];
@@ -216,8 +220,35 @@ export function diffusersFolder(files) {
   return { name: "diffusers folder", folder: true, xl: parts.some((p) => p.to.startsWith("text_encoder_2/")), parts, gb: parts.reduce((t, p) => t + p.gb, 0) || null };
 }
 
+// Parts of a GGUF split for upload: `model-Q8_0-00001-of-00003.gguf`.
+export const SPLIT_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
+
+// Groups split parts into one entry per quantization, named after the first
+// part. The parts are kept in a folder of their own, which is what Ollama
+// joins back into one model. A group with parts missing from the listing is
+// left out.
+export function splitGroups(files) {
+  const groups = new Map();
+  for (const f of files) {
+    const m = SPLIT_RE.exec(f.name);
+    if (!m) continue;
+    const key = f.name.slice(0, m.index);
+    const g = groups.get(key) ?? { key, count: Number(m[2]), parts: [] };
+    g.parts.push(f);
+    groups.set(key, g);
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    if (g.parts.length !== g.count) continue;
+    g.parts.sort((a, b) => a.name.localeCompare(b.name));
+    const known = g.parts.every((p) => p.gb != null);
+    out.push({ name: g.parts[0].name, split: true, folder: g.key, parts: g.parts.map((p) => p.name), gb: known ? g.parts.reduce((t, p) => t + p.gb, 0) : null });
+  }
+  return out;
+}
+
 // The quantization suffix Ollama wants after `hf.co/user/repo:`.
 export function quantTag(fileName) {
-  const m = /[-.]((?:I?Q\d[_A-Z0-9]*)|F16|BF16|f16|bf16)\.gguf$/i.exec(fileName);
+  const m = /[-.]((?:I?Q\d[_A-Z0-9]*)|F16|BF16|f16|bf16)(?:-\d{5}-of-\d{5})?\.gguf$/i.exec(fileName);
   return m ? m[1] : null;
 }

@@ -63,6 +63,18 @@ test("create-model writes a Modelfile next to the download", () => {
   }
 });
 
+test("create-model points the Modelfile at the folder holding a split file's parts", () => {
+  try {
+    const spec = commandFor("create-model", { repo: "a/b", folder: "m-q4_0", name: "b" }, mac);
+    const modelfile = spec.argv[spec.argv.indexOf("-f") + 1];
+    assert.equal(fs.readFileSync(modelfile, "utf8"), `FROM ${modelPath("a/b", "m-q4_0")}\n`);
+    assert.match(spec.text, /parts in m-q4_0/);
+    assert.throws(() => commandFor("create-model", { repo: "a/b", folder: "../x", name: "b" }, mac), /Bad model/);
+  } catch (err) {
+    assert.match(err.message, /not installed/);
+  }
+});
+
 test("a program in its own bin folder is found, whichever name the release uses", async () => {
   const dist = path.join(BIN_DIR, "sd");
   fs.mkdirSync(dist, { recursive: true });
