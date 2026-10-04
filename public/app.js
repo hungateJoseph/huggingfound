@@ -123,6 +123,7 @@ function renderTabs() {
   const tabs = $("#tabs");
   tabs.innerHTML = "";
   for (const c of state.categories) {
+    if (c.browse === false) continue;
     const count = state.models.filter((m) => m.categories.includes(c.id)).length + state.picks.filter((p) => p.categories.includes(c.id)).length;
     const b = document.createElement("button");
     b.className = "tab" + (c.id === state.tab ? " on" : "");

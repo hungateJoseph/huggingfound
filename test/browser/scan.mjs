@@ -136,16 +136,17 @@ await step("categories and the name filter narrow the list", async () => {
   await page.fill("#search", "");
 });
 
-await step("NSFW tabs, sorting and recency work on the scan", async () => {
-  await page.click(".tab[data-tab=nsfw-writing]");
+await step("Browse has no adult tabs; adult models stay in their own category with an 18+ mark, and sorting and recency work", async () => {
+  const tabs = await page.$$eval("#tabs .tab", (els) => els.map((e) => e.dataset.tab));
+  assert.deepEqual(tabs, ["easy", "chat", "coding", "math", "vision", "images", "speech"]);
+  await page.click(".tab[data-tab=images]");
   let names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
-  assert.deepEqual(names, ["Cydonia-24B-v2-GGUF"]);
-  assert.match(await page.locator("#models .model .pill.adult").innerText(), /18\+/);
-  await page.click(".tab[data-tab=nsfw-images]");
-  names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
-  assert.deepEqual(names, ["pony-realism-v23-sdxl"]);
-
+  assert.ok(names.includes("pony-realism-v23-sdxl"), "still listed under Makes images");
   await page.click(".tab[data-tab=chat]");
+  names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
+  assert.ok(names.includes("Cydonia-24B-v2-GGUF"), "still listed under Chat and writing");
+  assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.adult").innerText(), /18\+/);
+
   await page.selectOption("#sort", "likes");
   names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.equal(names[0], "Polite-Chat-7B-GGUF", "most liked runnable chat model first");

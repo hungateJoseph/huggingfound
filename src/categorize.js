@@ -10,8 +10,11 @@ export const CATEGORIES = [
   { id: "vision", name: "Understands images", blurb: "Chat models you can show a picture to." },
   { id: "images", name: "Makes images", blurb: "Text-to-image models: describe a picture, get a picture." },
   { id: "speech", name: "Speech to text", blurb: "Turn recordings into transcripts, offline." },
-  { id: "nsfw-writing", name: "NSFW writing", blurb: "Uncensored and role-play chat models. Adult content is possible; they are for adults." },
-  { id: "nsfw-images", name: "NSFW images", blurb: "Image models trained or tuned for adult content. For adults only." },
+  // Adult models keep their own categories so a search can ask for them, but
+  // Browse has no tab for them; they sit in Chat and writing or Makes images
+  // with an 18+ mark.
+  { id: "nsfw-writing", name: "NSFW writing", blurb: "Uncensored and role-play chat models. Adult content is possible; they are for adults.", browse: false },
+  { id: "nsfw-images", name: "NSFW images", blurb: "Image models trained or tuned for adult content. For adults only.", browse: false },
 ];
 
 const CODE_RE = /\b(code|coder|codellama|starcoder|deepseek-coder|codegemma|codestral|devstral|codeqwen)\b/i;
