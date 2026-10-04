@@ -37,6 +37,8 @@ async function load() {
   $("#reddit-status").textContent = s.redditApp ? `An app id is saved (${s.redditApp}); Reddit is searched with it.` : "No app id saved; Reddit is skipped.";
   $("#github-status").textContent = s.githubToken ? `A token is saved (${s.githubToken}); thirty GitHub searches a minute.` : "No token; ten GitHub searches a minute.";
   $("#youtube-status").textContent = s.youtubeKey ? `A key is saved (${s.youtubeKey}); YouTube is searched with it.` : "No key; YouTube is skipped.";
+  $("#claude-status").textContent = s.claudeKey ? `A key is saved (${s.claudeKey}); answers and pictures can be checked by Claude.` : s.claudeReady ? "A key from the environment is in use." : "No key; the Claude check is off.";
+  state.claudeReady = Boolean(s.claudeReady);
   state.voices = s.voices;
   state.summarizer = s.summarizer;
   renderVoicesStatus();
@@ -512,6 +514,7 @@ function renderModel(model, plan) {
   parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
   if (state.hosted) parts.push(`<div class="get-app hosted-only"><b>Run HuggingFound on your computer</b> to do these with one click and try the model in a chat, image or transcription box right here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
+npm install
 npm start</code></div>`);
   if (!state.hosted) parts.push(`<div class="try" id="try"></div>`);
   parts.push(`<div class="voices" id="voices"><h3>What people say</h3><p class="muted small">Reading the model card and the community discussions</p></div>`);
@@ -797,6 +800,92 @@ $("#scan-local").addEventListener("click", async () => {
   }
 });
 
+// ---- Claude's check ---------------------------------------------------------
+// Small open models make mistakes a stronger model catches. A click sends
+// one answer (with the question) or one picture (with its description) to
+// Claude through the user's own Anthropic key, and the review streams in.
+
+// Adds the "Ask Claude" button after `anchor`, with the box its review goes in.
+// `payload()` builds the request when clicked; `saved` is an earlier review to show again.
+function addCheck(anchor, { label, sent, payload, saved = "", onDone = null, after = null }) {
+  const wrap = document.createElement("div");
+  wrap.className = "check";
+  wrap.innerHTML = `<button class="ghost check-go">${esc(label)}</button><div class="review" hidden><div class="review-head">Claude's check</div><div class="review-body"></div><div class="review-foot muted small"></div></div>`;
+  anchor.after(wrap);
+  const btn = wrap.querySelector(".check-go");
+  const box = wrap.querySelector(".review");
+  const body = wrap.querySelector(".review-body");
+  const foot = wrap.querySelector(".review-foot");
+  const scroller = wrap.closest(".messages");
+  const show = (text, note) => {
+    box.hidden = false;
+    body.textContent = text;
+    foot.textContent = note;
+    btn.textContent = "Ask Claude again";
+  };
+  if (saved) show(saved, "Checked earlier by Claude.");
+  btn.addEventListener("click", async () => {
+    if (!state.claudeReady) {
+      box.hidden = false;
+      body.textContent = "";
+      foot.innerHTML = `This needs an Anthropic API key. Nothing is sent until you click; then ${esc(sent)} go to Anthropic. <button class="ghost check-settings">Add a key in Settings</button>`;
+      foot.querySelector(".check-settings").addEventListener("click", () => $("#open-settings").click());
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = "Claude is checking";
+    box.hidden = false;
+    body.textContent = "";
+    foot.textContent = `Sent to Anthropic: ${sent}.`;
+    let text = "";
+    try {
+      const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload()) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let end = null;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const j = JSON.parse(line);
+          if (j.error) throw new Error(j.error);
+          if (j.text) {
+            const stick = scroller ? nearBottom(scroller) : false;
+            text += j.text;
+            body.textContent = text;
+            if (stick) scroller.scrollTop = scroller.scrollHeight;
+          }
+          if (j.done) end = j;
+        }
+      }
+      if (end?.declined) {
+        text = "";
+        body.textContent = "";
+        foot.textContent = end.note || "Claude declined to review this.";
+      } else {
+        foot.textContent = `Checked by ${end?.model ?? "Claude"}. ${end?.note ? end.note + " " : ""}Sent to Anthropic: ${sent}.`;
+        if (text) {
+          onDone?.(text);
+          after?.(text, foot);
+        }
+      }
+    } catch (err) {
+      body.textContent = text;
+      foot.textContent = `The check did not finish: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Ask Claude again";
+    }
+  });
+  return wrap;
+}
+
 // Conversations outlive the window. Closing it, re-drawing the try box after
 // a step, or reloading the page brings the transcript back, and a reply that
 // is still streaming keeps going and lands in the transcript.
@@ -853,7 +942,28 @@ function renderChat(box, modelName) {
       </div>
     </div>`;
   const list = $("#messages");
-  for (const m of chat.messages) if (m.role !== "system") addMsg(m.role, m.content);
+  // Each finished answer can be checked by Claude; the question is the user turn before it.
+  const checkFor = (el, m) => {
+    addCheck(el, {
+      label: "Ask Claude to check this",
+      sent: "your question and this answer",
+      saved: m.review ?? "",
+      payload: () => {
+        const at = chat.messages.indexOf(m);
+        const question = chat.messages.slice(0, at).reverse().find((x) => x.role === "user")?.content ?? "";
+        return { kind: "text", model: modelName, question, answer: m.content, system: chat.messages[0]?.role === "system" ? chat.messages[0].content : "" };
+      },
+      onDone: (text) => {
+        m.review = text;
+        saveChat(modelName, chat);
+      },
+    });
+  };
+  for (const m of chat.messages) {
+    if (m.role === "system") continue;
+    const el = addMsg(m.role, m.content);
+    if (m.role === "assistant") checkFor(el, m);
+  }
   if (chat.busy) {
     const out = addMsg("assistant", chat.reply ?? "");
     out.id = "chat-live";
@@ -895,7 +1005,7 @@ function renderChat(box, modelName) {
     $("#chat-send").disabled = true;
     let reply = "";
     try {
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: modelName, messages }) });
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: modelName, messages: messages.map(({ role, content }) => ({ role, content })) }) });
       if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -915,8 +1025,15 @@ function renderChat(box, modelName) {
           paint(reply);
         }
       }
-      messages.push({ role: "assistant", content: reply });
+      const said = { role: "assistant", content: reply };
+      messages.push(said);
       saveChat(modelName, chat);
+      const live = $("#chat-live");
+      if (live && mine() && reply.trim()) {
+        const stick = nearBottom(live.parentElement);
+        checkFor(live, said);
+        if (stick) live.parentElement.scrollTop = live.parentElement.scrollHeight;
+      }
     } catch (err) {
       paint(`${reply}${reply ? "\n\n" : ""}Something went wrong: ${err.message}`);
       if (reply) {
@@ -1021,6 +1138,27 @@ function renderImage(box, t) {
       });
       if (result.status === "done" && result.result) {
         $("#image-out").innerHTML = `<img class="result-image" src="/output/${esc(result.result)}" alt="${esc(prompt)}"><p class="muted small">Saved to ~/HuggingFound/output/${esc(result.result)}</p>`;
+        addCheck($("#image-out").lastElementChild, {
+          label: "Ask Claude to check this picture",
+          sent: "this picture and your description",
+          payload: () => ({ kind: "image", model: t.repo, file: result.result, prompt, negative }),
+          // Claude ends with a better description and avoid list; one click tries them.
+          after: (text, foot) => {
+            const better = /^Description:\s*(.+)$/m.exec(text)?.[1]?.trim();
+            const avoid = /^Avoid:\s*(.+)$/m.exec(text)?.[1]?.trim();
+            if (!better) return;
+            const use = document.createElement("button");
+            use.className = "ghost";
+            use.id = "use-suggestion";
+            use.textContent = "Use Claude's suggestion";
+            use.addEventListener("click", () => {
+              $("#image-prompt").value = better;
+              if (avoid) $("#image-negative").value = avoid;
+              $("#image-prompt").focus();
+            });
+            foot.prepend(use);
+          },
+        });
       }
     } catch (err) {
       log.textContent += `Could not start: ${err.message}\n`;
@@ -1124,9 +1262,7 @@ async function renderImageServerStatus() {
   }
 }
 
-for (const [field, key, status, text] of [["#github-token", "GITHUB_TOKEN", "#github-status", (v) => v ? `A token is saved (${v}); thirty GitHub searches a minute.` : "No token; ten GitHub searches a minute."], ["#youtube-key", "YOUTUBE_API_KEY", "#youtube-status", (v) => v ? `A key is saved (${v}); YouTube is searched with it.` : "No key; YouTube is skipped."]]) {
-  const save = field === "#github-token" ? "#save-github" : "#save-youtube";
-  const clear = field === "#github-token" ? "#clear-github" : "#clear-youtube";
+for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#save-github", "#clear-github"], ["#youtube-key", "YOUTUBE_API_KEY", "#save-youtube", "#clear-youtube"], ["#claude-key", "ANTHROPIC_API_KEY", "#save-claude", "#clear-claude"]]) {
   $(save).addEventListener("click", async () => {
     const value = $(field).value.trim();
     try {

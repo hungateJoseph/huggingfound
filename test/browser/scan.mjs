@@ -35,7 +35,18 @@ const fetchImpl = (url, init) => {
   }
   return fetch(url, init);
 };
-const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false });
+// Claude's check is answered by a stand-in that remembers what it was sent.
+const reviewed = [];
+const reviewer = {
+  async review(input, onText) {
+    reviewed.push(input);
+    onText("This has one problem.\n");
+    await new Promise((r) => setTimeout(r, 150));
+    onText("word7 is not a word.");
+    return { declined: false, model: "claude-opus-5", note: "" };
+  },
+};
+const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -463,6 +474,18 @@ await step("a conversation survives re-renders, an outside click and closing the
   });
   assert.ok(scrolled);
 
+  // The finished answer can be handed to Claude for a check; the review streams in under it.
+  assert.equal(await page.locator("#messages .check-go").count(), 13, "one button per answer");
+  await page.locator("#messages .check-go").last().click();
+  await page.waitForFunction(() => /word7 is not a word\./.test([...document.querySelectorAll("#messages .review-body")].at(-1)?.textContent ?? ""));
+  assert.match(await page.locator("#messages .review-foot").last().innerText(), /Checked by claude-opus-5\. Sent to Anthropic: your question and this answer\./);
+  assert.equal(await page.locator("#messages .check-go").last().innerText(), "Ask Claude again");
+  assert.equal(reviewed.length, 1);
+  assert.equal(reviewed[0].kind, "text");
+  assert.equal(reviewed[0].model, "qwen-test");
+  assert.equal(reviewed[0].question, "hello there", "the question that led to the answer goes with it");
+  assert.match(reviewed[0].answer, /^word0 .*word39 $/s);
+
   // Closing and reopening the model brings the conversation back, reply included.
   await page.click("#close-modal");
   assert.equal(await page.locator("#modal").isVisible(), false);
@@ -471,6 +494,8 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(await page.locator("#messages .msg").count(), 26);
   assert.match(await page.locator("#messages .msg").last().innerText(), /word39 /);
   assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("chat:qwen-test"))).length, 26, "kept on this computer");
+  assert.match(await page.locator("#messages .review-body").last().innerText(), /This has one problem\.\nword7 is not a word\./, "the review is kept with the answer");
+  assert.match(await page.locator("#messages .review-foot").last().innerText(), /Checked earlier by Claude/);
 
   // New chat starts over.
   await page.click("#chat-clear");

@@ -99,6 +99,7 @@
         <b>To download and try a model, run HuggingFound on your computer.</b> It is free and open source, needs Node 20 or newer, and keeps everything in a folder of its own:
         <code>git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
+npm install
 npm start</code>
       </div>
     </section>
@@ -193,6 +194,16 @@ npm start</code>
       <div class="actions">
         <button class="primary" id="save-image-server">Save</button>
         <button class="ghost" id="clear-image-server">Use this computer</button>
+      </div>
+      <label class="field">
+        <span>Anthropic API key (optional)</span>
+        <input type="password" id="claude-key" autocomplete="off" placeholder="sk-ant-...">
+        <small class="muted">Lets Claude check what a local model wrote or drew: code that may not run, facts that may be wrong, a picture against its description. Small open models make mistakes a stronger model catches. A key comes from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> and Anthropic bills each check to it. Nothing is sent until you click "Ask Claude to check this"; then your question and that answer, or that picture and its description, go to Anthropic.</small>
+      </label>
+      <p class="muted small" id="claude-status"></p>
+      <div class="actions">
+        <button class="primary" id="save-claude">Save</button>
+        <button class="ghost" id="clear-claude">Remove</button>
       </div>
       <label class="field">
         <span>GitHub token (optional)</span>

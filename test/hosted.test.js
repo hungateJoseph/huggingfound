@@ -43,7 +43,7 @@ test("the state says it is hosted and describes a typical laptop, not this machi
 });
 
 test("nothing that runs, downloads, chats or changes settings is reachable", async () => {
-  for (const p of ["/api/run", "/api/chat", "/api/settings", "/api/scan", "/api/voices/gather", "/api/remove", "/api/unload", "/api/upload", "/api/runs/1/cancel"]) {
+  for (const p of ["/api/run", "/api/chat", "/api/settings", "/api/scan", "/api/voices/gather", "/api/remove", "/api/unload", "/api/upload", "/api/review", "/api/runs/1/cancel"]) {
     const res = await post(p, {});
     assert.equal(res.status, 403, p);
     assert.match((await res.json()).error, /your own computer/);

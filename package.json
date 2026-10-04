@@ -29,5 +29,8 @@
     "local-models",
     "whisper",
     "stable-diffusion"
-  ]
+  ],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0"
+  }
 }

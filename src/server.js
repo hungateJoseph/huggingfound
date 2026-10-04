@@ -16,6 +16,7 @@ import { createCivitai, createGithub, createHackerNews, createLemmy, createReddi
 import { cleanSummary, extractiveSummary, summarize, summarizerModel } from "./summarize.js";
 import { rankModels } from "./find.js";
 import { refusalSignals } from "./refusals.js";
+import { ReviewError, createReviewer } from "./review.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -29,9 +30,9 @@ const HOSTED_ENV_KEYS = ["HF_TOKEN", "GITHUB_TOKEN", "YOUTUBE_API_KEY", "REDDIT_
 // What a public copy of the site must not do: run programs, download models,
 // write settings or touch the disk it runs on. Those belong on the visitor's
 // own computer, where HuggingFound does them.
-const NOT_HOSTED = new Set(["/api/settings", "/api/scan", "/api/voices/gather", "/api/storage", "/api/remove", "/api/image-server", "/api/unload", "/api/run", "/api/chat", "/api/upload", "/api/result"]);
+const NOT_HOSTED = new Set(["/api/settings", "/api/scan", "/api/voices/gather", "/api/storage", "/api/remove", "/api/image-server", "/api/unload", "/api/run", "/api/chat", "/api/upload", "/api/result", "/api/review"]);
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12) } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null } = {}) {
   // A hosted copy does not know the visitor's computer; it describes a
   // typical laptop and leaves the running to HuggingFound on their machine.
   const machine = hosted ? hostedMachine() : describeMachine();
@@ -56,6 +57,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     return redditClient.client;
   };
   const details = new Map();
+  // Claude checks what a local model produced, with the key from Settings
+  // (or the environment). Tests hand in a stand-in.
+  const claudeKey = () => env().ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
+  const claudeReady = () => Boolean(reviewer || claudeKey() || process.env.ANTHROPIC_AUTH_TOKEN);
+  const checker = reviewer ?? createReviewer({ apiKey: claudeKey, outputDir: OUTPUT_DIR });
   let refreshing = null;
   let lastRefresh = null;
 
@@ -167,6 +173,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         redditApp: saved.REDDIT_CLIENT_ID ? mask(saved.REDDIT_CLIENT_ID) : "",
         githubToken: saved.GITHUB_TOKEN ? mask(saved.GITHUB_TOKEN) : "",
         youtubeKey: saved.YOUTUBE_API_KEY ? mask(saved.YOUTUBE_API_KEY) : "",
+        claudeKey: saved.ANTHROPIC_API_KEY ? mask(saved.ANTHROPIC_API_KEY) : "",
+        claudeReady: !hosted && claudeReady(),
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
         voices: voicesMeta(),
@@ -182,7 +190,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (typeof body.HF_TOKEN !== "string") return send(res, 400, { error: "HF_TOKEN must be a string" });
         updates.HF_TOKEN = body.HF_TOKEN.trim();
       }
-      for (const [key, pattern, what] of [["GITHUB_TOKEN", /^[\w-]{20,255}$/, "a GitHub token"], ["YOUTUBE_API_KEY", /^[\w-]{20,80}$/, "a YouTube API key"]]) {
+      for (const [key, pattern, what] of [["GITHUB_TOKEN", /^[\w-]{20,255}$/, "a GitHub token"], ["YOUTUBE_API_KEY", /^[\w-]{20,80}$/, "a YouTube API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"]]) {
         if (key in body) {
           if (typeof body[key] !== "string") return send(res, 400, { error: `${key} must be a string` });
           const value = body[key].trim();
@@ -404,6 +412,30 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         }
       } catch {
         // not a stats line
+      }
+      return res.end();
+    }
+    // Asks Claude to check a chat answer or a generated picture. Nothing is
+    // sent anywhere until the user clicks for it. The review streams back
+    // as lines of JSON: text as it is written, then how it ended.
+    if (req.method === "POST" && url.pathname === "/api/review") {
+      const body = await json(req);
+      if (!claudeReady()) return send(res, 400, { error: "Add an Anthropic API key in Settings to have Claude check answers and pictures." });
+      let started = false;
+      const line = (obj) => {
+        if (!started) {
+          res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+          started = true;
+        }
+        res.write(`${JSON.stringify(obj)}\n`);
+      };
+      try {
+        const result = await checker.review(body, (text) => line({ text }));
+        line({ done: true, ...result });
+      } catch (err) {
+        const message = err instanceof ReviewError ? err.message : `The check failed: ${err.message}`;
+        if (!started) return send(res, err instanceof ReviewError ? err.status : 500, { error: message });
+        line({ error: message });
       }
       return res.end();
     }

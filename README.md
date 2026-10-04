@@ -13,6 +13,7 @@ Find open-source models on Hugging Face, see which ones your computer can run, a
 - **Pick the speed.** Every image model offers Fast (12 steps, a sharper sampler), Default (the plain 20 steps) and Max (40 steps), each with a time estimate for this computer. Distilled models such as SDXL Turbo and SDXL Lightning are marked fast and make a picture in four steps. After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.
 - **Use a GPU elsewhere.** Point Settings at a stable-diffusion.cpp server (`sd-server`) on another computer or a rented GPU box, and pictures are made there in seconds with the model it has loaded; nothing is downloaded here.
 - **Keep your disk.** Models are gigabytes each. "Scan this computer" on the front page lists everything downloaded with its size, how much space is free on the drive, a Use button that opens the model ready to try, and a Remove button for each; the free-space figure updates as things go. The same list is in Settings, and a set-up model has a Remove button in its own window.
+- **Get a second opinion.** Small open models make mistakes: code that does not run, a wrong fact, a picture that misses the description. Under every chat answer and every generated picture is "Ask Claude to check this". With your own Anthropic API key in Settings, that one answer and its question (or that picture and its description) go to Claude Opus, and the review streams in underneath: a verdict, the problems, corrected code, or a better description and avoid list you can try with one click. Nothing is sent until you click, and reviews are kept with the conversation.
 - **Try it locally.** Pick a model and HuggingFound lays out the steps: install the runner, start it, download the file. Each step shows the exact command, runs when you confirm, and streams its output. When the steps are done, a chat box, an image prompt or a transcription box appears right there.
 
 Chat, coding, math and vision models run through [Ollama](https://ollama.com). Image models run through [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp). Speech models run through [whisper.cpp](https://github.com/ggerganov/whisper.cpp). All three are open source and run entirely on your machine.
@@ -28,8 +29,11 @@ Needs Node 20 or newer.
 ```sh
 git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
+npm install
 npm start
 ```
+
+`npm install` fetches the one library the app uses, Anthropic's, for the optional Claude check; everything else runs without it.
 
 HuggingFound opens in a window of its own when Chrome, Edge, Brave or Chromium is installed, and in the default browser otherwise. `npm start -- --browser` always uses the browser; `--no-open` just prints the address; `--port 5000` changes the port.
 
