@@ -4,8 +4,9 @@
 FROM node:22-slim
 WORKDIR /app
 
-# The app has no runtime dependencies, so the source is all the image needs.
-COPY package.json ./
+# One runtime dependency: Anthropic's library, for the Claude check.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 COPY bin ./bin
 COPY src ./src
 COPY public ./public

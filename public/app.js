@@ -29,7 +29,9 @@ async function load() {
   const s = await api.get("/api/state");
   Object.assign(state, { machine: s.machine, categories: s.categories, runners: s.runners, picks: s.picks, hosted: Boolean(s.hosted), refresh: s.refresh });
   document.body.dataset.hosted = s.hosted ? "1" : "";
+  state.claudeHosted = s.claudeHosted;
   if (s.hosted) renderHostedCopy();
+  if (s.hosted && !state.openChecker) setupChecker();
   renderDiskLine();
   $("#env-path").textContent = s.envFile;
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
@@ -516,6 +518,7 @@ function renderModel(model, plan) {
 cd huggingfound
 npm install
 npm start</code></div>`);
+  if (state.hosted) parts.push(`<div class="actions"><button class="ghost" id="check-from-model">Ran it? Have Claude check its answer</button></div>`);
   if (!state.hosted) parts.push(`<div class="try" id="try"></div>`);
   parts.push(`<div class="voices" id="voices"><h3>What people say</h3><p class="muted small">Reading the model card and the community discussions</p></div>`);
   body.innerHTML = parts.join("");
@@ -527,6 +530,7 @@ npm start</code></div>`);
   for (const btn of body.querySelectorAll(".go")) {
     btn.addEventListener("click", () => runStep(model, plan, Number(btn.dataset.index)));
   }
+  body.querySelector("#check-from-model")?.addEventListener("click", () => state.openChecker?.(model.name));
   renderTry(model, plan);
 }
 
@@ -825,7 +829,14 @@ function addCheck(anchor, { label, sent, payload, saved = "", onDone = null, aft
   };
   if (saved) show(saved, "Checked earlier by Claude.");
   btn.addEventListener("click", async () => {
-    if (!state.claudeReady) {
+    const creds = state.hosted ? hostedCredentials() : {};
+    if (state.hosted && !creds) {
+      box.hidden = false;
+      body.textContent = "";
+      foot.textContent = `Enter your Anthropic API key above${state.claudeHosted?.devCode ? ", or the dev code" : ""}. Nothing is sent until you click.`;
+      return;
+    }
+    if (!state.hosted && !state.claudeReady) {
       box.hidden = false;
       body.textContent = "";
       foot.innerHTML = `This needs an Anthropic API key. Nothing is sent until you click; then ${esc(sent)} go to Anthropic. <button class="ghost check-settings">Add a key in Settings</button>`;
@@ -839,7 +850,7 @@ function addCheck(anchor, { label, sent, payload, saved = "", onDone = null, aft
     foot.textContent = `Sent to Anthropic: ${sent}.`;
     let text = "";
     try {
-      const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload()) });
+      const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify(await payload()) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -884,6 +895,83 @@ function addCheck(anchor, { label, sent, payload, saved = "", onDone = null, aft
     }
   });
   return wrap;
+}
+
+// On the hosted site a check is paid for by the visitor's own key, or by
+// the owner's dev code. The key lives in this tab only; the code is kept
+// in this browser. Returns the headers to send, or null when there are none.
+function hostedCredentials() {
+  const read = (store, name) => {
+    try {
+      return store.getItem(name) || "";
+    } catch {
+      return "";
+    }
+  };
+  const write = (store, name, value) => {
+    try {
+      if (value) store.setItem(name, value);
+      else store.removeItem(name);
+    } catch {
+      // no storage
+    }
+  };
+  const key = $("#checker-key").value.trim();
+  const code = $("#checker-code").value.trim();
+  write(sessionStorage, "claude:key", key);
+  write(localStorage, "claude:code", code);
+  if (key) return { "X-Anthropic-Key": key };
+  if (code) return { "X-Dev-Code": code };
+  return read(sessionStorage, "claude:key") ? { "X-Anthropic-Key": read(sessionStorage, "claude:key") } : null;
+}
+
+// The hosted site runs no models, so the answer or picture to check is
+// pasted or picked by the visitor.
+function setupChecker() {
+  try {
+    $("#checker-key").value = sessionStorage.getItem("claude:key") || "";
+    $("#checker-code").value = localStorage.getItem("claude:code") || "";
+  } catch {
+    // no storage
+  }
+  $("#checker-code-box").hidden = !state.claudeHosted?.devCode;
+  if ($("#checker-code").value) $("#checker-code-box").open = true;
+  const kind = () => document.querySelector("input[name=checker-kind]:checked").value;
+  for (const radio of document.querySelectorAll("input[name=checker-kind]")) {
+    radio.addEventListener("change", () => {
+      $("#checker-text").hidden = kind() !== "text";
+      $("#checker-image").hidden = kind() !== "image";
+    });
+  }
+  const readPicture = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(new Error("Could not read that file."));
+    reader.readAsDataURL(file);
+  });
+  addCheck($("#checker-anchor"), {
+    label: "Ask Claude to check this",
+    sent: "what you entered here",
+    payload: async () => {
+      const model = $("#checker-model").value.trim();
+      if (kind() === "text") {
+        const answer = $("#checker-answer").value;
+        if (!answer.trim()) throw new Error("Paste the model's answer first.");
+        return { kind: "text", model, question: $("#checker-question").value, answer };
+      }
+      const file = $("#checker-file").files[0];
+      if (!file) throw new Error("Pick the picture first.");
+      if (file.size > 5 * 1024 * 1024) throw new Error("That picture is larger than 5 MB.");
+      return { kind: "image", model, image: { media_type: file.type, data: await readPicture(file) }, prompt: $("#checker-prompt").value, negative: $("#checker-negative").value };
+    },
+  });
+  const open = (model = "") => {
+    if (model) $("#checker-model").value = model;
+    $("#checker").hidden = false;
+  };
+  $("#open-checker").addEventListener("click", () => open());
+  $("#close-checker").addEventListener("click", () => ($("#checker").hidden = true));
+  state.openChecker = open;
 }
 
 // Conversations outlive the window. Closing it, re-drawing the try box after
@@ -1234,6 +1322,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     $("#modal").hidden = true;
     $("#settings").hidden = true;
+    $("#checker").hidden = true;
     state.open = null;
   }
 });

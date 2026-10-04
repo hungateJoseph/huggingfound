@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -30,9 +31,9 @@ const HOSTED_ENV_KEYS = ["HF_TOKEN", "GITHUB_TOKEN", "YOUTUBE_API_KEY", "REDDIT_
 // What a public copy of the site must not do: run programs, download models,
 // write settings or touch the disk it runs on. Those belong on the visitor's
 // own computer, where HuggingFound does them.
-const NOT_HOSTED = new Set(["/api/settings", "/api/scan", "/api/voices/gather", "/api/storage", "/api/remove", "/api/image-server", "/api/unload", "/api/run", "/api/chat", "/api/upload", "/api/result", "/api/review"]);
+const NOT_HOSTED = new Set(["/api/settings", "/api/scan", "/api/voices/gather", "/api/storage", "/api/remove", "/api/image-server", "/api/unload", "/api/run", "/api/chat", "/api/upload", "/api/result"]);
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30 } = {}) {
   // A hosted copy does not know the visitor's computer; it describes a
   // typical laptop and leaves the running to HuggingFound on their machine.
   const machine = hosted ? hostedMachine() : describeMachine();
@@ -62,6 +63,46 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   const claudeKey = () => env().ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
   const claudeReady = () => Boolean(reviewer || claudeKey() || process.env.ANTHROPIC_AUTH_TOKEN);
   const checker = reviewer ?? createReviewer({ apiKey: claudeKey, outputDir: OUTPUT_DIR });
+  // On the hosted site the server's key is the owner's: it answers only to
+  // the dev code. Anyone else brings their own key with each check; it is
+  // handed to Anthropic for that one call and never stored or logged here.
+  const hits = new Map();
+  const tooMany = (who, what, max) => {
+    const now = Date.now();
+    const key = `${what}:${who}`;
+    const recent = (hits.get(key) ?? []).filter((t) => now - t < 3600e3);
+    if (hits.size > 5000) hits.clear();
+    if (recent.length >= max) {
+      hits.set(key, recent);
+      return true;
+    }
+    recent.push(now);
+    hits.set(key, recent);
+    return false;
+  };
+  const sameCode = (given) => {
+    const a = crypto.createHash("sha256").update(String(given)).digest();
+    const b = crypto.createHash("sha256").update(devCode).digest();
+    return Boolean(devCode) && crypto.timingSafeEqual(a, b);
+  };
+  // Who pays for a hosted check: { apiKey } to use, or { status, error }.
+  const hostedAccess = (req) => {
+    const who = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "unknown";
+    const own = String(req.headers["x-anthropic-key"] ?? "").trim();
+    const code = String(req.headers["x-dev-code"] ?? "").trim();
+    if (own) {
+      if (!/^sk-ant-[\w-]{20,300}$/.test(own)) return { status: 400, error: "That does not look like an Anthropic API key (they start with sk-ant-)." };
+      if (tooMany(who, "check", reviewLimit)) return { status: 429, error: "That is a lot of checks in an hour from one address. Try again later." };
+      return { apiKey: own };
+    }
+    if (code) {
+      // Only wrong codes count toward the limit, so guessing stops after a few tries.
+      if (!sameCode(code)) return tooMany(who, "code", 8) ? { status: 429, error: "Too many wrong codes from this address. Try again in an hour." } : { status: 401, error: "That dev code is not right." };
+      if (!reviewer && !claudeKey()) return { status: 503, error: "The site has no Anthropic key configured for the dev code." };
+      return { apiKey: "" };
+    }
+    return { status: 401, error: "Checks on this site need your own Anthropic API key, or the site owner's dev code." };
+  };
   let refreshing = null;
   let lastRefresh = null;
 
@@ -175,6 +216,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         youtubeKey: saved.YOUTUBE_API_KEY ? mask(saved.YOUTUBE_API_KEY) : "",
         claudeKey: saved.ANTHROPIC_API_KEY ? mask(saved.ANTHROPIC_API_KEY) : "",
         claudeReady: !hosted && claudeReady(),
+        // The hosted site checks with a visitor's own key, or the owner's dev code when one is set.
+        claudeHosted: hosted ? { devCode: Boolean(devCode) } : null,
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
         voices: voicesMeta(),
@@ -419,8 +462,18 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     // sent anywhere until the user clicks for it. The review streams back
     // as lines of JSON: text as it is written, then how it ended.
     if (req.method === "POST" && url.pathname === "/api/review") {
-      const body = await json(req);
-      if (!claudeReady()) return send(res, 400, { error: "Add an Anthropic API key in Settings to have Claude check answers and pictures." });
+      let use = {};
+      if (hosted) {
+        const access = hostedAccess(req);
+        if (access.error) return send(res, access.status, { error: access.error });
+        use = { apiKey: access.apiKey };
+      } else if (!claudeReady()) {
+        return send(res, 400, { error: "Add an Anthropic API key in Settings to have Claude check answers and pictures." });
+      }
+      // A picked picture travels in the body as base64, so this route takes more than the others.
+      const body = await json(req, 8 * 1024 * 1024);
+      // The hosted site has no pictures of its own to name.
+      if (hosted) delete body.file;
       let started = false;
       const line = (obj) => {
         if (!started) {
@@ -430,7 +483,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         res.write(`${JSON.stringify(obj)}\n`);
       };
       try {
-        const result = await checker.review(body, (text) => line({ text }));
+        const result = await checker.review(body, (text) => line({ text }), use);
         line({ done: true, ...result });
       } catch (err) {
         const message = err instanceof ReviewError ? err.message : `The check failed: ${err.message}`;
@@ -665,12 +718,12 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-function json(req) {
+function json(req, limit = 256 * 1024) {
   return new Promise((resolve, reject) => {
     let data = "";
     req.on("data", (chunk) => {
       data += chunk;
-      if (data.length > 256 * 1024) reject(new Error("Body too large"));
+      if (data.length > limit) reject(new Error("Body too large"));
     });
     req.on("end", () => {
       try {

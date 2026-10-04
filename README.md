@@ -20,7 +20,7 @@ Chat, coding, math and vision models run through [Ollama](https://ollama.com). I
 
 ## A hosted copy
 
-The same code can be served on the web as a catalogue: search, browse and what people say work as on a computer, the server rescans Hugging Face on a timer, and a model's window shows the steps to run it instead of running them. Nothing installs, downloads or chats on the server; the page points at running HuggingFound on your own computer for that. Set `HUGGINGFOUND_HOSTED=1` to serve that copy; `Dockerfile`, `render.yaml` and [DEPLOY.md](DEPLOY.md) have the rest.
+The same code can be served on the web as a catalogue: search, browse and what people say work as on a computer, the server rescans Hugging Face on a timer, and a model's window shows the steps to run it instead of running them. Nothing installs, downloads or chats on the server; the page points at running HuggingFound on your own computer for that. The hosted copy also has a "Check an answer" panel: paste what a model gave you, or pick a picture it made, and Claude reviews it with your own Anthropic key, which is passed along for that one request and never stored. Set `HUGGINGFOUND_HOSTED=1` to serve that copy; `Dockerfile`, `render.yaml` and [DEPLOY.md](DEPLOY.md) have the rest.
 
 ## Run it
 

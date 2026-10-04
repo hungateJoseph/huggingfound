@@ -20,6 +20,7 @@
       </nav>
       <div class="top-right">
         <span class="muted small" id="machine-line"></span>
+        <button class="ghost hosted-only" id="open-checker">Check an answer</button>
         <button class="ghost local-only" id="open-settings">Settings</button>
       </div>
     </div>
@@ -163,6 +164,65 @@ npm start</code>
         <button class="ghost" id="close-modal" aria-label="Close">Close</button>
       </div>
       <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="checker" hidden>
+    <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="checker-title">
+      <div class="modal-head">
+        <div>
+          <h2 id="checker-title">Check an answer with Claude</h2>
+          <p class="muted small">Small open models make mistakes a stronger model catches: code that does not run, a wrong fact, a picture that misses its description. Paste what a model gave you and Claude Opus reviews it.</p>
+        </div>
+        <button class="ghost" id="close-checker" aria-label="Close">Close</button>
+      </div>
+      <div class="quality" id="checker-kind">
+        <label><input type="radio" name="checker-kind" value="text" checked> <b>An answer</b> <span class="muted">text or code</span></label>
+        <label><input type="radio" name="checker-kind" value="image"> <b>A picture</b> <span class="muted">from an image model</span></label>
+      </div>
+      <label class="field">
+        <span>Model (optional)</span>
+        <input type="text" id="checker-model" autocomplete="off" placeholder="the model that produced it">
+      </label>
+      <div id="checker-text">
+        <label class="field">
+          <span>What you asked</span>
+          <textarea id="checker-question" rows="2" placeholder="The question or request you gave the model"></textarea>
+        </label>
+        <label class="field">
+          <span>What it answered</span>
+          <textarea id="checker-answer" rows="6" placeholder="Paste the model's answer or code here"></textarea>
+        </label>
+      </div>
+      <div id="checker-image" hidden>
+        <label class="field">
+          <span>The picture</span>
+          <input type="file" id="checker-file" accept="image/png,image/jpeg,image/webp">
+          <small class="muted">PNG, JPEG or WebP, up to 5 MB.</small>
+        </label>
+        <label class="field">
+          <span>The description you gave</span>
+          <textarea id="checker-prompt" rows="2" placeholder="a lighthouse at dusk, oil painting"></textarea>
+        </label>
+        <label class="field">
+          <span>What you asked it to avoid (optional)</span>
+          <input type="text" id="checker-negative" autocomplete="off" placeholder="blurry, extra fingers">
+        </label>
+      </div>
+      <label class="field">
+        <span>Your Anthropic API key</span>
+        <input type="password" id="checker-key" autocomplete="off" placeholder="sk-ant-...">
+        <small class="muted">From <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>; Anthropic bills the check to it. The key stays in this browser tab, travels with each check to this site, which hands it to Anthropic for that one request, and is never stored or logged here.</small>
+      </label>
+      <details id="checker-code-box">
+        <summary>I have a dev code</summary>
+        <label class="field">
+          <span>Dev code</span>
+          <input type="password" id="checker-code" autocomplete="off">
+          <small class="muted">For the site's owner: checks with the code use the site's own key. Remembered in this browser until you clear the field.</small>
+        </label>
+      </details>
+      <div id="checker-run"><span id="checker-anchor"></span></div>
     </div>
   </div>
 

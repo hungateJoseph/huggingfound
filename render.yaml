@@ -27,6 +27,13 @@ services:
         sync: false
       - key: YOUTUBE_API_KEY # video reviews; without it YouTube is skipped
         sync: false
+      # The Claude check: visitors bring their own Anthropic key; the key
+      # here is the owner's and answers only to the dev code. Set both or
+      # neither. Pick a long random dev code and keep it private.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: REVIEW_DEV_CODE
+        sync: false
 
       # --- Fixed values ----------------------------------------------------
       - key: HUGGINGFOUND_HOSTED

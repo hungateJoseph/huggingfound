@@ -60,12 +60,24 @@ export function buildRequest(input, { outputDir } = {}) {
     return { ...base, system: TEXT_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "image") {
-    const file = path.basename(String(input.file ?? ""));
-    const mediaType = MEDIA_TYPES[path.extname(file).toLowerCase()];
-    if (!file || !mediaType) throw new ReviewError("That is not a picture this app made.");
-    const full = path.join(outputDir ?? "", file);
-    if (!fs.existsSync(full)) throw new ReviewError("That picture is no longer on this computer.", 404);
-    const bytes = fs.readFileSync(full);
+    // The picture is either one this app made (named by file) or, on the
+    // hosted site, one the visitor picked (sent as base64 with its type).
+    let mediaType;
+    let bytes;
+    if (input.image) {
+      mediaType = String(input.image.media_type ?? "");
+      if (!Object.values(MEDIA_TYPES).includes(mediaType)) throw new ReviewError("The picture has to be a PNG, JPEG or WebP file.");
+      const data = String(input.image.data ?? "");
+      if (!data || !/^[A-Za-z0-9+/]+=*$/.test(data)) throw new ReviewError("The picture did not arrive intact. Pick it again.");
+      bytes = Buffer.from(data, "base64");
+    } else {
+      const file = path.basename(String(input.file ?? ""));
+      mediaType = MEDIA_TYPES[path.extname(file).toLowerCase()];
+      if (!file || !mediaType) throw new ReviewError("That is not a picture this app made.");
+      const full = path.join(outputDir ?? "", file);
+      if (!fs.existsSync(full)) throw new ReviewError("That picture is no longer on this computer.", 404);
+      bytes = fs.readFileSync(full);
+    }
     if (bytes.length > MAX_IMAGE_BYTES) throw new ReviewError("That picture is larger than 5 MB, which is more than Claude accepts.");
     const prompt = String(input.prompt ?? "").trim();
     const negative = String(input.negative ?? "").trim();
@@ -89,14 +101,16 @@ async function loadSdk() {
   }
 }
 
-// `review(input, onText)` streams the review and resolves with how it
+// `review(input, onText, use)` streams the review and resolves with how it
 // ended. `sdk` and `client` can be handed in by tests.
 export function createReviewer({ apiKey = () => "", outputDir, sdk = null, client = null } = {}) {
   return {
-    async review(input, onText) {
+    // `use.apiKey` is a key for this one check (a visitor's own, on the
+    // hosted site); it is passed to Anthropic and kept nowhere.
+    async review(input, onText, use = {}) {
       const params = buildRequest(input, { outputDir });
       const Anthropic = sdk ?? (client ? null : await loadSdk());
-      const key = apiKey();
+      const key = use.apiKey || apiKey();
       const api = client ?? (key ? new Anthropic({ apiKey: key }) : new Anthropic());
       try {
         const stream = api.beta.messages.stream(params);

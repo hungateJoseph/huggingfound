@@ -192,7 +192,7 @@ details#web-found summary { cursor: pointer; margin-top: 8px; }
 
 .field { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .field span { font-weight: 600; font-size: 14px; }
-.field input, .chat-input textarea, .prompt-input textarea {
+.field input, .field textarea, .chat-input textarea, .prompt-input textarea {
   font: inherit; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; width: 100%; background: var(--surface); color: var(--ink);
 }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
@@ -300,3 +300,9 @@ body[data-hosted="1"] .local-only { display: none !important; }
 .review-foot { margin-top: 6px; }
 .review-foot button { font-size: 13px; padding: 4px 10px; margin-right: 8px; }
 #image-out .check { max-width: 100%; margin-top: 10px; }
+
+body[data-hosted="1"] button.hosted-only { display: inline-block; }
+#checker .field textarea { width: 100%; }
+#checker-run { margin-top: 14px; }
+#checker-run .check { max-width: 100%; }
+#checker-code-box { margin-top: 10px; }

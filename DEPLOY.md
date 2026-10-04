@@ -75,11 +75,29 @@ Cloudflare flattens the `CNAME` at the root, which is why no `A` record is
 needed. Turning the proxy on (orange cloud) would put Cloudflare's certificate
 in front and needs SSL set to Full (strict) first; it is not needed here.
 
+## The Claude check on the site
+
+The site has a "Check an answer" panel where a visitor pastes a model's answer
+or picks a picture and Claude reviews it. Who pays is decided per check:
+
+- **A visitor's own key.** They enter an Anthropic API key in the panel. It
+  stays in their browser tab, travels with the check, is handed to Anthropic
+  for that one request, and is never stored or logged on the server.
+- **The owner's dev code.** With `ANTHROPIC_API_KEY` and `REVIEW_DEV_CODE` set
+  under the service's **Environment** on Render, a check sent with the right
+  code uses the site's key. Without the code nobody can spend that key. Pick a
+  long random code; eight wrong guesses from one address lock that address out
+  for an hour.
+
+One address gets thirty checks an hour. Set both variables or neither; saving
+them redeploys the service.
+
 ## Checking it works
 
 - `https://huggingfound.com/api/state` answers JSON with `"hosted": true`.
 - `POST https://huggingfound.com/api/run` answers 403 with a message pointing at
   the app; so do settings, scan, chat, upload, remove and storage.
+- `POST https://huggingfound.com/api/review` with no key and no code answers 401.
 - A model's window has no Run buttons and no try box, only the steps with
   their commands and the box that says how to get the app.
 
