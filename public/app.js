@@ -61,6 +61,7 @@ function renderHostedCopy() {
   $("#browse .intro h1").textContent = "Open models, running on your computer.";
   $("#browse .intro .lead").textContent = `This catalogue is scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours, with what people say about each model summed up on its card. Fit and speed are shown for a typical 16 GB laptop. Chat models run through Ollama, images through stable-diffusion.cpp and speech through whisper.cpp, all on your own computer.`;
   $("#only-runnable-text").textContent = "Only models that run with Ollama, whisper.cpp or stable-diffusion.cpp";
+  $(".speed-note").textContent = "Speed lines are rough guesses for a typical laptop without a separate GPU, from the model's size. A GPU or Apple Silicon is several times faster, and the first run is slower while things load.";
 }
 
 function renderScanStatus() {
