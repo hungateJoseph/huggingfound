@@ -137,7 +137,7 @@ export function createReviewer({ apiKey = () => "", outputDir, sdk = null, clien
 // A sentence a person can act on for each way the request can fail.
 function explain(err, Anthropic) {
   if (err instanceof ReviewError || !Anthropic) return err;
-  if (err instanceof Anthropic.AuthenticationError) return new ReviewError("Anthropic refused the API key. Check it in Settings.", 401);
+  if (err instanceof Anthropic.AuthenticationError) return new ReviewError("Anthropic refused the API key. Check that it is entered correctly and still active.", 401);
   if (err instanceof Anthropic.PermissionDeniedError) return new ReviewError("This API key is not allowed to use that model.", 403);
   if (err instanceof Anthropic.RateLimitError) return new ReviewError("Anthropic is rate limiting this key right now. Try again in a minute.", 429);
   if (err instanceof Anthropic.BadRequestError) return new ReviewError(`Anthropic rejected the request: ${err.message}`, 400);

@@ -131,7 +131,7 @@ before(async () => {
     reviewer: {
       async review(input, onText) {
         asked.push(input);
-        if (input.answer === "boom") throw new ReviewError("Anthropic refused the API key. Check it in Settings.", 401);
+        if (input.answer === "boom") throw new ReviewError("Anthropic refused the API key. Check that it is entered correctly and still active.", 401);
         onText("This is ");
         if (input.answer === "late") throw new Error("socket closed");
         onText("correct.");
