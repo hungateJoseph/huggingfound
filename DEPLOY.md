@@ -1,4 +1,4 @@
-# Hosting HuggingFound on Render
+# Hosting HuggingFound on Render at huggingfound.com
 
 The repository is ready to host: `Dockerfile` builds a small image and
 `render.yaml` describes the service. What remains needs your accounts, so each
@@ -23,7 +23,7 @@ the image runs the app in hosted mode (`HUGGINGFOUND_HOSTED=1`):
   since the server has no Ollama.
 
 **Running cost:** about **$8.25 a month** (Render Starter $7 plus a 1 GB disk
-at $0.25), plus a domain if you want one. The free plan has no disk and sleeps
+at $0.25), plus about $10.50 a year for the domain. The free plan has no disk and sleeps
 between visits, which would mean a fresh scan on every wake.
 
 ---
@@ -43,31 +43,42 @@ All three are optional. Collect any you want before Phase 3.
 | `GITHUB_TOKEN` | Thirty GitHub issue searches a minute instead of ten | <https://github.com/settings/tokens> (no scopes needed) |
 | `YOUTUBE_API_KEY` | Video reviews on cards and in the model window | Google Cloud console, YouTube Data API v3 |
 
-## Phase 3: Create the Render service (you)
+## Phase 3: The Render service (done)
 
-1. Sign up at <https://render.com> and connect your GitHub account.
-2. **New, then Blueprint**, choose the `huggingfound` repository. Render reads
-   `render.yaml` and proposes one web service with a 1 GB disk at `/var/data`.
-3. It prompts for the three keys above; leave any of them blank.
-4. Click **Apply**. The first build takes about a minute. The first scan starts
-   a few seconds after the service is up and takes a few minutes; the gather of
-   what people say runs after it and takes ten to twenty minutes for the three
-   hundred or so models in a scan. Until the scan lands, the page says the
-   catalogue is being scanned and the curated picks already work.
+Created on 2026-10-04 from `render.yaml` as the Blueprint `huggingfound`: one
+web service named `huggingfound` on the Starter plan with a 1 GB disk at
+`/var/data`, answering at <https://huggingfound.onrender.com>. The three
+optional keys were left blank; they can be added under the service's
+**Environment** at any time, and saving them redeploys.
 
-Render gives the service an address such as `https://huggingfound.onrender.com`.
+To rebuild it from nothing: on <https://render.com>, **New, then Blueprint**,
+choose the `huggingfound` repository, name the Blueprint, leave or fill the
+keys, and deploy. The first build takes about a minute, the first scan starts
+a few seconds after the service is up, and what people say is gathered right
+after it.
 
-## Phase 4: A domain (you, optional)
+## Phase 4: The domain (done)
 
-1. In the service's **Settings, Custom Domains**, add your domain (and `www`).
-2. Render shows the DNS records to add at your registrar: a CNAME for `www`
-   and an A or ALIAS record for the bare domain. Add them, wait for the check
-   to pass, and Render issues the certificate.
+`huggingfound.com` is registered at Cloudflare (renews each October) and uses
+Cloudflare's nameservers. Both names are added under the service's
+**Settings, Custom Domains**, and `www` redirects to the bare domain.
+
+The DNS records in Cloudflare, both **DNS only** (grey cloud) so that Render
+issues and renews the certificates:
+
+| Type | Name | Target |
+| --- | --- | --- |
+| `CNAME` | `@` | `huggingfound.onrender.com` |
+| `CNAME` | `www` | `huggingfound.onrender.com` |
+
+Cloudflare flattens the `CNAME` at the root, which is why no `A` record is
+needed. Turning the proxy on (orange cloud) would put Cloudflare's certificate
+in front and needs SSL set to Full (strict) first; it is not needed here.
 
 ## Checking it works
 
-- `https://<your address>/api/state` answers JSON with `"hosted": true`.
-- `POST https://<your address>/api/run` answers 403 with a message pointing at
+- `https://huggingfound.com/api/state` answers JSON with `"hosted": true`.
+- `POST https://huggingfound.com/api/run` answers 403 with a message pointing at
   the app; so do settings, scan, chat, upload, remove and storage.
 - A model's window has no Run buttons and no try box, only the steps with
   their commands and the box that says how to get the app.
