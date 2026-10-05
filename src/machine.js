@@ -41,6 +41,13 @@ export function hostedMachine() {
   return { platform: "any", arch: "any", os: "a typical laptop", cpu: "", cores: 8, ramGb: 16, gpu: "no separate GPU", appleSilicon: false, comfortableGb: 9, hosted: true };
 }
 
+// The machine chat models run on when a chat server is set: a GPU box
+// whose memory the user told us, since Ollama does not report hardware.
+export function chatServerMachine(url, gpuGb) {
+  const gb = Number(gpuGb) > 0 ? Number(gpuGb) : 24;
+  return { platform: "linux", arch: "x64", os: "the chat server", cpu: "", cores: 8, ramGb: gb, gpu: `NVIDIA GPU, ${gb} GB (chat server)`, appleSilicon: false, comfortableGb: Math.max(1, Math.floor(gb * 0.9)), remote: url, gpuGb: gb };
+}
+
 export function platformName(platform) {
   return { darwin: "macOS", win32: "Windows", linux: "Linux" }[platform] ?? platform;
 }
@@ -48,6 +55,11 @@ export function platformName(platform) {
 // How a model of `sizeGb` fits on a machine with `comfortableGb` to spare.
 export function fitFor(sizeGb, machine) {
   if (!sizeGb) return { level: "unknown", text: "Size unknown until scanned" };
+  if (machine.remote) {
+    if (sizeGb <= machine.comfortableGb * 0.8) return { level: "good", text: `Fits the server's ${machine.gpuGb} GB GPU (${sizeGb.toFixed(1)} GB)` };
+    if (sizeGb <= machine.comfortableGb) return { level: "tight", text: `A tight fit on the server's ${machine.gpuGb} GB GPU (${sizeGb.toFixed(1)} GB)` };
+    return { level: "no", text: `Too big for the server's ${machine.gpuGb} GB GPU (${sizeGb.toFixed(1)} GB)` };
+  }
   if (machine.hosted) {
     if (sizeGb <= machine.comfortableGb * 0.6) return { level: "good", text: `Runs on a 16 GB laptop (${sizeGb.toFixed(1)} GB)` };
     if (sizeGb <= machine.comfortableGb) return { level: "tight", text: `Needs 16 GB of memory with other apps closed (${sizeGb.toFixed(1)} GB)` };

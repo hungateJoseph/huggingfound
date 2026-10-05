@@ -57,6 +57,27 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
     const viaPull = !model.gated && quant;
     const localName = model.name.toLowerCase().replace(/-gguf$/i, "").replace(/[^a-z0-9.-]/g, "-");
     const ollamaName = viaPull ? `hf.co/${model.id}:${quant}` : localName;
+    // On a chat server the only step is the download, done by the server.
+    if (detected.ollama.remote) {
+      if (!viaPull) {
+        return {
+          runnable: false,
+          reason: `${model.name} cannot be fetched by the chat server directly${model.gated ? " because it is gated" : ""}. Models that Ollama can pull straight from Hugging Face work there; this one would have to be downloaded on this computer. Clear the chat server in Settings to run it here.`,
+          steps: [],
+          link: model.url,
+        };
+      }
+      const done = detected.ollama.models.some((m) => m.toLowerCase() === ollamaName.toLowerCase());
+      steps.push({
+        kind: "pull-model",
+        args: { name: ollamaName },
+        title: `Download the model on the chat server (${file.gb ? file.gb.toFixed(1) + " GB" : "size unknown"})`,
+        text: `The server fetches the ${quant} version of ${model.name} straight from Hugging Face; nothing is downloaded to this computer. ${fit.text}.${detected.ollama.running ? "" : " The server is not answering right now; check the address or the tunnel in Settings."}`,
+        done,
+        command: `ollama pull ${ollamaName}`,
+      });
+      return { runnable: true, runner: runner.id, file, fit, speed, measured: measuredText(timings[ollamaName] ?? null), steps, remote: detected.ollama.remote, tryWith: { kind: "chat", model: ollamaName }, remove: [{ kind: "ollama", name: ollamaName }] };
+    }
     steps.push({
       kind: "install-ollama",
       title: "Install Ollama",

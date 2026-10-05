@@ -246,6 +246,21 @@ npm start</code>
         <button class="ghost" id="clear-token">Remove token</button>
       </div>
       <label class="field">
+        <span>Chat server (optional)</span>
+        <input type="url" id="chat-server" autocomplete="off" placeholder="http://127.0.0.1:11435">
+        <small class="muted">For models too big for this computer: the address of Ollama on another machine, such as a rented GPU box, reached through an SSH tunnel or a private network. When set, chat models are downloaded and run there, and nothing large comes to this computer. <a href="https://github.com/hungateJoseph/huggingfound/blob/main/REMOTE.md" target="_blank" rel="noopener">How to set one up</a>. Leave empty to run chat models here.</small>
+      </label>
+      <label class="field">
+        <span>GPU memory on that server, in GB</span>
+        <input type="number" id="chat-server-gb" min="1" max="2000" step="1" autocomplete="off" placeholder="24">
+        <small class="muted">Ollama does not report hardware, so the fit and speed lines for chat models go by this number.</small>
+      </label>
+      <p class="muted small" id="chat-server-status"></p>
+      <div class="actions">
+        <button class="primary" id="save-chat-server">Save</button>
+        <button class="ghost" id="clear-chat-server">Use this computer</button>
+      </div>
+      <label class="field">
         <span>Image server (optional)</span>
         <input type="url" id="image-server" autocomplete="off" placeholder="http://192.168.1.20:1234">
         <small class="muted">The address of a stable-diffusion.cpp server (sd-server) on another computer, a rented GPU box or this one. When set, pictures are made there with the model it has loaded, in seconds on a real GPU, and nothing is downloaded here. Leave empty to generate on this computer.</small>

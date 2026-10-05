@@ -1,4 +1,4 @@
-import { OLLAMA_URL } from "./runners.js";
+import { ollamaUrl } from "./runners.js";
 
 // Turns what people wrote about a model into a couple of short lines a
 // person can scan: the strengths users mention, then the complaints, then
@@ -85,7 +85,7 @@ export function extractiveSummary(entry, web = null) {
 // lists, preferring an instruct model.
 export async function summarizerModel(fetchImpl = fetch) {
   try {
-    const res = await fetchImpl(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(1500) });
+    const res = await fetchImpl(`${ollamaUrl()}/api/tags`, { signal: AbortSignal.timeout(1500) });
     if (!res.ok) return null;
     const names = ((await res.json()).models ?? []).map((m) => m.name);
     return names.find((n) => /instruct|chat|it\b/i.test(n)) ?? names[0] ?? null;
@@ -103,7 +103,7 @@ export async function modelSummary(model, entry, web, fetchImpl = fetch) {
   const { users, author } = collectVoices(entry, web);
   const userText = users.map((u) => `- ${String(u.text).replace(/\s+/g, " ").slice(0, 300)}`).slice(0, 40).join("\n");
   const content = `Model: ${entry.name ?? ""}\n\nWhat the author's card says:\n${String(author).slice(0, 900) || "(nothing)"}\n\nWhat users wrote (titles, comments, posts):\n${userText || "(no user comments)"}`;
-  const res = await fetchImpl(`${OLLAMA_URL}/api/chat`, {
+  const res = await fetchImpl(`${ollamaUrl()}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model, stream: false, options: { temperature: 0.2, num_predict: 220 }, messages: [{ role: "system", content: PROMPT }, { role: "user", content }] }),

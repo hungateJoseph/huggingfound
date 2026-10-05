@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 import { CATEGORIES } from "./categorize.js";
 import { mask, readEnv, writeEnv } from "./envfile.js";
 import { createHub } from "./hf.js";
-import { describeMachine, hostedMachine } from "./machine.js";
+import { chatServerMachine, describeMachine, hostedMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OLLAMA_URL, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeFile, removeFolder, removeOllamaModel, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
+import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullOnChatServer, setChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
@@ -31,7 +31,7 @@ const HOSTED_ENV_KEYS = ["HF_TOKEN", "GITHUB_TOKEN", "YOUTUBE_API_KEY", "REDDIT_
 // What a public copy of the site must not do: run programs, download models,
 // write settings or touch the disk it runs on. Those belong on the visitor's
 // own computer, where HuggingFound does them.
-const NOT_HOSTED = new Set(["/api/settings", "/api/scan", "/api/voices/gather", "/api/storage", "/api/remove", "/api/image-server", "/api/unload", "/api/run", "/api/chat", "/api/upload", "/api/result"]);
+const NOT_HOSTED = new Set(["/api/settings", "/api/scan", "/api/voices/gather", "/api/storage", "/api/remove", "/api/image-server", "/api/unload", "/api/run", "/api/chat", "/api/upload", "/api/result", "/api/chat-server"]);
 
 export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30 } = {}) {
   // A hosted copy does not know the visitor's computer; it describes a
@@ -44,6 +44,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     for (const key of HOSTED_ENV_KEYS) if (process.env[key]) saved[key] = process.env[key];
     return saved;
   };
+  // Chat models run through Ollama here, or on the chat server from
+  // Settings; fit and speed for them follow whichever machine that is.
+  const chatServer = () => (hosted ? "" : env().OLLAMA_SERVER || "");
+  const machineFor = (runnerId) => (runnerId === "ollama" && chatServer() ? chatServerMachine(chatServer(), env().OLLAMA_SERVER_GB) : machine);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
   const hub_ = hub;
   const civitai = createCivitai({ fetchImpl, base: civitaiBase });
@@ -201,6 +205,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   }
 
   async function api(req, res, url) {
+    setChatServer(chatServer());
     if (req.method === "GET" && url.pathname === "/api/state") {
       const saved = env();
       return send(res, 200, {
@@ -211,6 +216,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         runners: hosted ? noRunners() : await detect(fetchImpl),
         token: saved.HF_TOKEN ? mask(saved.HF_TOKEN) : "",
         imageServer: saved.IMAGE_SERVER || "",
+        chatServer: chatServer() ? { url: chatServer(), gpuGb: chatServerMachine(chatServer(), saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(chatServer(), saved.OLLAMA_SERVER_GB).comfortableGb } : null,
         redditApp: saved.REDDIT_CLIENT_ID ? mask(saved.REDDIT_CLIENT_ID) : "",
         githubToken: saved.GITHUB_TOKEN ? mask(saved.GITHUB_TOKEN) : "",
         youtubeKey: saved.YOUTUBE_API_KEY ? mask(saved.YOUTUBE_API_KEY) : "",
@@ -222,7 +228,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         scan: readScan(scanFile, { meta: true }),
         voices: voicesMeta(),
         summarizer: writtenSummaries ? await summarizerModel(fetchImpl) : null,
-        picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })),
+        picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner) }).text })),
         speedTier: speedTier(machine),
       });
     }
@@ -246,6 +252,15 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         const value = body.REDDIT_CLIENT_ID.trim();
         if (value && !/^[\w-]{10,40}$/.test(value)) return send(res, 400, { error: "That does not look like a Reddit app id" });
         updates.REDDIT_CLIENT_ID = value;
+      }
+      if ("OLLAMA_SERVER" in body) {
+        if (typeof body.OLLAMA_SERVER !== "string") return send(res, 400, { error: "OLLAMA_SERVER must be a string" });
+        const value = body.OLLAMA_SERVER.trim().replace(/\/+$/, "");
+        if (value && !/^https?:\/\/[\w.\-:[\]]+(\/[\w./-]*)?$/.test(value)) return send(res, 400, { error: "The chat server must be an http or https address" });
+        updates.OLLAMA_SERVER = value;
+        const gb = Number(body.OLLAMA_SERVER_GB);
+        if (value && !(gb >= 1 && gb <= 2000)) return send(res, 400, { error: "Say how much GPU memory the server has, in GB" });
+        updates.OLLAMA_SERVER_GB = value ? String(Math.round(gb)) : "";
       }
       if ("IMAGE_SERVER" in body) {
         if (typeof body.IMAGE_SERVER !== "string") return send(res, 400, { error: "IMAGE_SERVER must be a string" });
@@ -284,7 +299,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       ]);
       hub = hubResult;
       const hideRefusing = url.searchParams.get("showRefusing") !== "1";
-      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine }).text })), voices: index, hideRefusing });
+      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner) }).text })), voices: index, hideRefusing });
       return send(res, 200, { q, ...ranked, models: ranked.models.slice(0, 60), hideRefusing, hubError, gathered: Object.keys(index).length, scanned: scan.models.length, took: Date.now() - started, ...asked });
     }
     if (req.method === "GET" && url.pathname === "/api/search") {
@@ -376,7 +391,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (pick && !model.gatedBlocked) model.runner = { id: pick.runner, name: RUNNER_NAMES[pick.runner], easy: true };
       const plan = model.gatedBlocked
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
-        : buildPlan({ model, files: model.files, machine, detected: hosted ? noRunners() : await detect(fetchImpl), hasToken: !hosted && Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer() });
+        : buildPlan({ model, files: model.files, machine: machineFor(model.runner?.id), detected: hosted ? noRunners() : await detect(fetchImpl), hasToken: !hosted && Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer() });
       return send(res, 200, { model, plan });
     }
     if (req.method === "GET" && url.pathname === "/api/storage") {
@@ -394,6 +409,20 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         return send(res, 400, { error: err.message });
       }
       return send(res, 200, await storage(fetchImpl));
+    }
+    // Whether the chat server answers, and what it holds.
+    if (req.method === "GET" && url.pathname === "/api/chat-server") {
+      const configured = chatServer();
+      if (!configured) return send(res, 200, { configured: "", ok: false });
+      try {
+        const [version, tags] = await Promise.all([
+          fetchImpl(`${configured}/api/version`, { signal: AbortSignal.timeout(4000) }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+          fetchImpl(`${configured}/api/tags`, { signal: AbortSignal.timeout(4000) }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+        ]);
+        return send(res, 200, { configured, ok: true, version: version.version ?? "", models: (tags.models ?? []).length });
+      } catch (err) {
+        return send(res, 200, { configured, ok: false, error: err.name === "TimeoutError" ? "no answer" : err.message });
+      }
     }
     if (req.method === "GET" && url.pathname === "/api/image-server") {
       const configured = env().IMAGE_SERVER;
@@ -418,6 +447,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           if (remote) args.remote = remote;
           else delete args.remote;
         }
+        // With a chat server, Ollama steps happen there: the download is asked of the server, and nothing is installed here.
+        if (chatServer() && ["install-ollama", "start-ollama", "create-model"].includes(body.kind)) return send(res, 400, { error: "Chat models run on the chat server from Settings; this step is for running them on this computer." });
+        if (chatServer() && body.kind === "pull-model") return send(res, 200, { id: pullOnChatServer(String(args.name ?? ""), fetchImpl).id });
         const run = startRun(String(body.kind ?? ""), args, machine, { token: env().HF_TOKEN, fetchImpl, hubBase });
         return send(res, 200, { id: run.id });
       } catch (err) {
@@ -431,7 +463,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
     if (req.method === "POST" && url.pathname === "/api/chat") {
       const body = await json(req);
-      const upstream = await fetchImpl(`${OLLAMA_URL}/api/chat`, {
+      const upstream = await fetchImpl(`${ollamaUrl()}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: String(body.model ?? ""), messages: Array.isArray(body.messages) ? body.messages.slice(-40) : [], stream: true }),
@@ -644,7 +676,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   function withSpeed(m) {
     if (!m.runner?.easy) return { ...m, speed: "" };
     const sizeGb = guessSizeGb({ id: m.id, runnerId: m.runner.id });
-    return { ...m, speed: sizeGb ? estimate({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine }).text : "" };
+    return { ...m, speed: sizeGb ? estimate({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine: machineFor(m.runner.id) }).text : "" };
   }
 
   // whisper.cpp is happiest with 16 kHz wav. Other formats go through

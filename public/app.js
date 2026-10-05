@@ -46,6 +46,10 @@ async function load() {
   renderVoicesStatus();
   $("#image-server").value = s.imageServer;
   renderImageServerStatus();
+  state.chatServer = s.chatServer;
+  $("#chat-server").value = s.chatServer?.url ?? "";
+  $("#chat-server-gb").value = s.chatServer?.gpuGb ?? "";
+  renderChatServerStatus();
   renderRunners();
   if (s.scan?.at) {
     const saved = await api.get("/api/models");
@@ -370,9 +374,16 @@ function renderWebFound(web) {
   }
 }
 
-function fit(gb) {
-  const room = state.machine.comfortableGb;
+function fit(gb, runner) {
   if (!gb) return { level: "unknown", text: "Size after scan" };
+  // Chat models are judged against the chat server's GPU when one is set.
+  if (runner === "ollama" && state.chatServer) {
+    const room = state.chatServer.comfortableGb;
+    if (gb <= room * 0.8) return { level: "good", text: `Fits the server's GPU, ${gb.toFixed(1)} GB` };
+    if (gb <= room) return { level: "tight", text: `Tight on the server's GPU, ${gb.toFixed(1)} GB` };
+    return { level: "no", text: `Too big for the server, ${gb.toFixed(1)} GB` };
+  }
+  const room = state.machine.comfortableGb;
   if (state.hosted) {
     if (gb <= room * 0.6) return { level: "good", text: `Runs on a 16 GB laptop, ${gb.toFixed(1)} GB` };
     if (gb <= room) return { level: "tight", text: `Needs 16 GB with apps closed, ${gb.toFixed(1)} GB` };
@@ -384,7 +395,7 @@ function fit(gb) {
 }
 
 function pickCard(p) {
-  const f = fit(p.gb);
+  const f = fit(p.gb, p.runner);
   const runner = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[p.runner];
   return `<div class="model" role="button" tabindex="0" data-id="${esc(p.id)}">
     <div class="name">${esc(p.id.split("/").pop())}</div>
@@ -503,12 +514,13 @@ function renderModel(model, plan) {
     return;
   }
 
+  if (plan.remote && plan.runner === "ollama") parts.push(`<div class="notice info">This model is downloaded and run on the chat server at ${esc(plan.remote)}; nothing large comes to this computer. Change this in Settings.</div>`);
   parts.push(`<div class="spec">
     <div><b>File</b>${plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : esc(plan.file.name)}</div>
     <div><b>Size</b>${plan.file.gb ? plan.file.gb.toFixed(2) + " GB" : "unknown"}</div>
-    <div><b>${state.hosted ? "Memory" : "On this computer"}</b><span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span></div>
+    <div><b>${state.hosted ? "Memory" : plan.remote && plan.runner === "ollama" ? "On the chat server" : "On this computer"}</b><span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span></div>
     <div><b>Runs with</b>${{ ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[plan.runner]}</div>
-    <div><b>${state.hosted ? "Speed" : "Speed here"}</b>${esc(plan.speed?.text ?? "")}${plan.measured ? `<span class="measured">${esc(plan.measured)}</span>` : ""}</div>
+    <div><b>${state.hosted ? "Speed" : plan.remote && plan.runner === "ollama" ? "Speed there" : "Speed here"}</b>${esc(plan.speed?.text ?? "")}${plan.measured ? `<span class="measured">${esc(plan.measured)}</span>` : ""}</div>
   </div>
   <p class="muted small">${state.hosted ? "Speed is a rough guess from the file size for a typical laptop without a separate GPU; a GPU or Apple Silicon is several times faster." : `Speed is a rough guess from the file size and this computer's hardware. The first run is slower while the model loads${plan.runner === "sd" ? " and the graphics shaders compile" : ""}; after a real run the measured time shows here.`}</p>`);
   if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "This file is larger than a typical laptop has to spare; it wants 32 GB of memory or a big GPU." : "This file is larger than the memory this computer has to spare. It may still download, but it will be slow or fail to load. A smaller model is a better first try."}</div>`);
@@ -728,7 +740,7 @@ async function renderStorage(targets = ["local", "settings"]) {
   };
   const rows = [
     ...st.files.map((f) => ({ what: `${f.repo}/${f.file}`, gb: f.gb, open: f.repo, body: { kind: "file", repo: f.repo, file: f.file } })),
-    ...st.ollama.map((m) => ({ what: `${m.name} (Ollama)`, gb: m.gb, open: repoOfOllama(m.name), body: { kind: "ollama", name: m.name } })),
+    ...st.ollama.map((m) => ({ what: `${m.name} (${st.ollamaRemote ? "on the chat server" : "Ollama"})`, gb: m.gb, open: repoOfOllama(m.name), body: { kind: "ollama", name: m.name } })),
   ];
   if (st.outputs > 0.001) rows.push({ what: "Generated pictures, transcripts and uploaded recordings", gb: st.outputs, body: { kind: "outputs" }, label: "Clear" });
   const summary = rows.length ? `${st.totalGb.toFixed(1)} GB in ${st.files.length + st.ollama.length} model${st.files.length + st.ollama.length === 1 ? "" : "s"}. Click a model to use it. Removing one keeps the runner; the model can be downloaded again later.` : "No models downloaded yet.";
@@ -787,7 +799,8 @@ function renderDiskLine() {
     return;
   }
   const free = st?.disk?.freeGb != null ? ` ${st.disk.freeGb.toFixed(0)} GB free on disk.` : "";
-  $("#machine-line").textContent = `${m.os}, ${m.ramGb} GB memory, ${m.gpu}. Room for models up to about ${m.comfortableGb} GB.${free}`;
+  const server = state.chatServer ? ` Chat models run on a server with a ${state.chatServer.gpuGb} GB GPU.` : "";
+  $("#machine-line").textContent = `${m.os}, ${m.ramGb} GB memory, ${m.gpu}. Room for models up to about ${m.comfortableGb} GB.${free}${server}`;
 }
 
 $("#scan-local").addEventListener("click", async () => {
@@ -1296,7 +1309,7 @@ function renderTranscribe(box, t) {
 function renderRunners() {
   const r = state.runners;
   const rows = [
-    ["Ollama", r.ollama.installed ? (r.ollama.running ? `running, ${r.ollama.models.length} model${r.ollama.models.length === 1 ? "" : "s"}` : "installed, not running") : "not installed"],
+    [r.ollama.remote ? "Chat server" : "Ollama", r.ollama.remote ? (r.ollama.running ? `connected, ${r.ollama.models.length} model${r.ollama.models.length === 1 ? "" : "s"}` : "not answering") : r.ollama.installed ? (r.ollama.running ? `running, ${r.ollama.models.length} model${r.ollama.models.length === 1 ? "" : "s"}` : "installed, not running") : "not installed"],
     ["whisper.cpp", r.whisper.installed ? "installed" : "not installed"],
     ["stable-diffusion.cpp", r.sd.installed ? (r.sd.server ? (r.sd.loaded.ready ? `installed, ${r.sd.loaded.file.split("/").pop()} loaded in memory` : "installed, keeps models loaded between pictures") : "installed (one picture at a time; the server build is missing)") : "not installed"],
     ["ffmpeg", r.ffmpeg ? "installed" : "not installed (only needed for non-WAV recordings)"],
@@ -1336,6 +1349,40 @@ $("#save-token").addEventListener("click", async () => {
   $("#settings").hidden = true;
   notice("Token saved. Gated models you have accepted on Hugging Face can be downloaded now.", "ok");
 });
+// Chat models can live on another machine; this says whether it answers.
+async function renderChatServerStatus() {
+  const el = $("#chat-server-status");
+  if (!state.chatServer) {
+    el.textContent = "Chat models run on this computer.";
+    return;
+  }
+  el.textContent = `Checking ${state.chatServer.url}`;
+  try {
+    const r = await api.get("/api/chat-server");
+    el.textContent = r.ok
+      ? `Connected to Ollama ${r.version}. It holds ${r.models} model${r.models === 1 ? "" : "s"}; chat models are downloaded and run there.`
+      : `Saved, but the server did not answer (${r.error}). Check the address, and that the tunnel is open if you use one.`;
+  } catch (err) {
+    el.textContent = `Could not check the server: ${err.message}`;
+  }
+}
+
+$("#save-chat-server").addEventListener("click", async () => {
+  try {
+    await api.post("/api/settings", { OLLAMA_SERVER: $("#chat-server").value.trim(), OLLAMA_SERVER_GB: $("#chat-server-gb").value.trim() });
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  await load();
+  if (state.open) openModel(state.open);
+});
+$("#clear-chat-server").addEventListener("click", async () => {
+  await api.post("/api/settings", { OLLAMA_SERVER: "" });
+  await load();
+  if (state.open) openModel(state.open);
+});
+
 async function renderImageServerStatus() {
   const el = $("#image-server-status");
   if (!state.imageServer) {
