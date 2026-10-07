@@ -115,7 +115,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   function summarize(pod, ready) {
     const cost = typeof pod.cost === "number" ? pod.cost : null;
     const uptime = pod.runtime?.uptime ?? (pod.status === "RUNNING" && pod.startedAt ? Math.max(0, (now() - new Date(pod.startedAt).getTime()) / 1000) : 0);
-    const gb = Number(env().RUNPOD_POD_GB) || pod.gpu?.memory || null;
+    // The pod's own gpu.memory is the machine's system RAM, not the card's;
+    // the card's memory was saved from the catalogue when it was rented.
+    const gb = Number(env().RUNPOD_POD_GB) || null;
     return {
       rented: true,
       id: pod.id,

@@ -23,7 +23,7 @@ done. You pay RunPod; HuggingFound charges nothing and never sees your card.
 
 1. Make a RunPod account and add some credit (ten dollars goes a long way;
    see the prices below).
-2. In RunPod, under **Settings, API Keys**, create a key with read and
+2. In RunPod, on the **Credentials** page (Account, Credentials, API Keys), create a key with read and
    write access. It has to make and stop machines.
 3. In HuggingFound's **Settings**, under **Rent a GPU by the hour**, paste
    the key and save. The sizes on offer appear with the price an hour of the

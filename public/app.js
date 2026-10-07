@@ -617,7 +617,7 @@ function rentAskHtml(choice, plan) {
         <div class="actions"><button class="primary" id="ask-save">Save and pick a size</button></div>
       </div>
       <div id="ask-no-box" hidden>
-        <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then under Settings, API Keys create a key with read and write access. Come back and click "Enter a key as a guest". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
+        <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. Come back and click "Enter a key as a guest". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
       </div>
     </div>`;
   }
@@ -634,7 +634,7 @@ function rentAskHtml(choice, plan) {
       <div class="actions"><button class="primary" id="ask-save">Save and pick a size</button></div>
     </div>
     <div id="ask-no-box" hidden>
-      <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then under Settings, API Keys create a key with read and write access. Come back and click "Yes, I have one". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
+      <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. Come back and click "Yes, I have one". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
     </div>
   </div>`;
 }
