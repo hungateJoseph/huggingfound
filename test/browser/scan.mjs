@@ -661,21 +661,45 @@ await step("hosted: a visitor who is not signed in is offered sign-in before a G
   await visitor.goto(hostedBase);
   await visitor.waitForSelector("#home-hint");
   assert.equal(await visitor.locator("#open-settings").isVisible(), false);
-  assert.equal(await visitor.locator("#sign-in").isVisible(), true);
+  assert.equal(await visitor.locator("#sign-in").isVisible(), false, "no Sign in button until Google is set up; guests need none");
   assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
-  await visitor.click("#sign-in");
-  await visitor.waitForSelector("#signin:not([hidden])");
-  assert.match(await visitor.locator("#google-button").innerText(), /not set up/, "no Google client id in this test");
-  await visitor.keyboard.press("Escape");
   await visitor.click("#nav-browse");
   await visitor.click(".tab[data-tab=chat]");
   await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector(".rent-ask");
-  assert.match(await visitor.locator(".rent-ask").innerText(), /needs an account/);
+  assert.match(await visitor.locator(".rent-ask").innerText(), /takes a RunPod API key[\s\S]*kept for 12 hours after your last use/);
+  assert.equal(await visitor.locator("#ask-signin").count(), 0, "no Google button when Google is not set up");
   assert.equal(await visitor.locator("#steps .step .go").count(), 0, "no Run buttons for steps on a visitor's own computer");
   await visitor.keyboard.press("Escape");
+});
+
+await step("hosted: a guest enters a key in the model window, rents, and sees when the keys expire", async () => {
+  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await visitor.waitForSelector(".where");
+  await visitor.click('.where-opt[data-where="rented"]');
+  await visitor.waitForSelector("#ask-yes");
+  await visitor.click("#ask-yes");
+  await visitor.fill("#ask-key", RUNPOD_KEY);
+  await visitor.click("#ask-save");
+  await visitor.waitForSelector("#rent-panel .tier");
+  assert.equal(await visitor.locator('#rent-panel input[name="rent-tier"]:checked').inputValue(), "48");
+  assert.match(await visitor.locator("#account").innerText(), /Guest, keys kept until/);
+  assert.match(await visitor.locator("#account-line").innerText(), /You are a guest[\s\S]*12 hours after your last use/);
+  assert.equal(await visitor.locator("#delete-account").innerText(), "Forget my keys now");
+  assert.equal(await visitor.locator("#open-settings").isVisible(), true, "a guest reaches Settings for the rented machine");
+  const guests = fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g"));
+  assert.equal(guests.length, 1);
+  await visitor.click("#close-settings");
+  await visitor.keyboard.press("Escape");
+  // Forgetting the keys ends the guest.
+  acceptDialogs = true;
+  await visitor.click("#account #sign-out");
+  await visitor.waitForFunction(() => document.querySelector("#account").hidden);
+  acceptDialogs = false;
+  assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 0);
+  assert.equal(await visitor.locator("#open-settings").isVisible(), false);
 });
 
 await step("hosted: signed in, Settings hold only the account's keys, and the privacy page answers", async () => {
@@ -685,6 +709,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
   await visitor.waitForSelector("#account:not([hidden])");
   assert.match(await visitor.locator("#account").innerText(), /Ana/);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false);
+  assert.equal(await visitor.locator("#delete-account").innerText(), "Delete my account");
   await visitor.click("#open-settings");
   await visitor.waitForSelector("#settings:not([hidden])");
   assert.equal(await visitor.locator("#token").isVisible(), false, "no Hugging Face token on the site");
@@ -762,7 +787,7 @@ await step("hosted: deleting the account deletes the machine and signs out", asy
   await visitor.waitForSelector("#delete-account");
   acceptDialogs = true;
   await visitor.click("#delete-account");
-  await visitor.waitForSelector("#sign-in:not([hidden])");
+  await visitor.waitForFunction(() => document.querySelector("#account").hidden);
   acceptDialogs = false;
   assert.equal(runpod.state.pods[podId].status, "TERMINATED");
   assert.equal(await visitor.locator("#rent-bar").isVisible(), false);

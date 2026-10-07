@@ -60,7 +60,7 @@ test("nothing that runs, downloads, chats or changes settings is reachable", asy
   for (const p of ["/api/run", "/api/settings", "/api/remove", "/api/runs/1/cancel", "/api/rent", "/api/rent/stop"]) {
     const res = await post(p, {});
     assert.equal(res.status, 401, p);
-    assert.match((await res.json()).error, /Sign in|not set up/);
+    assert.match((await res.json()).error, /Enter a RunPod key.*or sign in/);
   }
   for (const p of ["/api/storage", "/api/result?file=x.png", "/api/image-server"]) {
     assert.equal((await get(p)).status, 403, p);

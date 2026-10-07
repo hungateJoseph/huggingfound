@@ -608,7 +608,18 @@ function rentAskHtml(choice, plan) {
   const back = `<button class="ghost" data-where="local">Run it on my computer instead</button>`;
   const size = choice.tier ? `This ${plan.file?.gb ? `${plan.file.gb.toFixed(1)} GB ` : ""}file wants a ${choice.tier} GB card.` : "This file is bigger than any card on offer.";
   if (state.hosted && !state.user) {
-    return `<div class="rent-ask"><p><b>Renting a GPU needs an account</b>, so that the machine and your key are yours alone. ${esc(size)}</p><div class="actions"><button class="primary" id="ask-signin">Sign in with Google</button>${back}</div></div>`;
+    const hours = state.auth?.guestHours ?? 12;
+    return `<div class="rent-ask">
+      <p><b>Renting a GPU takes a RunPod API key.</b> ${esc(size)} RunPod rents GPUs by the hour; with your key this site starts a machine for you, runs the model on it and stops it when you are done. You can enter the key as a guest: it and the machine are kept for ${hours} hours after your last use, then the machine is stopped and the key forgotten.${state.auth?.google ? " Sign in with Google to keep them for good." : ""}</p>
+      <div class="actions"><button class="primary" id="ask-yes">Enter a key as a guest</button>${state.auth?.google ? `<button class="ghost" id="ask-signin">Sign in with Google</button>` : ""}<button class="ghost" id="ask-no">I have no key yet</button>${back}</div>
+      <div id="ask-yes-box" hidden>
+        <label class="field"><span>RunPod API key</span><input type="password" id="ask-key" autocomplete="off" placeholder="rpa_..."><small class="muted">Kept encrypted on this site for ${hours} hours after your last use and sent only to RunPod. Nothing you say to the model passes through this site.</small></label>
+        <div class="actions"><button class="primary" id="ask-save">Save and pick a size</button></div>
+      </div>
+      <div id="ask-no-box" hidden>
+        <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then under Settings, API Keys create a key with read and write access. Come back and click "Enter a key as a guest". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
+      </div>
+    </div>`;
   }
   if (choice.hasRunpodKey) {
     const offer = (state.rentOptions ?? []).find((t) => t.gb === choice.tier);
@@ -648,8 +659,9 @@ function wireRentAsk(body, model, choice) {
   body.querySelector("#ask-save")?.addEventListener("click", async () => {
     const value = body.querySelector("#ask-key").value.trim();
     if (!value) return;
+    const asGuest = state.hosted && !state.user;
     try {
-      await api.post("/api/settings", { RUNPOD_API_KEY: value });
+      await api.post(asGuest ? "/api/guest" : "/api/settings", { RUNPOD_API_KEY: value });
     } catch (err) {
       alert(err.message);
       return;
@@ -661,7 +673,7 @@ function wireRentAsk(body, model, choice) {
     $("#settings").hidden = false;
     renderRental();
     $("#rent").scrollIntoView({ block: "start" });
-    notice("The RunPod key is saved. Pick a size and the machine starts.", "ok");
+    notice(asGuest ? `The key is saved for ${state.auth?.guestHours ?? 12} hours after your last use. Pick a size and the machine starts.` : "The RunPod key is saved. Pick a size and the machine starts.", "ok");
   });
 }
 
@@ -1794,18 +1806,29 @@ function renderAccount() {
     $("#open-settings").hidden = false;
     return;
   }
-  $("#sign-in").hidden = Boolean(user) || !state.auth?.ready;
+  // The Sign in button shows whenever Google is set up and nobody is signed
+  // in for good; a guest sees it too, to keep their keys.
+  $("#sign-in").hidden = (user && !user.guest) || !state.auth?.ready;
   $("#open-settings").hidden = !user;
   const box = $("#account");
   box.hidden = !user;
-  $("#account-line").textContent = user ? `Signed in as ${user.email}.` : "";
+  const until = user?.expiresAt ? new Date(user.expiresAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
+  $("#account-line").textContent = user ? (user.guest ? `You are a guest. Your keys and the rented machine are kept until ${until}, ${state.auth?.guestHours ?? 12} hours after your last use; then the machine is stopped and the keys forgotten.${state.auth?.google ? " Sign in with Google to keep them." : ""}` : `Signed in as ${user.email}.`) : "";
+  $("#delete-account").textContent = user?.guest ? "Forget my keys now" : "Delete my account";
   if (!user) {
     box.innerHTML = "";
     return;
   }
-  box.innerHTML = `${user.picture ? `<img class="avatar" src="${esc(user.picture)}" alt="" referrerpolicy="no-referrer">` : ""}<span class="muted small">${esc(user.name || user.email)}</span><button class="ghost" id="sign-out">Sign out</button>`;
+  box.innerHTML = user.guest
+    ? `<span class="muted small" title="Kept until ${esc(until)}">Guest, keys kept until ${esc(until)}</span><button class="ghost" id="sign-out">Forget keys</button>`
+    : `${user.picture ? `<img class="avatar" src="${esc(user.picture)}" alt="" referrerpolicy="no-referrer">` : ""}<span class="muted small">${esc(user.name || user.email)}</span><button class="ghost" id="sign-out">Sign out</button>`;
   box.querySelector("#sign-out").addEventListener("click", async () => {
-    await api.post("/api/auth/logout", {});
+    if (user.guest) {
+      if (!confirm("Forget your keys now? A rented machine is stopped first and then forgotten by this site; it stays in your RunPod account.")) return;
+      await api.post("/api/account/delete", {});
+    } else {
+      await api.post("/api/auth/logout", {});
+    }
     $("#settings").hidden = true;
     await load();
   });
@@ -1862,7 +1885,7 @@ $("#signin").addEventListener("click", (e) => {
   if (e.target === e.currentTarget) e.currentTarget.hidden = true;
 });
 $("#delete-account").addEventListener("click", async () => {
-  if (!confirm("Delete your account? The keys, the rented GPU and every model on it are deleted; nothing else was kept.")) return;
+  if (!confirm(state.user?.guest ? "Forget your keys now? The rented GPU and every model on it are deleted too." : "Delete your account? The keys, the rented GPU and every model on it are deleted; nothing else was kept.")) return;
   try {
     await api.post("/api/account/delete", {});
   } catch (err) {

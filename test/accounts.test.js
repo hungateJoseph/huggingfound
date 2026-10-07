@@ -100,7 +100,7 @@ test("the account store encrypts settings at rest and signs sessions", () => {
 test("a visitor who is not signed in sees how to sign in and cannot touch keys or machines", async () => {
   const s = await json("/api/state");
   assert.equal(s.user, null);
-  assert.deepEqual(s.auth, { google: CLIENT, ready: true });
+  assert.deepEqual(s.auth, { google: CLIENT, ready: true, guestHours: 12 });
   assert.equal(s.rental, null);
   assert.equal(s.chatServer, null);
   for (const p of ["/api/settings", "/api/rent", "/api/run"]) assert.equal((await post(p, {})).status, 401, p);
@@ -127,7 +127,7 @@ test("Google sign-in checks the token against Google's keys and this site's clie
   assert.match(cookie, new RegExp(`^${SESSION_COOKIE}=`));
   assert.match(res.headers.get("set-cookie"), /HttpOnly/);
   const s = await json("/api/state", cookie);
-  assert.deepEqual(s.user, { email: "ana@example.com", name: "Ana", picture: "https://img.example/ana.png" });
+  assert.deepEqual(s.user, { email: "ana@example.com", name: "Ana", picture: "https://img.example/ana.png", guest: false, expiresAt: null });
   assert.deepEqual(s.rental, { rented: false });
   assert.equal(s.runpodKey, "");
   assert.equal(s.claudeReady, false);
@@ -241,4 +241,66 @@ test("deleting the account deletes the machine and every key", async () => {
   const s = await json("/api/state", fresh);
   assert.equal(s.runpodKey, "");
   assert.deepEqual(s.rental, { rented: false });
+});
+
+test("a guest enters a key without signing in and gets a session that expires after a quiet while", async () => {
+  assert.equal((await post("/api/guest", { RUNPOD_API_KEY: "short" })).status, 400);
+  assert.equal((await post("/api/guest", {})).status, 400);
+  const res = await post("/api/guest", { RUNPOD_API_KEY: KEY });
+  assert.equal(res.status, 200);
+  const made = await res.json();
+  assert.equal(made.guest, true);
+  assert.ok(made.expiresAt > Date.now() + 11 * 3600e3);
+  const guest = cookieOf(res);
+  assert.match(guest, new RegExp(`^${SESSION_COOKIE}=`));
+  const s = await json("/api/state", guest);
+  assert.equal(s.user.guest, true);
+  assert.equal(s.user.name, "Guest");
+  assert.equal(s.user.expiresAt, made.expiresAt);
+  assert.match(s.runpodKey, /^rpa_/);
+  assert.equal((await json("/api/rent/options", guest)).configured, true);
+  // The guest rents like anyone else.
+  const r = await (await post("/api/rent", { gb: 24, diskGb: 50 }, guest)).json();
+  assert.equal(r.rented, true);
+  assert.equal((await json("/api/state", guest)).chatServer.url, ollama.url);
+  // Each use pushes the expiry back.
+  const later = (await json("/api/state", guest)).user.expiresAt;
+  assert.ok(later >= made.expiresAt);
+  // Expiry: the file says the time is up, the sweep stops the machine and forgets the guest.
+  const dir = path.join(home, "accounts");
+  const file = fs.readdirSync(dir).find((f) => f.startsWith("g") && f.endsWith(".json"));
+  const record = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+  assert.equal(record.guest, true);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, file), "utf8"), new RegExp(KEY), "the guest's key is encrypted too");
+  fs.writeFileSync(path.join(dir, file), JSON.stringify({ ...record, expiresAt: Date.now() - 1000 }));
+  assert.equal((await json("/api/state", guest)).user, null, "an expired guest is nobody");
+  assert.equal((await get("/api/rent", guest)).status, 401);
+  const swept = await server.sweepGuests();
+  assert.equal(swept.length, 1);
+  assert.equal(runpod.state.pods[r.id].status, "EXITED", "the machine was stopped while the key still worked");
+  assert.ok(!fs.existsSync(path.join(dir, file)));
+  assert.equal(server.rentals.has(swept[0]), false);
+  assert.deepEqual(await server.sweepGuests(), []);
+});
+
+test("a guest who signs in keeps the keys and the machine on the account", async () => {
+  const res = await post("/api/guest", { RUNPOD_API_KEY: KEY, ANTHROPIC_API_KEY: "sk-ant-api03-guestkey0123456789abcdef" });
+  const guest = cookieOf(res);
+  const r = await (await post("/api/rent", { gb: 48, diskGb: 50 }, guest)).json();
+  const signedIn = await fetch(base + "/api/auth/google", { method: "POST", headers: { "Content-Type": "application/json", Cookie: guest }, body: JSON.stringify({ credential: idToken({ email: "cy@example.com", name: "Cy" }) }) });
+  assert.equal(signedIn.status, 200);
+  const cy = cookieOf(signedIn);
+  const s = await json("/api/state", cy);
+  assert.equal(s.user.guest, false);
+  assert.equal(s.user.email, "cy@example.com");
+  assert.match(s.runpodKey, /^rpa_/);
+  assert.match(s.claudeKey, /^sk-a/);
+  assert.equal(s.rental.id, r.id, "the machine came along");
+  assert.equal(s.chatServer.url, ollama.url);
+  assert.equal((await json("/api/state", guest)).user, null, "the guest is gone");
+  assert.equal(fs.readdirSync(path.join(home, "accounts")).filter((f) => f.startsWith("g")).length, 0);
+  // Keeping the machine on an account means the guest's key no longer works when the cookie is reused.
+  assert.equal((await post("/api/rent/stop", {}, guest)).status, 401);
+  await post("/api/rent/delete", {}, cy);
+  await post("/api/account/delete", {}, cy);
 });

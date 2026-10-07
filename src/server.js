@@ -19,7 +19,7 @@ import { rankModels } from "./find.js";
 import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
 import { RentError, TIERS, createRental, tierFor } from "./rent.js";
-import { AuthError, createAccounts } from "./accounts.js";
+import { AuthError, GUEST_HOURS, createAccounts } from "./accounts.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -54,9 +54,12 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     return saved;
   };
   // Accounts exist on the hosted site only: on a computer the app is its
-  // owner's, and settings live in the .env file. Without a secret the
-  // hosted site still searches and browses, but nobody can sign in.
-  const accounts = hosted && accountsSecret ? createAccounts({ dir: accountsDir, secret: accountsSecret, sessionSecret: sessionSecret || accountsSecret, googleClientId, jwksUrl: googleJwks, fetchImpl }) : null;
+  // owner's, and settings live in the .env file. Without a secret of its
+  // own the site makes one up for this run, which serves guests but loses
+  // every saved key at a restart; the blueprint sets a lasting one.
+  if (hosted && !accountsSecret) console.error("ACCOUNTS_SECRET is not set: keys saved on this site will not survive a restart.");
+  const secret = accountsSecret || (hosted ? crypto.randomBytes(32).toString("hex") : "");
+  const accounts = hosted ? createAccounts({ dir: accountsDir, secret, sessionSecret: sessionSecret || secret, googleClientId, jwksUrl: googleJwks, fetchImpl }) : null;
   // One rental per settings store: the .env file on a computer, each
   // account on the hosted site. A rental owns the chat server setting while
   // its machine exists and stops the machine when idle.
@@ -161,8 +164,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         }
         const ctx = contextFor(req);
         if (hosted && !ctx.user && (SIGNED_IN.has(url.pathname) || url.pathname.startsWith("/api/runs/") || url.pathname.startsWith("/api/rent/"))) {
-          return send(res, 401, { error: accounts ? "Sign in to do this on the site, or run HuggingFound on your own computer." : "Sign-in is not set up on this site yet. Run HuggingFound on your own computer to download and try models." });
+          return send(res, 401, { error: "Enter a RunPod key in a model's window, or sign in, to do this on the site; or run HuggingFound on your own computer." });
         }
+        // A guest's keys live on while the guest is active.
+        if (ctx.user?.guest && req.method === "POST") accounts.extend(ctx.user.id);
         return await api(req, res, url, ctx);
       }
       if (url.pathname.startsWith("/output/")) return serveFile(res, path.join(OUTPUT_DIR, path.basename(url.pathname)));
@@ -198,7 +203,21 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
   }
   server.checkIdle = () => Promise.all([...rentals.values()].map((r) => r.checkIdle().catch(() => false)));
-  if (idleWatch) setInterval(server.checkIdle, 60e3).unref();
+  // A guest whose time is up: their machine is stopped while the key still
+  // works, then the keys and the machine are forgotten.
+  server.sweepGuests = async () => {
+    const gone = [];
+    for (const id of accounts?.expiredGuests() ?? []) {
+      const settings = () => accounts.settings(id);
+      const mine = rentalFor(id, settings, (updates) => accounts.saveSettings(id, updates));
+      if (settings().RUNPOD_POD_ID) await mine.stop().catch(() => {});
+      rentals.delete(id);
+      accounts.remove(id);
+      gone.push(id);
+    }
+    return gone;
+  };
+  if (idleWatch) setInterval(() => server.checkIdle().then(server.sweepGuests).catch(() => {}), 60e3).unref();
   return server;
 
   // One pass: the scan, then the voices for every model in it.
@@ -269,8 +288,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         machine,
         hosted,
         // Who is signed in on the hosted site, and whether anyone can.
-        user: ctx.user ? { email: ctx.user.email, name: ctx.user.name, picture: ctx.user.picture } : null,
-        auth: hosted ? { google: accounts?.googleClientId() || "", ready: Boolean(accounts) } : null,
+        user: ctx.user ? { email: ctx.user.email, name: ctx.user.name, picture: ctx.user.picture, guest: ctx.user.guest, expiresAt: ctx.user.expiresAt ?? null } : null,
+        auth: hosted ? { google: accounts.googleClientId() || "", ready: accounts.googleConfigured(), guestHours: GUEST_HOURS } : null,
         refresh: hosted ? { hours: refreshHours, last: lastRefresh } : null,
         categories: CATEGORIES,
         // On the hosted site the runners are the rented machine's, if any.
@@ -306,11 +325,40 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       try {
         const profile = await accounts.verifyGoogle(body.credential);
         const user = accounts.findOrCreate(profile);
+        // A guest who signs in keeps their keys and machine.
+        if (ctx.user?.guest) {
+          accounts.adopt(ctx.user.id, user.id);
+          rentals.delete(ctx.user.id);
+          rentals.delete(user.id);
+        }
         res.setHeader("Set-Cookie", accounts.cookie(accounts.issue(user.id)));
         return send(res, 200, { ok: true, user: { email: user.email, name: user.name, picture: user.picture } });
       } catch (err) {
         return send(res, err instanceof AuthError ? err.status : 500, { error: err.message });
       }
+    }
+    // A visitor enters a key without signing in: a guest is made for them,
+    // kept for a while after each use. Signed in or a guest already, the
+    // key simply lands in their settings.
+    if (req.method === "POST" && url.pathname === "/api/guest") {
+      if (!hosted) return send(res, 404, { error: "Not found" });
+      const body = await json(req);
+      const updates = {};
+      for (const [key, pattern, what] of [["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"]]) {
+        if (key in body) {
+          const value = String(body[key] ?? "").trim();
+          if (!pattern.test(value)) return send(res, 400, { error: `That does not look like ${what}` });
+          updates[key] = value;
+        }
+      }
+      if (!Object.keys(updates).length) return send(res, 400, { error: "Nothing to save" });
+      let user = ctx.user;
+      if (!user) {
+        user = accounts.guest();
+        res.setHeader("Set-Cookie", accounts.cookie(accounts.issue(user.id)));
+      }
+      accounts.saveSettings(user.id, updates);
+      return send(res, 200, { ok: true, guest: user.guest, expiresAt: user.guest ? accounts.extend(user.id) : null });
     }
     if (req.method === "POST" && url.pathname === "/api/auth/logout") {
       if (accounts) res.setHeader("Set-Cookie", accounts.clearCookie());

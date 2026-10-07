@@ -11,9 +11,16 @@ import path from "node:path";
 // Sessions are a signed token in an httpOnly cookie that carries only the
 // user id. No dependencies: the Google ID token is checked against Google's
 // published keys with node:crypto.
+//
+// A guest is an account without a person: made the moment a visitor enters
+// a key without signing in, kept the same way, and swept away GUEST_HOURS
+// after its last use. Signing in later adopts a guest's keys and machine.
 
 export const SESSION_COOKIE = "hf_session";
 const SESSION_DAYS = 30;
+// A guest keeps keys without signing in, for this long after their last
+// use; then the machine is stopped and the keys are forgotten.
+export const GUEST_HOURS = 12;
 const GOOGLE_JWKS = "https://www.googleapis.com/oauth2/v3/certs";
 const GOOGLE_ISSUERS = new Set(["accounts.google.com", "https://accounts.google.com"]);
 
@@ -46,6 +53,8 @@ export function createAccounts({ dir, secret, sessionSecret = secret, googleClie
   };
   const userFile = (id) => path.join(dir, `${id}.json`);
   const index = () => readJson(indexFile, {});
+  const validId = (id) => /^g?[a-f0-9]{24}$/.test(String(id));
+  const listIds = () => fs.readdirSync(dir).filter((f) => /^g?[a-f0-9]{24}\.json$/.test(f)).map((f) => f.slice(0, -5));
 
   function encrypt(obj) {
     const iv = crypto.randomBytes(12);
@@ -87,17 +96,56 @@ export function createAccounts({ dir, secret, sessionSecret = secret, googleClie
       return publicUser(user);
     },
     get(id) {
-      if (!/^[a-f0-9]{24}$/.test(String(id))) return null;
+      if (!validId(id)) return null;
       const user = readJson(userFile(id), null);
-      return user ? publicUser(user) : null;
+      if (!user) return null;
+      if (user.guest && !(user.expiresAt > now())) return null;
+      return publicUser(user);
     },
     remove(id) {
+      if (!validId(id)) return false;
       const user = readJson(userFile(id), null);
       if (!user) return false;
       fs.rmSync(userFile(id), { force: true });
-      const ids = index();
-      delete ids[user.email];
-      writeJson(indexFile, ids);
+      if (user.email) {
+        const ids = index();
+        delete ids[user.email];
+        writeJson(indexFile, ids);
+      }
+      return true;
+    },
+
+    // ---- guests ------------------------------------------------------------
+    guest() {
+      const user = { id: `g${crypto.randomBytes(12).toString("hex")}`, guest: true, createdAt: new Date(now()).toISOString(), expiresAt: now() + GUEST_HOURS * 3600e3, settings: encrypt({}) };
+      writeJson(userFile(user.id), user);
+      return publicUser(user);
+    },
+    // Each use pushes a guest's expiry back; a person who keeps coming back keeps their keys.
+    extend(id) {
+      const user = validId(id) ? readJson(userFile(id), null) : null;
+      if (!user?.guest) return null;
+      user.expiresAt = now() + GUEST_HOURS * 3600e3;
+      writeJson(userFile(id), user);
+      return user.expiresAt;
+    },
+    expiredGuests() {
+      return listIds().filter((id) => {
+        const user = readJson(userFile(id), null);
+        return user?.guest && !(user.expiresAt > now());
+      });
+    },
+    // A guest who signs in keeps what they had: the keys and the machine
+    // move to the account wherever the account has none of its own.
+    adopt(guestId, userId) {
+      const from = this.settings(guestId);
+      const user = readJson(userFile(userId), null);
+      if (!user) return false;
+      const into = this.settings(userId);
+      const merged = { ...into };
+      for (const [k, v] of Object.entries(from)) if (!(k in merged)) merged[k] = v;
+      writeJson(userFile(userId), { ...user, settings: encrypt(merged) });
+      this.remove(guestId);
       return true;
     },
 
@@ -126,13 +174,7 @@ export function createAccounts({ dir, secret, sessionSecret = secret, googleClie
     // Accounts that have a machine rented, so the idle watch can cover them
     // after a restart.
     withPods() {
-      const out = [];
-      for (const file of fs.readdirSync(dir)) {
-        if (!/^[a-f0-9]{24}\.json$/.test(file)) continue;
-        const id = file.slice(0, -5);
-        if (this.settings(id).RUNPOD_POD_ID) out.push(id);
-      }
-      return out;
+      return listIds().filter((id) => this.settings(id).RUNPOD_POD_ID);
     },
 
     // ---- sessions ----------------------------------------------------------
@@ -212,5 +254,6 @@ export function createAccounts({ dir, secret, sessionSecret = secret, googleClie
 }
 
 function publicUser(user) {
-  return { id: user.id, email: user.email, name: user.name ?? null, picture: user.picture ?? null, createdAt: user.createdAt };
+  if (user.guest) return { id: user.id, guest: true, email: null, name: "Guest", picture: null, createdAt: user.createdAt, expiresAt: user.expiresAt };
+  return { id: user.id, guest: false, email: user.email, name: user.name ?? null, picture: user.picture ?? null, createdAt: user.createdAt };
 }
