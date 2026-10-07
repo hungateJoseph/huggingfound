@@ -154,16 +154,11 @@ test("a download waits for Ollama on a machine that is still starting, then runs
   const res = await post("/api/run", { kind: "pull-model", args: { name: PULLED } });
   assert.equal(res.status, 200);
   const { id } = await res.json();
-  await new Promise((r) => setTimeout(r, 100));
-  const early = await (await get(`/api/runs/${id}`)).text();
-  assert.match(early, /Waiting for Ollama on the machine to start/);
-  assert.doesNotMatch(early, /Done\.|Failed/);
+  // The machine comes up a moment later; the run's log is a live stream that ends with the run.
+  await new Promise((r) => setTimeout(r, 200));
   ollama.state.down = false;
-  let log = "";
-  for (let i = 0; i < 80 && !/Done\.|Failed/.test(log); i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    log = await (await get(`/api/runs/${id}`)).text();
-  }
+  const log = await (await get(`/api/runs/${id}`)).text();
+  assert.match(log, /Waiting for Ollama on the machine to start/);
   assert.match(log, /The machine is up\./);
   assert.match(log, /on the chat server/);
   assert.match(log, /Done\./);
