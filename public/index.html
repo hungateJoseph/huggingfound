@@ -25,6 +25,7 @@
       </div>
     </div>
   </header>
+  <div class="rent-bar" id="rent-bar" hidden></div>
 
   <main class="wrap">
     <section id="home">
@@ -259,6 +260,21 @@ npm start</code>
       <div class="actions">
         <button class="primary" id="save-chat-server">Save</button>
         <button class="ghost" id="clear-chat-server">Use this computer</button>
+      </div>
+      <div class="rent" id="rent">
+        <h3>Rent a GPU by the hour</h3>
+        <p class="muted small">Or have HuggingFound set the chat server up for you. With a RunPod key saved, pick a size below: HuggingFound rents a machine there with Ollama on it, points the chat server at it, stops it once it has sat idle, and deletes it when you say so. RunPod bills you by the hour while it runs; HuggingFound charges nothing.</p>
+        <label class="field">
+          <span>RunPod API key</span>
+          <input type="password" id="runpod-key" autocomplete="off" placeholder="rpa_...">
+          <small class="muted">Make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a> and add some credit, then under Settings, API Keys create a key with read and write access, since it has to make and stop machines. It is kept in the settings file on this computer and sent only to RunPod.</small>
+        </label>
+        <p class="muted small" id="runpod-status"></p>
+        <div class="actions">
+          <button class="primary" id="save-runpod">Save</button>
+          <button class="ghost" id="clear-runpod">Remove</button>
+        </div>
+        <div id="rent-panel"></div>
       </div>
       <label class="field">
         <span>Image server (optional)</span>

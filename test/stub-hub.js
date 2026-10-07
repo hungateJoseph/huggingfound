@@ -41,6 +41,7 @@ export const FILES = {
     { rfilename: "ggml-large-v3.bin", size: 3.1 * 1024 ** 3 },
   ],
   "openai/whisper-large-v3": [{ rfilename: "model.safetensors", size: 3.1 * 1024 ** 3 }],
+  "TheDrummer/Cydonia-24B-v2-GGUF": [{ rfilename: "Cydonia-24B-v2-Q8_0.gguf", size: 25.6 * 1024 ** 3 }],
   "John6666/pony-realism-v23-sdxl": [
     { rfilename: "model_index.json", size: 600 },
     { rfilename: "unet/config.json", size: 1800 },

@@ -36,6 +36,25 @@ const host = flag("--host", process.env.HOST || (hosted ? "0.0.0.0" : "127.0.0.1
 const envFile = path.join(DATA_DIR, ".env");
 const server = createServer({ envFile });
 
+// Quitting stops a GPU HuggingFound rented, so it does not bill all night.
+// Its disk and models stay; Start in Settings brings it back.
+let quitting = false;
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, async () => {
+    if (quitting) process.exit(0);
+    quitting = true;
+    const timer = setTimeout(() => process.exit(0), 15000);
+    try {
+      if (await server.rental?.stopOnQuit()) console.log("Stopped the rented GPU; its models are kept on its disk.");
+    } catch (err) {
+      console.error(`Could not stop the rented GPU: ${err.message}. Stop it at runpod.io.`);
+    } finally {
+      clearTimeout(timer);
+      process.exit(0);
+    }
+  });
+}
+
 server.listen(port, host, () => {
   const url = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}/`;
   console.log(`HuggingFound is running at ${url}${hosted ? " (hosted mode: nothing runs here; the catalogue refreshes on a timer)" : ""}`);

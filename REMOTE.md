@@ -6,15 +6,91 @@ heavy part to another machine. With a **chat server** set in Settings, chat
 models are downloaded and run on that machine; your computer only sends and
 receives text.
 
-The server is just [Ollama](https://ollama.com) on a machine with a GPU. This
-page sets one up on a rented box and connects to it safely.
+The server is just [Ollama](https://ollama.com) on a machine with a GPU.
+There are two ways to get one: let HuggingFound rent it for you, or set one
+up yourself and connect to it through a tunnel.
 
-## 1. Rent a machine
+## Let HuggingFound rent it
 
-Any provider that gives you a Linux machine with an NVIDIA GPU and SSH access
-works: RunPod, Lambda, Vast.ai and others. They bill by the hour while the
-machine is on. Pick the GPU by the size of the model file, which HuggingFound
-shows on every card:
+HuggingFound can rent the machine at [RunPod](https://www.runpod.io), a GPU
+cloud that bills by the hour, and manage it for you: start it, point the
+chat server at it, stop it when it sits idle, and delete it when you are
+done. You pay RunPod; HuggingFound charges nothing and never sees your card.
+
+1. Make a RunPod account and add some credit (ten dollars goes a long way;
+   see the prices below).
+2. In RunPod, under **Settings, API Keys**, create a key with read and
+   write access. It has to make and stop machines.
+3. In HuggingFound's **Settings**, under **Rent a GPU by the hour**, paste
+   the key and save. The sizes on offer appear with the price an hour of the
+   cheapest card that is free right now:
+
+   | Size | Model files up to about | Examples | Typical price |
+   | --- | --- | --- | --- |
+   | 24 GB | 17 GB | 30B-class models at 4-bit | $0.30 to $0.70 an hour |
+   | 48 GB | 34 GB | 70B-class models at 4-bit | $0.40 to $1.20 an hour |
+   | 80 GB | 57 GB | 100B-class models, or 70B at higher quality | $1.60 to $3 an hour |
+   | 141 GB | 100 GB | the biggest open models | $3 to $4 an hour |
+
+4. Pick a size and a disk for its models (50 GB unless you plan to keep
+   several big ones), and click **Rent it**. A model's window also offers
+   this: when a chat model is too big for your computer, a line under its
+   size says which card holds it and opens this section with that size
+   chosen.
+
+The machine takes two to four minutes to start. Meanwhile:
+
+- A bar under the header shows what is rented, the price an hour, how long
+  it has run and roughly what that has cost, with **Stop** right there.
+- Every chat model's card and window shows whether it fits the rented GPU.
+- A model's window has one step, "Download the model on the chat server".
+  The machine fetches it straight from Hugging Face at data-centre speed,
+  and loads it into the GPU so the first message is quick.
+- The chat box, the saved conversation and "Ask Claude to check this" work
+  as before.
+
+### Stopping, starting and deleting
+
+- **Stop** ends the hourly charge. The disk and the models on it stay, for
+  a small charge a day (RunPod lists it per gigabyte a month). **Start**
+  brings the machine back in a minute or two with the models still there;
+  if RunPod has no card of that kind free at that moment, try again later.
+- **Delete machine and models** removes everything. Nothing is charged after
+  that.
+- The machine **stops by itself** after 30 minutes without a chat or a
+  download. Change the minutes under the rented machine in Settings; 0
+  keeps it running until you stop it. A download in progress always keeps
+  it awake.
+- **Quitting HuggingFound stops it** too (Ctrl+C in the terminal, or
+  closing the terminal). Untick "Stop it when HuggingFound quits" to keep
+  it running without the app, and remember it is billing.
+- If HuggingFound is not running, nothing watches the machine. Check the
+  bar when you come back, or the pods page at runpod.io.
+
+### What to know
+
+- Ollama on the machine answers at a long random address RunPod makes for
+  it (the machine's id and the port, on RunPod's proxy). Only this
+  computer knows it, it is never shown on the hosted site, and it goes
+  when the machine is deleted. Anyone who learned it could use the GPU, so
+  keep the settings file to yourself.
+- Gated models, and ones that need a file downloaded by hand, cannot be
+  fetched by the machine through HuggingFound; their window says so.
+- Fit and speed go by the card's memory; speed is a rough guess for a
+  modern NVIDIA card.
+- The key and the machine's id are kept in HuggingFound's settings file on
+  this computer, next to the other keys.
+
+## Set one up yourself
+
+Any provider that gives you a Linux machine with an NVIDIA GPU and SSH
+access works too. The rest of this page connects one of those safely.
+
+### 1. Rent a machine
+
+RunPod, Lambda, Vast.ai and others bill by the hour while the machine is on.
+Pick the GPU by the size of the model file, which HuggingFound shows on every
+card:
 
 | GPU memory | Model files up to about | Examples |
 | --- | --- | --- |
@@ -27,7 +103,7 @@ there. On providers with a separate persistent volume, point Ollama at it so
 the models survive a restart, for example `export OLLAMA_MODELS=/workspace/ollama`
 before starting Ollama.
 
-## 2. Install Ollama on it
+### 2. Install Ollama on it
 
 Connect with the SSH command the provider shows, then:
 
@@ -39,7 +115,7 @@ That installs Ollama and starts it, listening only on the machine itself
 (`127.0.0.1:11434`). Leave it that way. If the provider's image has no service
 manager, start it by hand with `ollama serve &`.
 
-## 3. Open a tunnel from your computer
+### 3. Open a tunnel from your computer
 
 Ollama has no password, so it should never be opened to the internet. An SSH
 tunnel carries it to your computer privately. In a terminal on your computer:
@@ -52,7 +128,7 @@ Use the user, address and any `-p PORT` or `-i KEY` the provider gave you for
 SSH. The command prints nothing and stays running; that is the tunnel. Port
 11435 is used on your side so an Ollama on your own computer can keep 11434.
 
-## 4. Point HuggingFound at it
+### 4. Point HuggingFound at it
 
 In **Settings**, under **Chat server**:
 
@@ -76,7 +152,7 @@ From then on:
 Image and speech models are not affected; they still run on your computer, or
 on the image server if you set one.
 
-## 5. When you are done
+### 5. When you are done
 
 - Close the tunnel with Ctrl+C. HuggingFound will say the server is not
   answering until you open it again.
@@ -86,7 +162,7 @@ on the image server if you set one.
 - "Use this computer" in Settings switches chat models back to your own
   machine. Nothing on the server is touched.
 
-## A private network instead of a tunnel
+### A private network instead of a tunnel
 
 If the server and your computer are on the same private network, such as
 Tailscale, start Ollama with `OLLAMA_HOST=0.0.0.0` on the server and use its
@@ -94,7 +170,7 @@ private address in Settings, for example `http://100.101.102.103:11434`. Only
 do this on a network you control; anyone who can reach that port can use the
 GPU and delete the models.
 
-## Limits
+### Limits
 
 - Gated models and models that need a file downloaded by hand cannot be
   fetched by the server through HuggingFound; their window says so.

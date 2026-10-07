@@ -50,6 +50,13 @@ async function load() {
   $("#chat-server").value = s.chatServer?.url ?? "";
   $("#chat-server-gb").value = s.chatServer?.gpuGb ?? "";
   renderChatServerStatus();
+  state.rental = s.rental;
+  state.rentTiers = s.rentTiers ?? [];
+  state.runpodKey = s.runpodKey;
+  state.stopOnQuit = s.stopOnQuit;
+  $("#runpod-status").textContent = s.runpodKey ? `A key is saved (${s.runpodKey}).` : "No key saved; renting is off. The chat server above can still be set by hand.";
+  renderRental();
+  if (s.runpodKey && !state.rentOptions) loadRentOptions();
   renderRunners();
   if (s.scan?.at) {
     const saved = await api.get("/api/models");
@@ -524,6 +531,14 @@ function renderModel(model, plan) {
   </div>
   <p class="muted small">${state.hosted ? "Speed is a rough guess from the file size for a typical laptop without a separate GPU; a GPU or Apple Silicon is several times faster." : `Speed is a rough guess from the file size and this computer's hardware. The first run is slower while the model loads${plan.runner === "sd" ? " and the graphics shaders compile" : ""}; after a real run the measured time shows here.`}</p>`);
   if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "This file is larger than a typical laptop has to spare; it wants 32 GB of memory or a big GPU." : "This file is larger than the memory this computer has to spare. It may still download, but it will be slow or fail to load. A smaller model is a better first try."}</div>`);
+  // A chat model too big for here can run on a GPU rented by the hour.
+  const tier = plan.fit.level === "no" && plan.runner === "ollama" && !plan.remote ? (state.rentTiers ?? []).find((t) => plan.file.gb <= t.files) : null;
+  if (tier && state.hosted) parts.push(`<p class="muted small">HuggingFound on your computer can rent a ${tier.gb} GB GPU by the hour for a model this size and run it there, with the same chat box and nothing downloaded to your computer.</p>`);
+  else if (tier) {
+    const offer = (state.rentOptions ?? []).find((t) => t.gb === tier.gb);
+    const price = offer?.pricePerHour != null ? ` (${offer.gpu.name}, ${money(offer.pricePerHour)} an hour)` : "";
+    parts.push(`<div class="notice info">A rented GPU runs it: a ${tier.gb} GB card${price} holds this ${plan.file.gb.toFixed(1)} GB file, billed by the hour, with nothing downloaded here. <button class="ghost" id="rent-from-model">Rent a ${tier.gb} GB GPU</button></div>`);
+  }
   if (state.hosted) parts.push(`<h3>How to run it</h3><p class="muted small">These are the steps HuggingFound does for you on your computer, one click each. They can also be done by hand.</p>`);
   parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
   if (state.hosted) parts.push(`<div class="get-app hosted-only"><b>Run HuggingFound on your computer</b> to do these with one click and try the model in a chat, image or transcription box right here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
@@ -543,6 +558,12 @@ npm start</code></div>`);
     btn.addEventListener("click", () => runStep(model, plan, Number(btn.dataset.index)));
   }
   body.querySelector("#check-from-model")?.addEventListener("click", () => state.openChecker?.(model.name));
+  body.querySelector("#rent-from-model")?.addEventListener("click", () => {
+    state.rentWant = tier.gb;
+    $("#settings").hidden = false;
+    renderRental();
+    $("#rent").scrollIntoView({ block: "start" });
+  });
   renderTry(model, plan);
 }
 
@@ -1359,9 +1380,12 @@ async function renderChatServerStatus() {
   el.textContent = `Checking ${state.chatServer.url}`;
   try {
     const r = await api.get("/api/chat-server");
+    const rented = state.chatServer.rented ? "The rented GPU. " : "";
     el.textContent = r.ok
-      ? `Connected to Ollama ${r.version}. It holds ${r.models} model${r.models === 1 ? "" : "s"}; chat models are downloaded and run there.`
-      : `Saved, but the server did not answer (${r.error}). Check the address, and that the tunnel is open if you use one.`;
+      ? `${rented}Connected to Ollama ${r.version}. It holds ${r.models} model${r.models === 1 ? "" : "s"}; chat models are downloaded and run there.`
+      : state.chatServer.rented
+        ? "The rented GPU; Ollama on it is not answering yet. A new machine takes a few minutes to start."
+        : `Saved, but the server did not answer (${r.error}). Check the address, and that the tunnel is open if you use one.`;
   } catch (err) {
     el.textContent = `Could not check the server: ${err.message}`;
   }
@@ -1383,6 +1407,198 @@ $("#clear-chat-server").addEventListener("click", async () => {
   if (state.open) openModel(state.open);
 });
 
+// ---- a GPU rented by the hour ----------------------------------------------
+
+function money(n) {
+  return `$${Number(n).toFixed(2)}`;
+}
+
+function minutesText(seconds) {
+  const m = Math.round(seconds / 60);
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+// What the machine is doing, in a word, and the pill colour for it.
+function rentalPhase(r) {
+  if (!r?.rented) return null;
+  if (r.status === "RUNNING") return r.ready ? ["ready", "ready"] : ["starting Ollama", "starting"];
+  if (r.status === "PROVISIONING" || r.status === "STARTING" || r.status === "UNKNOWN") return ["starting", "starting"];
+  if (r.status === "EXITED") return ["stopped", "stopped"];
+  return [r.status.toLowerCase(), "error"];
+}
+
+async function loadRentOptions() {
+  state.rentOptionsLoading = true;
+  renderRental();
+  try {
+    const r = await api.get("/api/rent/options");
+    state.rentOptions = r.configured ? r.tiers : null;
+    state.rentOptionsError = "";
+  } catch (err) {
+    state.rentOptions = null;
+    state.rentOptionsError = err.message;
+  }
+  state.rentOptionsLoading = false;
+  renderRental();
+}
+
+function renderRental() {
+  if (state.hosted) return;
+  const r = state.rental;
+  renderRentBar(r);
+  const panel = $("#rent-panel");
+  if (!panel) return;
+  if (r?.rented) {
+    const [word, cls] = rentalPhase(r);
+    const running = ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(r.status);
+    const cost = r.costPerHour != null ? `${money(r.costPerHour)} an hour. ` : "";
+    const time = running && r.uptimeSeconds ? `Running for ${minutesText(r.uptimeSeconds)}${r.spent != null ? `, about ${money(r.spent)} this time` : ""}. ` : "";
+    const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for a small charge a day; Start brings it back in a minute or two, Delete removes it and the models.` : "";
+    const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a chat or download${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
+    panel.innerHTML = `<div class="rent-card">
+      <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
+      <p class="muted small">${esc(cost)}${esc(time)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
+      <p class="muted small">${esc(idle)} Chat models above are downloaded to it and run there.</p>
+      <div class="actions">
+        ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
+        ${r.status === "EXITED" || r.status === "ERROR" ? `<button class="primary" id="rent-start">Start</button>` : ""}
+        <button class="ghost" id="rent-delete">Delete machine and models</button>
+        <a class="muted small" href="https://www.runpod.io/console/pods" target="_blank" rel="noopener">Open RunPod</a>
+      </div>
+      <label class="field">
+        <span>Stop after this many idle minutes</span>
+        <input type="number" id="rent-idle" min="0" max="1440" step="1" value="${Number(r.idleMinutes ?? 30)}">
+        <small class="muted">0 keeps it running until you stop it. A download in progress always keeps it awake.</small>
+      </label>
+      <label class="check"><input type="checkbox" id="rent-quit" ${state.stopOnQuit ? "checked" : ""}> Stop it when HuggingFound quits</label>
+      <div class="actions"><button class="ghost" id="rent-save-idle">Save</button></div>
+    </div>`;
+    panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
+    panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
+    panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
+    panel.querySelector("#rent-save-idle").addEventListener("click", async () => {
+      try {
+        await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked });
+      } catch (err) {
+        alert(err.message);
+        return;
+      }
+      await load();
+    });
+    pollRental();
+    return;
+  }
+  if (!state.runpodKey) {
+    panel.innerHTML = "";
+    return;
+  }
+  if (state.rentOptionsLoading) {
+    panel.innerHTML = `<p class="muted small">Asking RunPod what is on offer</p>`;
+    return;
+  }
+  if (!state.rentOptions) {
+    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : "Could not read RunPod's offer."} <button class="ghost" id="rent-retry">Try again</button></p>`;
+    panel.querySelector("#rent-retry").addEventListener("click", loadRentOptions);
+    return;
+  }
+  const want = state.rentWant && state.rentOptions.some((t) => t.gb === state.rentWant && t.available) ? state.rentWant : state.rentOptions.find((t) => t.available)?.gb;
+  panel.innerHTML = `<div class="tiers">${state.rentOptions.map((t) => `<label class="tier ${t.available ? "" : "off"}">
+      <input type="radio" name="rent-tier" value="${t.gb}" ${t.gb === want ? "checked" : ""} ${t.available ? "" : "disabled"}>
+      <span><b>${t.gb} GB GPU</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour` : ", none free right now"}` : "not on offer right now"}</span><small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small></span>
+    </label>`).join("")}</div>
+    <label class="field">
+      <span>Disk for its models, in GB</span>
+      <input type="number" id="rent-disk" min="10" max="4000" step="10" value="${Number(state.rentDisk ?? 50)}">
+      <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep. Fixed once rented. RunPod charges a few cents a day for it, more while the machine is stopped than running.</small>
+    </label>
+    <div class="actions"><button class="primary" id="rent-go" ${want ? "" : "disabled"}>Rent it</button><button class="ghost" id="rent-refresh">Refresh prices</button></div>
+    <p class="muted small">Ollama on the machine answers at a long random address that RunPod makes for it; only this computer knows it, and it goes when the machine is deleted. The disk is set up once; the machine itself usually answers two to four minutes after renting.</p>`;
+  panel.querySelector("#rent-refresh").addEventListener("click", () => {
+    state.rentOptions = null;
+    loadRentOptions();
+  });
+  panel.querySelector("#rent-go").addEventListener("click", async () => {
+    const gb = Number(panel.querySelector('input[name="rent-tier"]:checked')?.value);
+    const diskGb = Number($("#rent-disk").value);
+    const offer = state.rentOptions.find((t) => t.gb === gb);
+    if (!offer) return;
+    state.rentDisk = diskGb;
+    if (!confirm(`Rent a ${offer.gpu.name} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\nRunPod bills your account while it runs. It stops by itself after sitting idle, and you can stop or delete it here at any time.`)) return;
+    const btn = panel.querySelector("#rent-go");
+    btn.disabled = true;
+    btn.textContent = "Renting";
+    try {
+      state.rental = await api.post("/api/rent", { gb, diskGb });
+    } catch (err) {
+      alert(`Could not rent it: ${err.message}`);
+      btn.disabled = false;
+      btn.textContent = "Rent it";
+      return;
+    }
+    notice("A GPU is being rented; chat models now point at it. It usually answers within a few minutes.", "ok");
+    await load();
+    if (state.open) openModel(state.open);
+  });
+}
+
+async function rentAction(action, question) {
+  if (question && !confirm(question)) return;
+  try {
+    state.rental = await api.post(`/api/rent/${action}`, {});
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  await load();
+  if (state.open) openModel(state.open);
+}
+
+// The bar under the header: a machine is being paid for, and here is how to stop it.
+function renderRentBar(r) {
+  const bar = $("#rent-bar");
+  if (!r?.rented) {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+  const [word] = rentalPhase(r);
+  const running = ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(r.status);
+  const cost = running && r.costPerHour != null ? `, ${money(r.costPerHour)} an hour` : "";
+  const time = running && r.uptimeSeconds ? `, running ${minutesText(r.uptimeSeconds)}${r.spent != null ? ` (about ${money(r.spent)})` : ""}` : "";
+  bar.hidden = false;
+  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}, ${esc(word)}${cost}${time}.</span><span class="buttons">${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-settings">Manage</button></span></div>`;
+  bar.querySelector("#bar-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
+  bar.querySelector("#bar-start")?.addEventListener("click", () => rentAction("start", null));
+  bar.querySelector("#bar-settings").addEventListener("click", () => {
+    $("#settings").hidden = false;
+    $("#rent").scrollIntoView({ block: "start" });
+  });
+}
+
+// While a machine exists its status is refreshed: often while it starts,
+// once a minute after that for the running time and the cost.
+function pollRental() {
+  if (state.rentPoll) return;
+  const tick = async () => {
+    state.rentPoll = null;
+    if (!state.rental?.rented) return;
+    const wasReady = state.rental.ready;
+    try {
+      state.rental = await api.get("/api/rent");
+    } catch {
+      // the next tick tries again
+    }
+    renderRental();
+    if (!wasReady && state.rental?.ready) {
+      notice("The rented GPU is ready. Chat models are downloaded to it and run there.", "ok");
+      if (state.open) openModel(state.open);
+    }
+    if (state.rental?.rented) state.rentPoll = setTimeout(tick, state.rental.ready || state.rental.status === "EXITED" ? 60000 : 10000);
+  };
+  state.rentPoll = setTimeout(tick, state.rental?.ready || state.rental?.status === "EXITED" ? 60000 : 10000);
+}
+
 async function renderImageServerStatus() {
   const el = $("#image-server-status");
   if (!state.imageServer) {
@@ -1398,7 +1614,7 @@ async function renderImageServerStatus() {
   }
 }
 
-for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#save-github", "#clear-github"], ["#youtube-key", "YOUTUBE_API_KEY", "#save-youtube", "#clear-youtube"], ["#claude-key", "ANTHROPIC_API_KEY", "#save-claude", "#clear-claude"]]) {
+for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#save-github", "#clear-github"], ["#youtube-key", "YOUTUBE_API_KEY", "#save-youtube", "#clear-youtube"], ["#claude-key", "ANTHROPIC_API_KEY", "#save-claude", "#clear-claude"], ["#runpod-key", "RUNPOD_API_KEY", "#save-runpod", "#clear-runpod"]]) {
   $(save).addEventListener("click", async () => {
     const value = $(field).value.trim();
     try {
@@ -1408,10 +1624,12 @@ for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#sav
       return;
     }
     $(field).value = "";
+    if (key === "RUNPOD_API_KEY") state.rentOptions = null;
     await load();
   });
   $(clear).addEventListener("click", async () => {
     await api.post("/api/settings", { [key]: "" });
+    if (key === "RUNPOD_API_KEY") state.rentOptions = null;
     await load();
   });
 }

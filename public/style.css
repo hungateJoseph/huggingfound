@@ -306,3 +306,27 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 #checker-run { margin-top: 14px; }
 #checker-run .check { max-width: 100%; }
 #checker-code-box { margin-top: 10px; }
+
+/* A GPU rented by the hour: the bar under the header while one exists, and
+   the size picker and status card in Settings. */
+.rent-bar { background: var(--accent-soft); border-bottom: 1px solid #f3dcc0; color: var(--accent-ink); font-size: 14px; }
+.rent-bar .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; padding-top: 6px; padding-bottom: 6px; flex-wrap: wrap; }
+.rent-bar .buttons { display: flex; gap: 6px; }
+.rent-bar button { font-size: 13px; padding: 4px 10px; }
+.rent { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.rent h3 { margin: 0 0 6px; }
+.tiers { display: grid; gap: 8px; margin: 10px 0; }
+.tier { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+.tier:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.tier input { margin-top: 3px; }
+.tier b { font-weight: 600; }
+.tier .price { color: var(--ink); }
+.tier small { display: block; color: var(--muted); margin-top: 2px; }
+.tier.off { opacity: 0.6; cursor: default; }
+.rent-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-top: 10px; }
+.rent-card .rent-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+.rent-card p { margin: 6px 0 0; }
+.pill.starting { background: var(--info-soft); color: var(--info); }
+.pill.ready { background: var(--ok-soft); color: var(--ok); }
+.pill.stopped { background: #efece5; color: var(--muted); }
+.pill.error { background: var(--bad-soft); color: var(--bad); }

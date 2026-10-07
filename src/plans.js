@@ -72,7 +72,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
         kind: "pull-model",
         args: { name: ollamaName },
         title: `Download the model on the chat server (${file.gb ? file.gb.toFixed(1) + " GB" : "size unknown"})`,
-        text: `The server fetches the ${quant} version of ${model.name} straight from Hugging Face; nothing is downloaded to this computer. ${fit.text}.${detected.ollama.running ? "" : " The server is not answering right now; check the address or the tunnel in Settings."}`,
+        text: `The server fetches the ${quant} version of ${model.name} straight from Hugging Face; nothing is downloaded to this computer. ${fit.text}.${detected.ollama.running ? "" : ` ${serverDownNote(detected.ollama.rented)}`}`,
         done,
         command: `ollama pull ${ollamaName}`,
       });
@@ -197,6 +197,17 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   }
 
   return { runnable: false, reason: "Unsupported runner.", steps: [] };
+}
+
+// Why the chat server is not answering: a rented machine says where it is
+// in its life; any other server gets the general advice.
+function serverDownNote(rented) {
+  if (rented?.rented) {
+    if (["PROVISIONING", "STARTING", "UNKNOWN"].includes(rented.status)) return "The rented GPU is still starting; it usually answers within a few minutes of being rented.";
+    if (rented.status === "RUNNING") return "The rented GPU is up but Ollama on it has not answered yet; try again in a moment.";
+    return "The rented GPU is stopped. Start it under Rent a GPU in Settings.";
+  }
+  return "The server is not answering right now; check the address or the tunnel in Settings.";
 }
 
 function installNote(runner, machine, detected) {

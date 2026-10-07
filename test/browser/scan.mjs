@@ -8,11 +8,17 @@ import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
 import { MODELS, startStubHub } from "../stub-hub.js";
+import { startStubOllama } from "../stub-ollama.js";
+import { KEY as RUNPOD_KEY, startStubRunpod } from "../stub-runpod.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-browser-"));
 const { createServer } = await import("../../src/server.js");
 
 const stub = await startStubHub();
+// Renting a GPU is played by a stand-in RunPod, and the rented machine's
+// Ollama by a stand-in that answers at the proxy address.
+const runpod = await startStubRunpod();
+const rentedOllama = await startStubOllama();
 const envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
 const scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
 const dead = "http://127.0.0.1:1";
@@ -46,7 +52,7 @@ const reviewer = {
     return { declined: false, model: "claude-opus-5", note: "" };
   },
 };
-const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false });
+const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, idleWatch: false });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -67,7 +73,7 @@ async function step(name, fn) {
     console.log(`ok   ${name}`);
   } catch (err) {
     failed++;
-    console.log(`FAIL ${name}\n     ${err.message.split("\n")[0]}`);
+    console.log(`FAIL ${name}\n     ${err.message.split("\n").slice(0, 12).join("\n     ")}`);
     // Close whatever the failed step left open and reset the filters, so the next steps start clean.
     await page.keyboard.press("Escape").catch(() => {});
     await page.evaluate(() => {
@@ -514,6 +520,100 @@ await step("cards keep the Hub's one-line description once what people say is ga
   assert.ok(blurbs.some((b) => b.trim().length > 0), "the description is still there");
 });
 
+await step("a model too big for this computer offers a rented GPU of the right size", async () => {
+  await page.click("#nav-browse");
+  await page.click(".tab[data-tab=chat]");
+  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await page.waitForSelector("#steps .step");
+  assert.match(await page.locator("#modal-body .notice.warn").innerText(), /larger than the memory/);
+  const offer = page.locator("#modal-body .notice.info", { hasText: "rented GPU" });
+  assert.match(await offer.innerText(), /a 48 GB card holds this 25\.6 GB file/);
+  assert.equal(await page.locator("#rent-bar").isVisible(), false, "nothing rented yet");
+  await page.click("#rent-from-model");
+  await page.waitForSelector("#settings:not([hidden])");
+  assert.match(await page.locator("#runpod-status").innerText(), /No key saved/);
+  assert.equal(await page.locator("#rent-panel").innerText(), "", "no sizes without a key");
+  await page.keyboard.press("Escape");
+});
+
+await step("saving a RunPod key lists the sizes with the cheapest free card and its price", async () => {
+  await page.click("#open-settings");
+  await page.fill("#runpod-key", RUNPOD_KEY);
+  await page.click("#save-runpod");
+  await page.waitForSelector("#rent-panel .tier");
+  assert.match(await page.locator("#runpod-status").innerText(), /A key is saved \(rpa_\*+cdef\)/);
+  const tiers = await page.$$eval("#rent-panel .tier", (els) => els.map((e) => [e.querySelector("b").textContent, e.querySelector(".price").textContent, e.querySelector("input").disabled, e.querySelector("input").checked]));
+  // The model window asked for 48 GB a moment ago, so that size is chosen.
+  assert.deepEqual(tiers, [
+    ["24 GB GPU", "RTX 4090, $0.44 an hour", false, false],
+    ["48 GB GPU", "A40, $0.40 an hour", false, true],
+    ["80 GB GPU", "A100 PCIe, $1.64 an hour", false, false],
+    ["141 GB GPU", "H200 SXM, none free right now", true, false],
+  ]);
+  assert.match(fs.readFileSync(envFile, "utf8"), new RegExp(`RUNPOD_API_KEY=${RUNPOD_KEY}`));
+  await page.click("#close-settings");
+});
+
+await step("renting from the model window preselects its size, and the bar shows the running cost", async () => {
+  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await page.waitForSelector("#rent-from-model");
+  assert.match(await page.locator("#modal-body .notice.info", { hasText: "rented GPU" }).innerText(), /a 48 GB card \(A40, \$0\.40 an hour\)/, "the price is on the model window too");
+  await page.click("#rent-from-model");
+  await page.waitForSelector("#rent-panel .tier");
+  assert.equal(await page.locator('#rent-panel input[name="rent-tier"]:checked').inputValue(), "48");
+  await page.fill("#rent-disk", "60");
+  rentedOllama.state.down = true;
+  acceptDialogs = true;
+  await page.click("#rent-go");
+  await page.waitForSelector("#rent-bar:not([hidden])");
+  acceptDialogs = false;
+  assert.match(await page.locator("#rent-bar").innerText(), /Rented GPU: NVIDIA A40 48 GB, starting, \$0\.40 an hour\./);
+  assert.equal(runpod.state.created.length, 1);
+  assert.deepEqual(runpod.state.created[0].mounts, { persistent: { size: 60, path: "/root/.ollama" } });
+  assert.match(await page.locator("#rent-panel .rent-card").innerText(), /starting[\s\S]*Stops by itself after 30 minutes/);
+  assert.equal(await page.locator("#chat-server").inputValue(), rentedOllama.url, "the chat server is the rented machine");
+  assert.match(await page.locator("#chat-server-status").innerText(), /rented GPU; Ollama on it is not answering yet/);
+  await page.click("#close-settings");
+  // The model window now plans one step on the machine and says it is starting.
+  await page.waitForSelector("#steps .step");
+  const titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(titles, ["Download the model on the chat server (25.6 GB)"]);
+  assert.match(await page.locator("#steps .step .text").innerText(), /rented GPU is still starting/);
+  assert.match(await page.locator("#modal-body .spec").innerText(), /Fits the server's 48 GB GPU/);
+  await page.keyboard.press("Escape");
+});
+
+await step("stopping from the bar frees the chat server; starting and deleting work from Settings", async () => {
+  acceptDialogs = true;
+  await page.click("#bar-stop");
+  await page.waitForFunction(() => /stopped/.test(document.querySelector("#rent-bar").textContent));
+  acceptDialogs = false;
+  assert.equal(await page.locator("#bar-start").count(), 1);
+  assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
+  await page.click("#open-settings");
+  await page.waitForSelector("#rent-panel .rent-card");
+  assert.match(await page.locator("#rent-panel .rent-card").innerText(), /Stopped: no hourly charge\. The 60 GB disk keeps its models/);
+  assert.equal(await page.locator("#chat-server").inputValue(), "", "chat models are back on this computer");
+  assert.match(await page.locator("#chat-server-status").innerText(), /run on this computer/);
+  await page.fill("#rent-idle", "45");
+  await page.click("#rent-save-idle");
+  await page.waitForFunction(() => /after 45 minutes/.test(document.querySelector("#rent-panel").textContent));
+  await page.click("#rent-start");
+  await page.waitForFunction(() => /starting|ready/.test(document.querySelector("#rent-bar").textContent));
+  assert.equal(await page.locator("#chat-server").inputValue(), rentedOllama.url, "pointed back at it");
+  acceptDialogs = true;
+  await page.click("#rent-delete");
+  await page.waitForFunction(() => document.querySelector("#rent-bar").hidden);
+  acceptDialogs = false;
+  await page.waitForSelector("#rent-panel .tier");
+  assert.equal(await page.locator("#chat-server").inputValue(), "");
+  const saved = fs.readFileSync(envFile, "utf8");
+  assert.doesNotMatch(saved, /RUNPOD_POD_ID|OLLAMA_SERVER/);
+  assert.match(saved, /RUNPOD_API_KEY=/, "the key stays");
+  rentedOllama.state.down = false;
+  await page.click("#close-settings");
+});
+
 await step("no errors reached the console", () => {
   assert.deepEqual(errors, [], errors.join(" | "));
 });
@@ -521,6 +621,8 @@ await step("no errors reached the console", () => {
 await browser.close();
 server.close();
 stub.server.close();
+runpod.server.close();
+rentedOllama.server.close();
 console.log(failed ? `\n${failed} step(s) failed` : "\nall browser steps passed");
 process.exit(failed ? 1 : 0);
 
