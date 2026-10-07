@@ -27,11 +27,12 @@ async function check(res) {
 
 async function load() {
   const s = await api.get("/api/state");
-  Object.assign(state, { machine: s.machine, categories: s.categories, runners: s.runners, picks: s.picks, hosted: Boolean(s.hosted), refresh: s.refresh });
+  Object.assign(state, { machine: s.machine, categories: s.categories, runners: s.runners, picks: s.picks, hosted: Boolean(s.hosted), refresh: s.refresh, user: s.user, auth: s.auth });
   document.body.dataset.hosted = s.hosted ? "1" : "";
   state.claudeHosted = s.claudeHosted;
   if (s.hosted) renderHostedCopy();
   if (s.hosted && !state.openChecker) setupChecker();
+  renderAccount();
   renderDiskLine();
   $("#env-path").textContent = s.envFile;
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
@@ -54,7 +55,7 @@ async function load() {
   state.rentTiers = s.rentTiers ?? [];
   state.runpodKey = s.runpodKey;
   state.stopOnQuit = s.stopOnQuit;
-  $("#runpod-status").textContent = s.runpodKey ? `A key is saved (${s.runpodKey}).` : "No key saved; renting is off. The chat server above can still be set by hand.";
+  $("#runpod-status").textContent = s.runpodKey ? `A key is saved (${s.runpodKey}).` : state.hosted ? "No key saved; renting is off." : "No key saved; renting is off. The chat server above can still be set by hand.";
   renderRental();
   if (s.runpodKey && !state.rentOptions) loadRentOptions();
   renderRunners();
@@ -72,9 +73,9 @@ async function load() {
 // The words that change when the site is a public copy rather than the app
 // on this computer: nothing runs here, so the page points at the app.
 function renderHostedCopy() {
-  $("#home-lead").textContent = "Say it in plain words. HuggingFound looks through Hugging Face, the model cards, the community discussions and the wider web, and ranks what fits by what people say about it. Pick one, and HuggingFound on your computer downloads and runs it.";
-  $("#browse .intro h1").textContent = "Open models, running on your computer.";
-  $("#browse .intro .lead").textContent = `This catalogue is scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours, with what people say about each model summed up on its card. Fit and speed are shown for a typical 16 GB laptop. Chat models run through Ollama, images through stable-diffusion.cpp and speech through whisper.cpp, all on your own computer.`;
+  $("#home-lead").textContent = "Say it in plain words. HuggingFound looks through Hugging Face, the model cards, the community discussions and the wider web, and ranks what fits by what people say about it. Pick one, then run it on your own computer with HuggingFound, or rent a GPU by the hour and chat with it right here.";
+  $("#browse .intro h1").textContent = "Open models, on your computer or on a rented GPU.";
+  $("#browse .intro .lead").textContent = `This catalogue is scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours, with what people say about each model summed up on its card. Fit and speed are shown for a typical 16 GB laptop, or for your rented GPU once you have one. Chat models run through Ollama, images through stable-diffusion.cpp and speech through whisper.cpp.`;
   $("#only-runnable-text").textContent = "Only models that run with Ollama, whisper.cpp or stable-diffusion.cpp";
   $(".speed-note").textContent = "Speed lines are rough guesses for a typical laptop without a separate GPU, from the model's size. A GPU or Apple Silicon is several times faster, and the first run is slower while things load.";
 }
@@ -487,6 +488,13 @@ function esc(s) {
 
 // ---- model window -----------------------------------------------------------
 
+// Where the page last chose to run each chat model: "local" or "rented".
+const whereFor = new Map();
+function modelUrl(id) {
+  const where = whereFor.get(id);
+  return `/api/model?id=${encodeURIComponent(id)}${where ? `&where=${where}` : ""}`;
+}
+
 async function openModel(id) {
   const modal = $("#modal");
   modal.hidden = false;
@@ -495,18 +503,20 @@ async function openModel(id) {
   $("#modal-body").innerHTML = "";
   state.open = id;
   try {
-    const { model, plan } = await api.get(`/api/model?id=${encodeURIComponent(id)}`);
+    const { model, plan, choice } = await api.get(modelUrl(id));
     if (state.open !== id) return;
-    renderModel(model, plan);
+    renderModel(model, plan, choice);
   } catch (err) {
     $("#modal-sub").textContent = "";
     $("#modal-body").innerHTML = `<div class="notice bad">${esc(err.message)}</div>`;
   }
 }
 
-function renderModel(model, plan) {
+function renderModel(model, plan, choice = null) {
   state.plan = plan;
   state.model = model;
+  state.choice = choice;
+  if (choice) whereFor.set(model.id, choice.where);
   const sub = [model.author, model.summary, model.gated ? "gated" : ""].filter(Boolean).join(" · ");
   $("#modal-sub").innerHTML = `${esc(sub)} · <a href="${esc(model.url)}" target="_blank" rel="noopener">Open on Hugging Face</a>`;
   const body = $("#modal-body");
@@ -521,7 +531,13 @@ function renderModel(model, plan) {
     return;
   }
 
-  if (plan.remote && plan.runner === "ollama") parts.push(`<div class="notice info">This model is downloaded and run on the chat server at ${esc(plan.remote)}; nothing large comes to this computer. Change this in Settings.</div>`);
+  // A chat model runs here or on a rented GPU; the two buttons switch the
+  // plan, and asking for a GPU without one leads to renting it.
+  if (choice) parts.push(whereHtml(choice));
+  if (choice && state.rentAsk === model.id && choice.where === "local") {
+    parts.push(rentAskHtml(choice, plan));
+  }
+  if (plan.remote && plan.runner === "ollama") parts.push(`<div class="notice info">${choice?.rented && state.chatServer?.rented ? "This model is downloaded to your rented GPU and runs there" : `This model is downloaded and run on the chat server at ${esc(plan.remote)}`}; nothing large comes to ${state.hosted ? "your" : "this"} computer.${state.hosted ? " Your browser talks to the machine directly; what you say to the model does not pass through this site." : " Change this in Settings."}</div>`);
   parts.push(`<div class="spec">
     <div><b>File</b>${plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : esc(plan.file.name)}</div>
     <div><b>Size</b>${plan.file.gb ? plan.file.gb.toFixed(2) + " GB" : "unknown"}</div>
@@ -533,20 +549,20 @@ function renderModel(model, plan) {
   if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "This file is larger than a typical laptop has to spare; it wants 32 GB of memory or a big GPU." : "This file is larger than the memory this computer has to spare. It may still download, but it will be slow or fail to load. A smaller model is a better first try."}</div>`);
   // A chat model too big for here can run on a GPU rented by the hour.
   const tier = plan.fit.level === "no" && plan.runner === "ollama" && !plan.remote ? (state.rentTiers ?? []).find((t) => plan.file.gb <= t.files) : null;
-  if (tier && state.hosted) parts.push(`<p class="muted small">HuggingFound on your computer can rent a ${tier.gb} GB GPU by the hour for a model this size and run it there, with the same chat box and nothing downloaded to your computer.</p>`);
-  else if (tier) {
+  if (tier) {
     const offer = (state.rentOptions ?? []).find((t) => t.gb === tier.gb);
     const price = offer?.pricePerHour != null ? ` (${offer.gpu.name}, ${money(offer.pricePerHour)} an hour)` : "";
-    parts.push(`<div class="notice info">A rented GPU runs it: a ${tier.gb} GB card${price} holds this ${plan.file.gb.toFixed(1)} GB file, billed by the hour, with nothing downloaded here. <button class="ghost" id="rent-from-model">Rent a ${tier.gb} GB GPU</button></div>`);
+    parts.push(`<div class="notice info">A rented GPU runs it: a ${tier.gb} GB card${price} holds this ${plan.file.gb.toFixed(1)} GB file, billed by the hour, with nothing downloaded to ${state.hosted ? "your" : "this"} computer. <button class="ghost" id="rent-from-model">Run it on a rented GPU</button></div>`);
   }
-  if (state.hosted) parts.push(`<h3>How to run it</h3><p class="muted small">These are the steps HuggingFound does for you on your computer, one click each. They can also be done by hand.</p>`);
+  const onSite = state.hosted && !plan.remote;
+  if (onSite) parts.push(`<h3>How to run it</h3><p class="muted small">These are the steps HuggingFound does for you on your computer, one click each. They can also be done by hand.</p>`);
   parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
-  if (state.hosted) parts.push(`<div class="get-app hosted-only"><b>Run HuggingFound on your computer</b> to do these with one click and try the model in a chat, image or transcription box right here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
+  if (onSite) parts.push(`<div class="get-app hosted-only"><b>Run HuggingFound on your computer</b> to do these with one click and try the model in a chat, image or transcription box right here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
 npm install
 npm start</code></div>`);
-  if (state.hosted) parts.push(`<div class="actions"><button class="ghost" id="check-from-model">Ran it? Have Claude check its answer</button></div>`);
-  if (!state.hosted) parts.push(`<div class="try" id="try"></div>`);
+  if (onSite) parts.push(`<div class="actions"><button class="ghost" id="check-from-model">Ran it? Have Claude check its answer</button></div>`);
+  if (!onSite) parts.push(`<div class="try" id="try"></div>`);
   parts.push(`<div class="voices" id="voices"><h3>What people say</h3><p class="muted small">Reading the model card and the community discussions</p></div>`);
   body.innerHTML = parts.join("");
   loadVoices(model).catch((err) => {
@@ -558,13 +574,95 @@ npm start</code></div>`);
     btn.addEventListener("click", () => runStep(model, plan, Number(btn.dataset.index)));
   }
   body.querySelector("#check-from-model")?.addEventListener("click", () => state.openChecker?.(model.name));
-  body.querySelector("#rent-from-model")?.addEventListener("click", () => {
-    state.rentWant = tier.gb;
+  body.querySelector("#rent-from-model")?.addEventListener("click", () => chooseWhere(model.id, "rented"));
+  for (const btn of body.querySelectorAll("[data-where]")) btn.addEventListener("click", () => chooseWhere(model.id, btn.dataset.where));
+  wireRentAsk(body, model, choice);
+  renderTry(model, plan);
+}
+
+// ---- where a chat model runs -------------------------------------------------
+
+function whereHtml(choice) {
+  const here = state.hosted ? "your computer" : "this computer";
+  return `<div class="where" role="group" aria-label="Where to run it">
+    <button class="where-opt ${choice.where === "local" ? "on" : ""}" data-where="local">On ${here}</button>
+    <button class="where-opt ${choice.where === "rented" ? "on" : ""}" data-where="rented">On a rented GPU${choice.rented ? "" : ", by the hour"}</button>
+  </div>`;
+}
+
+// Picking a place re-plans the model for it. Asking for a GPU when none is
+// rented opens the questions that lead to one.
+function chooseWhere(id, where) {
+  const choice = state.choice;
+  if (where === "rented" && !choice?.rented) {
+    state.rentAsk = id;
+    whereFor.set(id, "local");
+  } else {
+    state.rentAsk = null;
+    whereFor.set(id, where);
+  }
+  openModel(id);
+}
+
+function rentAskHtml(choice, plan) {
+  const back = `<button class="ghost" data-where="local">Run it on my computer instead</button>`;
+  const size = choice.tier ? `This ${plan.file?.gb ? `${plan.file.gb.toFixed(1)} GB ` : ""}file wants a ${choice.tier} GB card.` : "This file is bigger than any card on offer.";
+  if (state.hosted && !state.user) {
+    return `<div class="rent-ask"><p><b>Renting a GPU needs an account</b>, so that the machine and your key are yours alone. ${esc(size)}</p><div class="actions"><button class="primary" id="ask-signin">Sign in with Google</button>${back}</div></div>`;
+  }
+  if (choice.hasRunpodKey) {
+    const offer = (state.rentOptions ?? []).find((t) => t.gb === choice.tier);
+    const price = offer?.pricePerHour != null ? ` The cheapest free one is ${esc(offer.gpu.name)} at ${money(offer.pricePerHour)} an hour.` : "";
+    return `<div class="rent-ask"><p><b>No GPU is rented right now.</b> ${esc(size)}${price}</p><div class="actions">${choice.tier ? `<button class="primary" id="ask-rent">Rent a ${choice.tier} GB GPU</button>` : ""}${back}</div></div>`;
+  }
+  return `<div class="rent-ask">
+    <p><b>Do you have a RunPod API key?</b> RunPod rents GPUs by the hour; with a key HuggingFound starts a machine for you, runs the model on it and stops it when you are done. ${esc(size)}</p>
+    <div class="actions"><button class="primary" id="ask-yes">Yes, I have one</button><button class="ghost" id="ask-no">No, not yet</button>${back}</div>
+    <div id="ask-yes-box" hidden>
+      <label class="field"><span>RunPod API key</span><input type="password" id="ask-key" autocomplete="off" placeholder="rpa_..."><small class="muted">Kept ${state.hosted ? "with your account, encrypted" : "in the settings file on this computer"} and sent only to RunPod.</small></label>
+      <div class="actions"><button class="primary" id="ask-save">Save and pick a size</button></div>
+    </div>
+    <div id="ask-no-box" hidden>
+      <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then under Settings, API Keys create a key with read and write access. Come back and click "Yes, I have one". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
+    </div>
+  </div>`;
+}
+
+function wireRentAsk(body, model, choice) {
+  body.querySelector("#ask-signin")?.addEventListener("click", openSignIn);
+  body.querySelector("#ask-rent")?.addEventListener("click", () => {
+    state.rentWant = choice.tier;
     $("#settings").hidden = false;
     renderRental();
     $("#rent").scrollIntoView({ block: "start" });
   });
-  renderTry(model, plan);
+  body.querySelector("#ask-yes")?.addEventListener("click", () => {
+    body.querySelector("#ask-yes-box").hidden = false;
+    body.querySelector("#ask-no-box").hidden = true;
+    body.querySelector("#ask-key").focus();
+  });
+  body.querySelector("#ask-no")?.addEventListener("click", () => {
+    body.querySelector("#ask-no-box").hidden = false;
+    body.querySelector("#ask-yes-box").hidden = true;
+  });
+  body.querySelector("#ask-save")?.addEventListener("click", async () => {
+    const value = body.querySelector("#ask-key").value.trim();
+    if (!value) return;
+    try {
+      await api.post("/api/settings", { RUNPOD_API_KEY: value });
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+    state.rentOptions = null;
+    state.rentWant = choice.tier;
+    await load();
+    if (state.open) openModel(state.open);
+    $("#settings").hidden = false;
+    renderRental();
+    $("#rent").scrollIntoView({ block: "start" });
+    notice("The RunPod key is saved. Pick a size and the machine starts.", "ok");
+  });
 }
 
 async function loadVoices(model) {
@@ -608,7 +706,7 @@ function stepHtml(s, i) {
       <div class="text">${esc(s.text)}</div>
       ${s.command ? `<code>${esc(s.command)}</code>` : ""}
     </div>
-    ${state.hosted ? "" : `<button class="go ${s.done ? "ghost" : "primary"}" data-index="${i}" ${s.done ? "disabled" : ""}>${s.done ? "Done" : "Run this step"}</button>`}
+    ${state.hosted && !state.plan?.remote ? "" : `<button class="go ${s.done ? "ghost" : "primary"}" data-index="${i}" ${s.done ? "disabled" : ""}>${s.done ? "Done" : "Run this step"}</button>`}
   </li>`;
 }
 
@@ -635,7 +733,7 @@ async function runStep(model, plan, index) {
   log.textContent = "";
 
   try {
-    const { id } = await api.post("/api/run", { kind: step.kind, args: step.args ?? {} });
+    const { id } = await api.post("/api/run", { kind: step.kind, args: step.args ?? {}, where: state.choice?.where ?? (plan.remote ? "rented" : "local") });
     const result = await follow(id, (line) => {
       log.textContent += line + "\n";
       log.scrollTop = log.scrollHeight;
@@ -648,7 +746,7 @@ async function runStep(model, plan, index) {
       btn.textContent = "Done";
       btn.className = "go ghost";
       // Re-check the machine so later steps and the try box see the new state.
-      const fresh = await api.get(`/api/model?id=${encodeURIComponent(model.id)}`);
+      const fresh = await api.get(modelUrl(model.id));
       if (state.open === model.id) {
         for (const [i, s] of fresh.plan.steps.entries()) if (s.done) plan.steps[i].done = true;
         for (const [i, s] of plan.steps.entries()) {
@@ -725,19 +823,19 @@ function renderRemove(box, model, plan) {
   const btn = document.createElement("button");
   btn.className = "ghost remove";
   btn.id = "remove-model";
-  btn.textContent = `Remove from this computer (${plan.file.gb ? plan.file.gb.toFixed(1) + " GB" : "frees the download"})`;
+  btn.textContent = `Remove from ${plan.remote ? "the rented GPU" : "this computer"} (${plan.file.gb ? plan.file.gb.toFixed(1) + " GB" : "frees the download"})`;
   wrap.appendChild(btn);
   btn.addEventListener("click", async () => {
-    if (!confirm(`Delete ${model.name} from this computer? The runner stays installed; the model can be downloaded again any time.`)) return;
+    if (!confirm(`Delete ${model.name} from ${plan.remote ? "the rented GPU" : "this computer"}? ${plan.remote ? "It frees that disk; the model" : "The runner stays installed; the model"} can be downloaded again any time.`)) return;
     btn.disabled = true;
     btn.textContent = "Removing";
     try {
       for (const item of plan.remove) await api.post("/api/remove", item);
-      if (!$("#local-body").hidden) renderStorage(["local"]).catch(() => {});
-      const fresh = await api.get(`/api/model?id=${encodeURIComponent(model.id)}`);
+      if (!state.hosted && !$("#local-body").hidden) renderStorage(["local"]).catch(() => {});
+      const fresh = await api.get(modelUrl(model.id));
       if (state.open === model.id) {
-        renderModel(fresh.model, fresh.plan);
-        notice(`${model.name} was removed from this computer.`, "ok");
+        renderModel(fresh.model, fresh.plan, fresh.choice);
+        notice(`${model.name} was removed from ${plan.remote ? "the rented GPU" : "this computer"}.`, "ok");
       }
     } catch (err) {
       btn.disabled = false;
@@ -816,7 +914,7 @@ function renderDiskLine() {
   const st = state.storage;
   const m = state.machine;
   if (state.hosted) {
-    $("#machine-line").textContent = "Fit and speed shown for a typical 16 GB laptop. Run HuggingFound on your computer to see them for your machine.";
+    $("#machine-line").textContent = state.chatServer ? `Chat models run on your rented GPU (${state.chatServer.gpuGb} GB); other kinds are shown for a typical 16 GB laptop.` : "Fit and speed shown for a typical 16 GB laptop. Run HuggingFound on your computer to see them for your machine, or sign in and rent a GPU.";
     return;
   }
   const free = st?.disk?.freeGb != null ? ` ${st.disk.freeGb.toFixed(0)} GB free on disk.` : "";
@@ -863,11 +961,11 @@ function addCheck(anchor, { label, sent, payload, saved = "", onDone = null, aft
   };
   if (saved) show(saved, "Checked earlier by Claude.");
   btn.addEventListener("click", async () => {
-    const creds = state.hosted ? hostedCredentials() : {};
+    const creds = state.hosted ? hostedCredentials() ?? (state.claudeHosted?.saved ? {} : null) : {};
     if (state.hosted && !creds) {
       box.hidden = false;
       body.textContent = "";
-      foot.textContent = `Enter your Anthropic API key above${state.claudeHosted?.devCode ? ", or the dev code" : ""}. Nothing is sent until you click.`;
+      foot.innerHTML = `This needs an Anthropic API key: ${state.user ? "save one in Settings" : "sign in and save one in Settings"}, or enter one in the "Check an answer" panel${state.claudeHosted?.devCode ? ", or the dev code there" : ""}. Nothing is sent until you click.`;
       return;
     }
     if (!state.hosted && !state.claudeReady) {
@@ -1056,7 +1154,7 @@ function renderChat(box, modelName) {
       <small class="muted">Sent before every conversation as the system message; models follow this far more than a request typed into the chat. It sets a persona and rules, and it cannot change what a model was trained to refuse.</small>
     </details>
     <div class="chat">
-      <div class="chat-tools"><span class="muted small">${chat.messages.length ? "The conversation is kept on this computer until you start a new one." : `Ask anything; the answer comes from ${esc(modelName)} on this computer.`}</span><button class="ghost" id="chat-clear">New chat</button></div>
+      <div class="chat-tools"><span class="muted small">${chat.messages.length ? "The conversation is kept in this browser until you start a new one." : `Ask anything; the answer comes from ${esc(modelName)} on ${state.plan?.remote ? "the rented GPU" : "this computer"}.`}</span><span class="tools-row"><button class="ghost" id="chat-download" ${chat.messages.length ? "" : "hidden"}>Download</button><button class="ghost" id="chat-clear">New chat</button></span></div>
       <div class="messages" id="messages"></div>
       <div class="chat-input">
         <textarea id="chat-text" placeholder="Type a message" rows="2"></textarea>
@@ -1064,20 +1162,41 @@ function renderChat(box, modelName) {
       </div>
     </div>`;
   const list = $("#messages");
-  // Each finished answer can be checked by Claude; the question is the user turn before it.
+  const questionFor = (m) => {
+    const at = chat.messages.indexOf(m);
+    return chat.messages.slice(0, at).reverse().find((x) => x.role === "user")?.content ?? "";
+  };
+  // Each finished answer can be checked by Claude, or handed to Claude or
+  // another model to be improved; the question is the user turn before it.
   const checkFor = (el, m) => {
-    addCheck(el, {
+    if (m.chain?.length) {
+      const chain = document.createElement("div");
+      chain.className = "chain";
+      chain.textContent = chainText(modelName, m.chain);
+      el.after(chain);
+      el = chain;
+    }
+    el = addCheck(el, {
       label: "Ask Claude to check this",
       sent: "your question and this answer",
       saved: m.review ?? "",
-      payload: () => {
-        const at = chat.messages.indexOf(m);
-        const question = chat.messages.slice(0, at).reverse().find((x) => x.role === "user")?.content ?? "";
-        return { kind: "text", model: modelName, question, answer: m.content, system: chat.messages[0]?.role === "system" ? chat.messages[0].content : "" };
-      },
+      payload: () => ({ kind: "text", model: modelName, question: questionFor(m), answer: m.content, system: chat.messages[0]?.role === "system" ? chat.messages[0].content : "" }),
       onDone: (text) => {
         m.review = text;
         saveChat(modelName, chat);
+      },
+    });
+    addImprove(el, {
+      kind: "text",
+      current: modelName,
+      context: () => ({ question: questionFor(m), answer: m.content, system: chat.messages[0]?.role === "system" ? chat.messages[0].content : "" }),
+      onUse: (text, by, request) => {
+        const revised = { role: "assistant", content: text, chain: [...(m.chain ?? []), { by, request }] };
+        chat.messages.push(revised);
+        saveChat(modelName, chat);
+        const shown = addMsg("assistant", text);
+        checkFor(shown, revised);
+        list.scrollTop = list.scrollHeight;
       },
     });
   };
@@ -1119,6 +1238,7 @@ function renderChat(box, modelName) {
     messages.push({ role: "user", content: text });
     saveChat(modelName, chat);
     addMsg("user", text);
+    $("#chat-download").hidden = false;
     const out = addMsg("assistant", "");
     out.id = "chat-live";
     out.classList.add("pending");
@@ -1127,7 +1247,7 @@ function renderChat(box, modelName) {
     $("#chat-send").disabled = true;
     let reply = "";
     try {
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: modelName, messages: messages.map(({ role, content }) => ({ role, content })) }) });
+      const res = await chatRequest({ model: modelName, messages: messages.map(({ role, content }) => ({ role, content })) });
       if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -1170,6 +1290,14 @@ function renderChat(box, modelName) {
     }
   };
   $("#chat-send").addEventListener("click", send);
+  $("#chat-download").addEventListener("click", () => {
+    const lines = [`# ${modelName}`, ""];
+    for (const m of chat.messages) {
+      if (m.role === "system") lines.push(`_Instructions: ${m.content}_`, "");
+      else lines.push(`**${m.role === "user" ? "You" : m.chain?.length ? chainText(modelName, m.chain) : modelName}:**`, "", m.content, "");
+    }
+    saveText(`${modelName.replace(/[^\w.-]+/g, "-")}-conversation.md`, lines.join("\n"));
+  });
   $("#chat-clear").addEventListener("click", () => {
     if (chat.busy) return;
     chat.messages.length = 0;
@@ -1183,6 +1311,234 @@ function renderChat(box, modelName) {
       send();
     }
   });
+}
+
+// On the hosted site the browser talks to the rented GPU itself, so what is
+// said to the model never passes through the site; on a computer the app's
+// own server relays to Ollama.
+function chatRequest(body) {
+  const direct = state.hosted && state.chatServer?.direct && state.chatServer.url;
+  // The site is told only that the machine is in use, so it is not stopped as idle mid-conversation.
+  if (direct) api.post("/api/rent/touch", {}).catch(() => {});
+  return fetch(direct ? `${state.chatServer.url}/api/chat` : "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }) });
+}
+
+// Hands the browser a file to save: a conversation, a transcript.
+function saveText(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// "Made by A, revised by Claude (shorter), edited by B (darker sky)".
+function chainText(first, chain) {
+  return [`Made by ${first}`, ...chain.map((c) => `${c.verb ?? "revised"} by ${c.by}${c.request ? ` (${c.request})` : ""}`)].join(", ");
+}
+
+// Whether Claude can be asked right now: a key in Settings, a saved key on
+// the account, or one typed into the hosted checker.
+function claudeAvailable() {
+  if (!state.hosted) return Boolean(state.claudeReady);
+  return Boolean(state.claudeHosted?.saved) || Boolean(hostedCredentials());
+}
+
+// ---- improving an output ------------------------------------------------------
+// An answer or a picture can be handed on with a request for a change: to
+// Claude, or to another model HuggingFound runs. Claude revises text itself
+// and, for a picture, writes the edit for an image model that paints over
+// it; another chat model revises text; another image model repaints. The
+// chain of hands is kept with the result. This is how a model that cannot
+// do something passes its work to one that can.
+
+function textHelpers(current) {
+  const out = [];
+  if (claudeAvailable()) out.push({ id: "claude", label: "Claude (revises the answer)" });
+  for (const m of state.runners?.ollama?.models ?? []) if (m !== current) out.push({ id: `model:${m}`, label: `${m}, another model on ${state.plan?.remote ? "the rented GPU" : "this computer"}` });
+  return out;
+}
+
+// Image models downloaded here, for repainting a picture (img2img). Only
+// this computer has them; a rented GPU runs chat models.
+function downloadedImageModels() {
+  if (state.hosted) return [];
+  const sd = new Set([...(state.models ?? []), ...(state.picks ?? [])].filter((m) => (m.runner?.id ?? m.runner) === "sd").map((m) => m.id));
+  return (state.runners?.models ?? [])
+    .map((key) => {
+      const parts = key.split("/");
+      return { repo: parts.slice(0, 2).join("/"), file: parts.slice(2).join("/") };
+    })
+    .filter((f) => sd.has(f.repo) && /\.(safetensors|gguf|ckpt)$/i.test(f.file) && !f.file.includes("/"));
+}
+
+function imageHelpers() {
+  const out = [];
+  if (claudeAvailable()) out.push({ id: "claude", label: "Claude (looks at it and writes the edit for an image model)" });
+  for (const f of downloadedImageModels()) out.push({ id: `image:${f.repo}|${f.file}`, label: `${f.file} (paints over it)` });
+  return out;
+}
+
+// Adds "Improve this" after `anchor`. `context()` gives what the helper
+// needs; `onUse(text, by, request)` takes a revised answer; `onImage(file,
+// by, request)` takes an edited picture.
+function addImprove(anchor, { kind, current, context, onUse = null, onImage = null }) {
+  const helpers = kind === "text" ? textHelpers(current) : imageHelpers();
+  const wrap = document.createElement("div");
+  wrap.className = "improve-wrap";
+  const choices = helpers.length ? helpers.map((h) => `<option value="${esc(h.id)}">${esc(h.label)}</option>`).join("") : `<option value="">${state.hosted ? "Sign in and save an Anthropic key, or download another model, to have someone improve this" : kind === "text" ? "Add an Anthropic key in Settings, or download a second chat model, to have someone improve this" : "Add an Anthropic key in Settings, or download an image model, to have someone improve this"}</option>`;
+  wrap.innerHTML = `<button class="ghost improve-go">Improve this</button>
+    <div class="improve" hidden>
+      <textarea class="improve-request" rows="2" placeholder="${kind === "text" ? "What should change? For example: make it shorter, fix the loop, answer in French" : "What should change? For example: make the sky darker, remove the second person, turn it into a watercolour"}"></textarea>
+      <div class="row"><label class="muted small">Done by</label><select class="improve-by" ${helpers.length ? "" : "disabled"}>${choices}</select><button class="primary improve-run" ${helpers.length ? "" : "disabled"}>Go</button></div>
+      <div class="review" hidden><div class="review-head"></div><div class="review-body"></div><div class="review-foot muted small"></div></div>
+    </div>`;
+  anchor.after(wrap);
+  const form = wrap.querySelector(".improve");
+  const btn = wrap.querySelector(".improve-go");
+  const box = wrap.querySelector(".review");
+  const head = wrap.querySelector(".review-head");
+  const body = wrap.querySelector(".review-body");
+  const foot = wrap.querySelector(".review-foot");
+  btn.addEventListener("click", () => {
+    form.hidden = !form.hidden;
+    if (!form.hidden) wrap.querySelector(".improve-request").focus();
+  });
+  wrap.querySelector(".improve-run").addEventListener("click", async () => {
+    const request = wrap.querySelector(".improve-request").value.trim();
+    const by = wrap.querySelector(".improve-by").value;
+    if (!request || !by) return;
+    const run = wrap.querySelector(".improve-run");
+    run.disabled = true;
+    box.hidden = false;
+    body.textContent = "";
+    foot.innerHTML = "";
+    try {
+      if (by === "claude") await improveWithClaude({ kind, request, context: context(), head, body, foot, onUse, onImage });
+      else if (by.startsWith("model:")) await improveWithModel({ model: by.slice(6), request, context: context(), head, body, foot, onUse });
+      else if (by.startsWith("image:")) {
+        const [repo, file] = by.slice(6).split("|");
+        await repaint({ repo, file, request, context: context(), prompt: `${context().prompt}, ${request}`, negative: context().negative, strength: 0.55, head, body, foot, onImage });
+      }
+    } catch (err) {
+      foot.textContent = `This did not finish: ${err.message}`;
+    } finally {
+      run.disabled = false;
+    }
+  });
+  return wrap;
+}
+
+// Reads a streamed NDJSON reply line by line.
+async function readLines(res, onLine) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const line of lines) if (line.trim()) onLine(JSON.parse(line));
+  }
+}
+
+function useButton(label, onClick) {
+  const b = document.createElement("button");
+  b.className = "ghost";
+  b.textContent = label;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+async function improveWithClaude({ kind, request, context, head, body, foot, onUse, onImage }) {
+  const creds = state.hosted ? hostedCredentials() ?? {} : {};
+  head.textContent = kind === "text" ? "Claude's revision" : "Claude's edit, for an image model";
+  foot.textContent = `Sent to Anthropic: ${kind === "text" ? "your question, the answer and your request" : "the picture, its description and your request"}.`;
+  const payload = kind === "text" ? { kind: "text", mode: "edit", request, model: context.model, question: context.question, answer: context.answer, system: context.system } : { kind: "image", mode: "edit", request, model: context.model, file: context.file, prompt: context.prompt, negative: context.negative };
+  const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify(payload) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+  let text = "";
+  let end = null;
+  await readLines(res, (j) => {
+    if (j.error) throw new Error(j.error);
+    if (j.text) {
+      text += j.text;
+      body.textContent = text;
+    }
+    if (j.done) end = j;
+  });
+  if (end?.declined) {
+    body.textContent = "";
+    foot.textContent = end.note || "Claude declined.";
+    return;
+  }
+  foot.textContent = `By ${end?.model ?? "Claude"}. ${end?.note ?? ""}`.trim();
+  if (kind === "text" && onUse && text.trim()) {
+    foot.prepend(useButton("Use this as the answer", () => onUse(text.trim(), "Claude", request)));
+    return;
+  }
+  if (kind === "image") {
+    const description = /^Description:\s*(.+)$/m.exec(text)?.[1]?.trim();
+    const avoid = /^Avoid:\s*(.+)$/m.exec(text)?.[1]?.trim() ?? "";
+    const keep = Number(/^Keep:\s*(\d+)/m.exec(text)?.[1]);
+    if (!description) return;
+    const strength = Number.isFinite(keep) ? Math.min(0.9, Math.max(0.1, 1 - keep / 100)) : 0.55;
+    const models = downloadedImageModels();
+    for (const f of models) {
+      foot.prepend(useButton(`Edit with ${f.file}`, () => repaint({ repo: f.repo, file: f.file, request, context, prompt: description, negative: avoid, strength, head, body, foot, onImage, planned: true })));
+    }
+    foot.prepend(useButton("Use this description for a new picture", () => {
+      if ($("#image-prompt")) $("#image-prompt").value = description;
+      if ($("#image-negative") && avoid) $("#image-negative").value = avoid;
+      $("#image-prompt")?.focus();
+    }));
+    if (!models.length) foot.append(" No image model is downloaded here to do the edit; the description above works for a new picture.");
+  }
+}
+
+// Another chat model revises the answer: the same chat call, with the
+// first model's answer and the request laid out for it.
+async function improveWithModel({ model, request, context, head, body, foot, onUse }) {
+  head.textContent = `${model}'s revision`;
+  foot.textContent = `${model} is working`;
+  const messages = [
+    { role: "system", content: "You revise answers written by another assistant. The user shows their original request, the answer they got, and what should change. Make that change, keep everything else, and reply with only the revised answer, complete and ready to use in place of the old one. No preamble or commentary." },
+    { role: "user", content: `My request was:\n\n${context.question || "(not kept)"}\n\nThe answer I got:\n\n${context.answer}\n\nChange this: ${request}\n\nReply with only the revised answer.` },
+  ];
+  const res = await chatRequest({ model, messages });
+  if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}. Is ${model} downloaded?`);
+  let text = "";
+  await readLines(res, (j) => {
+    if (j.error) throw new Error(j.error);
+    text += j.message?.content ?? "";
+    body.textContent = text;
+  });
+  foot.textContent = `By ${model}.`;
+  if (onUse && text.trim()) foot.prepend(useButton("Use this as the answer", () => onUse(text.trim(), model, request)));
+}
+
+// An image model paints over the picture from a description (img2img),
+// on this computer, and the result lands under the original.
+async function repaint({ repo, file, request, context, prompt, negative, strength, head, body, foot, onImage, planned = false }) {
+  head.textContent = `Edited by ${file}`;
+  body.textContent = "";
+  const log = document.createElement("pre");
+  log.className = "log";
+  body.appendChild(log);
+  foot.textContent = planned ? `Painting over the picture from Claude's description, keeping about ${Math.round((1 - strength) * 100)}% of it.` : "Painting over the picture.";
+  const { id } = await api.post("/api/run", { kind: "edit-image", args: { repo, file, init: context.file, prompt, negative, strength, quality: "default" } });
+  const result = await follow(id, (line) => {
+    log.textContent += line + "\n";
+    log.scrollTop = log.scrollHeight;
+  });
+  if (result.status !== "done" || !result.result) throw new Error("the edit did not finish");
+  foot.textContent = `By ${file}.`;
+  onImage?.(result.result, file, request, { prompt, negative, planned });
 }
 
 function addMsg(role, text) {
@@ -1259,34 +1615,52 @@ function renderImage(box, t) {
         log.scrollTop = log.scrollHeight;
       });
       if (result.status === "done" && result.result) {
-        $("#image-out").innerHTML = `<img class="result-image" src="/output/${esc(result.result)}" alt="${esc(prompt)}"><p class="muted small">Saved to ~/HuggingFound/output/${esc(result.result)}</p>`;
-        addCheck($("#image-out").lastElementChild, {
-          label: "Ask Claude to check this picture",
-          sent: "this picture and your description",
-          payload: () => ({ kind: "image", model: t.repo, file: result.result, prompt, negative }),
-          // Claude ends with a better description and avoid list; one click tries them.
-          after: (text, foot) => {
-            const better = /^Description:\s*(.+)$/m.exec(text)?.[1]?.trim();
-            const avoid = /^Avoid:\s*(.+)$/m.exec(text)?.[1]?.trim();
-            if (!better) return;
-            const use = document.createElement("button");
-            use.className = "ghost";
-            use.id = "use-suggestion";
-            use.textContent = "Use Claude's suggestion";
-            use.addEventListener("click", () => {
-              $("#image-prompt").value = better;
-              if (avoid) $("#image-negative").value = avoid;
-              $("#image-prompt").focus();
-            });
-            foot.prepend(use);
-          },
-        });
+        $("#image-out").innerHTML = "";
+        showPicture($("#image-out"), { file: result.result, prompt, negative, model: t.repo, madeBy: t.file, chain: [] });
       }
     } catch (err) {
       log.textContent += `Could not start: ${err.message}\n`;
     } finally {
       $("#image-go").disabled = false;
     }
+  });
+}
+
+// A picture with its tools: download, Claude's check, and Improve, which
+// hands it to Claude or to an image model that paints over it. An edited
+// picture appears underneath with the chain of hands that made it.
+function showPicture(into, { file, prompt, negative, model, madeBy, chain }) {
+  const card = document.createElement("div");
+  card.className = "image-card";
+  card.innerHTML = `<img class="result-image" src="/output/${esc(file)}" alt="${esc(prompt)}">
+    ${chain.length ? `<div class="chain">${esc(chainText(madeBy, chain))}</div>` : ""}
+    <p class="muted small tools-row"><span>Saved to ~/HuggingFound/output/${esc(file)}.</span><a class="button" href="/output/${esc(file)}" download="${esc(file)}">Download</a></p>`;
+  into.appendChild(card);
+  const anchor = card.lastElementChild;
+  const checked = addCheck(anchor, {
+    label: "Ask Claude to check this picture",
+    sent: "this picture and your description",
+    payload: () => ({ kind: "image", model, file, prompt, negative }),
+    // Claude ends with a better description and avoid list; one click tries them.
+    after: (text, foot) => {
+      const better = /^Description:\s*(.+)$/m.exec(text)?.[1]?.trim();
+      const avoid = /^Avoid:\s*(.+)$/m.exec(text)?.[1]?.trim();
+      if (!better) return;
+      foot.prepend(useButton("Use Claude's suggestion", () => {
+        $("#image-prompt").value = better;
+        if (avoid) $("#image-negative").value = avoid;
+        $("#image-prompt").focus();
+      }));
+    },
+  });
+  addImprove(checked, {
+    kind: "image",
+    context: () => ({ file, prompt, negative, model }),
+    onImage: (edited, by, request, details) => {
+      const next = [...chain, { by, request, verb: "edited" }];
+      if (details.planned) next.splice(-1, 0, { by: "Claude", request, verb: "planned" });
+      showPicture(into, { file: edited, prompt: details.prompt, negative: details.negative, model, madeBy, chain: next });
+    },
   });
 }
 
@@ -1315,7 +1689,8 @@ function renderTranscribe(box, t) {
       });
       if (result.status === "done" && result.result) {
         const r = await api.get(`/api/result?file=${encodeURIComponent(result.result)}`);
-        $("#audio-out").innerHTML = `<div class="transcript">${esc(r.text.trim() || "(no speech found)")}</div>`;
+        $("#audio-out").innerHTML = `<div class="transcript">${esc(r.text.trim() || "(no speech found)")}</div><p class="tools-row"><button class="ghost" id="transcript-download">Download</button></p>`;
+        $("#transcript-download").addEventListener("click", () => saveText(`${file.name.replace(/\.[^.]+$/, "")}-transcript.txt`, r.text));
       }
     } catch (err) {
       log.textContent += `Could not transcribe: ${err.message}\n`;
@@ -1340,7 +1715,7 @@ function renderRunners() {
 
 $("#open-settings").addEventListener("click", () => {
   $("#settings").hidden = false;
-  renderStorage($("#local-body").hidden ? ["settings"] : ["local", "settings"]).catch(() => ($("#storage-total").textContent = "Could not read the models folder."));
+  if (!state.hosted) renderStorage($("#local-body").hidden ? ["settings"] : ["local", "settings"]).catch(() => ($("#storage-total").textContent = "Could not read the models folder."));
 });
 $("#close-settings").addEventListener("click", () => ($("#settings").hidden = true));
 $("#close-modal").addEventListener("click", () => {
@@ -1357,6 +1732,7 @@ document.addEventListener("keydown", (e) => {
     $("#modal").hidden = true;
     $("#settings").hidden = true;
     $("#checker").hidden = true;
+    $("#signin").hidden = true;
     state.open = null;
   }
 });
@@ -1407,6 +1783,97 @@ $("#clear-chat-server").addEventListener("click", async () => {
   if (state.open) openModel(state.open);
 });
 
+// ---- accounts on the hosted site -----------------------------------------------
+// Signing in keeps the person's keys and their rented machine with an
+// account; nothing they say to a model is kept. On a computer there is no
+// account: the app is its owner's.
+
+function renderAccount() {
+  const user = state.user;
+  if (!state.hosted) {
+    $("#open-settings").hidden = false;
+    return;
+  }
+  $("#sign-in").hidden = Boolean(user) || !state.auth?.ready;
+  $("#open-settings").hidden = !user;
+  const box = $("#account");
+  box.hidden = !user;
+  $("#account-line").textContent = user ? `Signed in as ${user.email}.` : "";
+  if (!user) {
+    box.innerHTML = "";
+    return;
+  }
+  box.innerHTML = `${user.picture ? `<img class="avatar" src="${esc(user.picture)}" alt="" referrerpolicy="no-referrer">` : ""}<span class="muted small">${esc(user.name || user.email)}</span><button class="ghost" id="sign-out">Sign out</button>`;
+  box.querySelector("#sign-out").addEventListener("click", async () => {
+    await api.post("/api/auth/logout", {});
+    $("#settings").hidden = true;
+    await load();
+  });
+}
+
+function openSignIn() {
+  $("#signin").hidden = false;
+  $("#signin-error").textContent = "";
+  mountGoogle();
+}
+
+// Google's own button, drawn by its script, which is loaded only when the
+// sign-in window opens. Picking an account hands over an ID token; the
+// server checks it and starts the session.
+function mountGoogle() {
+  const host = $("#google-button");
+  if (!state.auth?.google) {
+    host.innerHTML = `<p class="muted small">Sign-in is not set up on this site yet; the owner has to add a Google client id.</p>`;
+    return;
+  }
+  const ready = () => {
+    if (!window.google?.accounts?.id) return;
+    window.google.accounts.id.initialize({ client_id: state.auth.google, callback: onGoogleCredential });
+    host.innerHTML = "";
+    window.google.accounts.id.renderButton(host, { theme: "outline", size: "large", width: 300, text: "continue_with" });
+  };
+  if (window.google?.accounts?.id) return ready();
+  if (!state.gsi) {
+    state.gsi = document.createElement("script");
+    state.gsi.src = "https://accounts.google.com/gsi/client";
+    state.gsi.async = true;
+    state.gsi.defer = true;
+    document.head.appendChild(state.gsi);
+  }
+  state.gsi.addEventListener("load", ready, { once: true });
+}
+
+async function onGoogleCredential(response) {
+  try {
+    await api.post("/api/auth/google", { credential: response.credential });
+  } catch (err) {
+    $("#signin-error").textContent = err.message;
+    return;
+  }
+  $("#signin").hidden = true;
+  await load();
+  notice("Signed in. Your keys and your rented GPU are kept with your account; what you say to models is not.", "ok");
+  if (state.open) openModel(state.open);
+}
+
+$("#sign-in").addEventListener("click", openSignIn);
+$("#close-signin").addEventListener("click", () => ($("#signin").hidden = true));
+$("#signin").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.hidden = true;
+});
+$("#delete-account").addEventListener("click", async () => {
+  if (!confirm("Delete your account? The keys, the rented GPU and every model on it are deleted; nothing else was kept.")) return;
+  try {
+    await api.post("/api/account/delete", {});
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  $("#settings").hidden = true;
+  await load();
+  notice("Your account was deleted.", "ok");
+});
+
 // ---- a GPU rented by the hour ----------------------------------------------
 
 function money(n) {
@@ -1441,10 +1908,11 @@ async function loadRentOptions() {
   }
   state.rentOptionsLoading = false;
   renderRental();
+  // A model window asking about a GPU can now name the card and its price.
+  if (state.open && state.rentAsk === state.open) openModel(state.open);
 }
 
 function renderRental() {
-  if (state.hosted) return;
   const r = state.rental;
   renderRentBar(r);
   const panel = $("#rent-panel");
@@ -1455,7 +1923,7 @@ function renderRental() {
     const cost = r.costPerHour != null ? `${money(r.costPerHour)} an hour. ` : "";
     const time = running && r.uptimeSeconds ? `Running for ${minutesText(r.uptimeSeconds)}${r.spent != null ? `, about ${money(r.spent)} this time` : ""}. ` : "";
     const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for a small charge a day; Start brings it back in a minute or two, Delete removes it and the models.` : "";
-    const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a chat or download${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
+    const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a ${state.hosted ? "download" : "chat or download"}${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.${state.hosted ? " Chats go straight from your browser to the machine, so the site cannot see them; each message you send counts as use." : ""}` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
     panel.innerHTML = `<div class="rent-card">
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
@@ -1471,7 +1939,7 @@ function renderRental() {
         <input type="number" id="rent-idle" min="0" max="1440" step="1" value="${Number(r.idleMinutes ?? 30)}">
         <small class="muted">0 keeps it running until you stop it. A download in progress always keeps it awake.</small>
       </label>
-      <label class="check"><input type="checkbox" id="rent-quit" ${state.stopOnQuit ? "checked" : ""}> Stop it when HuggingFound quits</label>
+      ${state.hosted ? "" : `<label class="check"><input type="checkbox" id="rent-quit" ${state.stopOnQuit ? "checked" : ""}> Stop it when HuggingFound quits</label>`}
       <div class="actions"><button class="ghost" id="rent-save-idle">Save</button></div>
     </div>`;
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
@@ -1479,7 +1947,7 @@ function renderRental() {
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
     panel.querySelector("#rent-save-idle").addEventListener("click", async () => {
       try {
-        await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked });
+        await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), ...(state.hosted ? {} : { RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked }) });
       } catch (err) {
         alert(err.message);
         return;
@@ -1538,8 +2006,19 @@ function renderRental() {
     }
     notice("A GPU is being rented; chat models now point at it. It usually answers within a few minutes.", "ok");
     await load();
-    if (state.open) openModel(state.open);
+    afterRentalChange();
   });
+}
+
+// The open model window follows the machine: once one is rented, the plan
+// that asked for it switches to it.
+function afterRentalChange() {
+  if (!state.open) return;
+  if (state.rental?.rented && state.chatServer) {
+    whereFor.set(state.open, "rented");
+    state.rentAsk = null;
+  }
+  openModel(state.open);
 }
 
 async function rentAction(action, question) {
@@ -1551,7 +2030,7 @@ async function rentAction(action, question) {
     return;
   }
   await load();
-  if (state.open) openModel(state.open);
+  afterRentalChange();
 }
 
 // The bar under the header: a machine is being paid for, and here is how to stop it.

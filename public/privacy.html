@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HuggingFound privacy</title>
+  <link rel="icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .prose { max-width: 720px; margin: 32px auto 64px; font-size: 16px; line-height: 1.55; }
+    .prose h1 { margin-bottom: 6px; }
+    .prose h2 { margin-top: 28px; font-size: 20px; }
+    .prose table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+    .prose th, .prose td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .prose th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="/"><img src="icon.svg" alt="" width="28" height="28"><span>HuggingFound</span></a>
+      <nav class="views"><a class="view-link" href="/">Search</a></nav>
+      <div class="top-right"></div>
+    </div>
+  </header>
+  <main class="wrap prose">
+    <h1>What this site can and cannot see</h1>
+    <p class="muted">HuggingFound is built so that what you do with a model stays between you and the model. This page says exactly what reaches the site, what is kept, and what never arrives.</p>
+
+    <h2>Never kept, never logged</h2>
+    <ul>
+      <li><b>What you search for.</b> A search is answered by asking Hugging Face and the other sources and ranking the results. The words are not written to a log or a file.</li>
+      <li><b>What you say to a model, and what it answers.</b> With a rented GPU, your browser talks to that machine directly over its own address. The conversation does not pass through this site. The transcript is kept in your browser only, and "New chat" clears it. Downloading a conversation saves it to your computer.</li>
+      <li><b>Pictures and recordings.</b> Image and speech models run in HuggingFound on your own computer, where files stay in your own folder. The site holds no uploads and no generated pictures.</li>
+      <li><b>Claude's checks and revisions.</b> When you ask Claude to check or improve something, that one answer or picture goes from your browser through this site to Anthropic and back, in one request, with your own key. It is not written down here.</li>
+    </ul>
+
+    <h2>What an account keeps</h2>
+    <table>
+      <tr><th>Kept</th><th>Why</th><th>How</th></tr>
+      <tr><td>Your email, name and picture from Google</td><td>To know which account is yours</td><td>In a file for your account on the server's disk</td></tr>
+      <tr><td>Your RunPod key</td><td>To rent, stop and delete your GPU for you</td><td>Encrypted at rest with a secret only the server holds; sent only to RunPod</td></tr>
+      <tr><td>Your Anthropic key, if you save one</td><td>So Claude's checks need no retyping</td><td>Encrypted at rest; sent only to Anthropic, with each check</td></tr>
+      <tr><td>The rented machine's id and settings</td><td>To show its cost, stop it when idle and start it again</td><td>Encrypted at rest</td></tr>
+    </table>
+    <p>Nothing else is kept. There is no record of which models you opened, downloaded or talked to. Deleting your account (Settings, "Delete my account") deletes the keys, the rented machine and every model on it.</p>
+
+    <h2>What the site's owner can see</h2>
+    <p>The owner runs the server and can read its disk, so in principle the encrypted account files and the server's secret are both within reach. There is no interface for reading them and no reason to. Everything that matters most, what you ask and what you get back, is designed never to reach the server at all, so there is nothing of it to read.</p>
+
+    <h2>The rented machine</h2>
+    <p>Ollama on your rented GPU answers at a long random address that RunPod makes for the machine. Only your browser and this site know it; it is never shown to anyone else and it stops working when the machine is deleted. RunPod sees the machine and the traffic to it as any cloud provider does. Models you download onto it stay on its disk until you delete them or the machine.</p>
+
+    <h2>Running HuggingFound on your own computer</h2>
+    <p>The app on your computer talks to no site but Hugging Face and the other sources it searches, RunPod if you rent a GPU, and Anthropic if you ask Claude. Keys live in a settings file in your own folder.</p>
+  </main>
+</body>
+</html>

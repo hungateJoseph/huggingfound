@@ -122,7 +122,7 @@ test("renting makes a machine with Ollama on it and points the chat server at it
   assert.equal(saved.OLLAMA_SERVER, ollama.url);
   assert.equal(saved.OLLAMA_SERVER_GB, "48");
   const s = await json("/api/state");
-  assert.deepEqual(s.chatServer, { url: ollama.url, gpuGb: 48, comfortableGb: 43, rented: true });
+  assert.deepEqual(s.chatServer, { url: ollama.url, gpuGb: 48, comfortableGb: 43, rented: true, direct: false });
   assert.equal(s.rental.id, r.id);
   assert.equal(s.rental.status, "PROVISIONING");
   assert.equal((await post("/api/rent", { gb: 24 })).status, 409, "one machine at a time");

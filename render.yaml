@@ -34,6 +34,21 @@ services:
         sync: false
       - key: REVIEW_DEV_CODE
         sync: false
+      # Sign in with Google, for accounts that keep a visitor's own keys and
+      # their rented GPU. The client id comes from a Google Cloud OAuth
+      # client whose authorised JavaScript origins are the site's addresses
+      # (DEPLOY.md, phase 5). Blank means nobody can sign in.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+
+      # --- Generated once by Render, then kept stable ----------------------
+      # SESSION_SECRET signs the sign-in cookie; changing it signs everyone
+      # out. ACCOUNTS_SECRET encrypts the keys in the account files; changing
+      # it makes every saved key unreadable, so let Render own both.
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ACCOUNTS_SECRET
+        generateValue: true
 
       # --- Fixed values ----------------------------------------------------
       - key: HUGGINGFOUND_HOSTED
@@ -44,3 +59,5 @@ services:
         value: "12"
       - key: PORT
         value: "4188"
+      - key: SITE_ORIGIN # the address a rented GPU's Ollama accepts browser requests from
+        value: https://huggingfound.com

@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,18 +19,13 @@ export const OUTPUT_DIR = path.join(DATA_DIR, "output");
 export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 export const OLLAMA_URL = "http://127.0.0.1:11434";
 
-// Chat models can run on another machine: a rented GPU box reached through
-// an SSH tunnel or a private network. When a chat server is set, every
-// Ollama call goes there and nothing is installed or downloaded here.
-let chatServer = "";
-export function setChatServer(url) {
-  chatServer = url || "";
-}
-export function chatServerUrl() {
-  return chatServer;
-}
-export function ollamaUrl() {
-  return chatServer || OLLAMA_URL;
+// Chat models can run on another machine: a rented GPU reached through
+// RunPod's proxy, or a box behind an SSH tunnel. Every Ollama call takes the
+// address to use; empty means the Ollama on this computer. The address is
+// handed in per request, since on the hosted site each signed-in person
+// has a machine of their own.
+export function ollamaUrl(remote = "") {
+  return remote || OLLAMA_URL;
 }
 
 for (const d of [DATA_DIR, MODELS_DIR, BIN_DIR, OUTPUT_DIR, UPLOAD_DIR]) fs.mkdirSync(d, { recursive: true });
@@ -73,15 +69,15 @@ const EXE = process.platform === "win32" ? ".exe" : "";
 const sdBinary = () => localBinary("sd", [`sd-cli${EXE}`, `sd${EXE}`]);
 const whisperBinary = () => localBinary("whisper", [`whisper-cli${EXE}`]);
 
-export async function detect(fetchImpl = fetch) {
+export async function detect(fetchImpl = fetch, remote = "") {
   // With a chat server there is nothing to install here: it counts as
   // installed, and as running when it answers.
-  const ollamaPath = chatServer ? "remote" : ollamaBinary();
+  const ollamaPath = remote ? "remote" : ollamaBinary();
   let ollamaRunning = false;
   let ollamaModels = [];
   if (ollamaPath) {
     try {
-      const res = await fetchImpl(`${ollamaUrl()}/api/tags`, { signal: AbortSignal.timeout(chatServer ? 4000 : 1500) });
+      const res = await fetchImpl(`${ollamaUrl(remote)}/api/tags`, { signal: AbortSignal.timeout(remote ? 4000 : 1500) });
       if (res.ok) {
         ollamaRunning = true;
         ollamaModels = ((await res.json()).models ?? []).map((m) => m.name);
@@ -94,7 +90,7 @@ export async function detect(fetchImpl = fetch) {
     brew: Boolean(which("brew")),
     winget: process.platform === "win32" && Boolean(which("winget")),
     ffmpeg: Boolean(which("ffmpeg")),
-    ollama: { installed: Boolean(ollamaPath), running: ollamaRunning, models: ollamaModels, remote: chatServer },
+    ollama: { installed: Boolean(ollamaPath), running: ollamaRunning, models: ollamaModels, remote },
     whisper: { installed: Boolean(whisperBinary()) },
     sd: { installed: Boolean(sdBinary()), server: Boolean(sdServerBinary()), loaded: imageServerState() },
     models: downloadedFiles(),
@@ -122,7 +118,7 @@ export function downloadedFiles() {
 
 // Everything taking up space: files in the models folder with their sizes,
 // and the models Ollama holds in its own store.
-export async function storage(fetchImpl = fetch) {
+export async function storage(fetchImpl = fetch, remote = "") {
   const files = downloadedFiles().map((key) => {
     const parts = key.split("/");
     const repo = parts.slice(0, 2).join("/");
@@ -137,14 +133,14 @@ export async function storage(fetchImpl = fetch) {
   }).filter((f) => !/^Modelfile$/.test(f.file));
   let ollama = [];
   try {
-    const res = await fetchImpl(`${ollamaUrl()}/api/tags`, { signal: AbortSignal.timeout(chatServer ? 4000 : 1500) });
+    const res = await fetchImpl(`${ollamaUrl(remote)}/api/tags`, { signal: AbortSignal.timeout(remote ? 4000 : 1500) });
     if (res.ok) ollama = ((await res.json()).models ?? []).map((m) => ({ name: m.name, gb: (m.size ?? 0) / 1024 ** 3 }));
   } catch {
     // not running; its models cannot be listed or removed until it is
   }
   // Models on a chat server take no room on this drive.
-  const totalGb = files.reduce((t, f) => t + f.gb, 0) + (chatServer ? 0 : ollama.reduce((t, m) => t + m.gb, 0));
-  return { files, ollama, ollamaRemote: chatServer, totalGb, outputs: folderSize(OUTPUT_DIR) + folderSize(UPLOAD_DIR), disk: diskSpace() };
+  const totalGb = files.reduce((t, f) => t + f.gb, 0) + (remote ? 0 : ollama.reduce((t, m) => t + m.gb, 0));
+  return { files, ollama, ollamaRemote: remote, totalGb, outputs: folderSize(OUTPUT_DIR) + folderSize(UPLOAD_DIR), disk: diskSpace() };
 }
 
 // Free and total space on the drive that holds the data folder.
@@ -206,11 +202,11 @@ function pruneEmpty(dir) {
   }
 }
 
-export async function removeOllamaModel(name, fetchImpl = fetch) {
+export async function removeOllamaModel(name, fetchImpl = fetch, remote = "") {
   if (!OLLAMA_NAME_RE.test(String(name))) throw new Error("Bad model name");
   let res;
   try {
-    res = await fetchImpl(`${ollamaUrl()}/api/delete`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name, name }) });
+    res = await fetchImpl(`${ollamaUrl(remote)}/api/delete`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name, name }) });
   } catch {
     throw new Error("Ollama is not running, so its models cannot be removed. Start it and try again");
   }
@@ -348,6 +344,36 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       const argv = [bin, "-m", modelArg, "-p", prompt, "-o", out, ...settings.cliArgs];
       if (negative) argv.push("-n", negative);
       return { argv, text: `Generating the image (${settings.label})`, result: out };
+    }
+    // Editing a picture an earlier run made: the same kind of model paints
+    // over it from a description, keeping its layout (img2img). Another
+    // model than the one that made it may do the editing, which is how a
+    // model that cannot edit hands its picture to one that can.
+    case "edit-image": {
+      const repo = String(args.repo ?? "");
+      const file = String(args.file ?? "");
+      const init = path.basename(String(args.init ?? ""));
+      const prompt = String(args.prompt ?? "").slice(0, 1000);
+      const negative = String(args.negative ?? "").slice(0, 1000).trim();
+      const quality = String(args.quality ?? "default");
+      const strength = Math.min(0.95, Math.max(0.1, Number(args.strength) || 0.55));
+      if (!REPO_RE.test(repo) || !FILE_RE.test(file) || !/^image-\d+(?:-edit-\d+)*\.png$/.test(init) || !prompt.trim() || !QUALITIES[quality]) throw new Error("Bad edit arguments");
+      const initPath = path.join(OUTPUT_DIR, init);
+      if (!fs.existsSync(initPath)) throw new Error("The picture to edit is no longer here");
+      const modelArg = modelPath(repo, file);
+      if (!fs.existsSync(modelArg)) throw new Error("The editing model is not downloaded yet");
+      const bin = sdBinary();
+      if (!bin) throw new Error("stable-diffusion.cpp is not installed");
+      const fast = isFastImageModel(`${repo}/${file}`);
+      const xl = /xl/i.test(file) || /xl/i.test(repo);
+      const settings = imageSettings(quality, { fast, xl });
+      const out = path.join(OUTPUT_DIR, `${init.slice(0, -4)}-edit-${Date.now()}.png`);
+      // The command-line build does the editing one picture at a time; a
+      // model held in memory by the image server would double the memory.
+      stopImageServer();
+      const argv = [bin, "-M", "img_gen", "-m", modelArg, "-i", initPath, "--strength", String(strength), "-p", prompt, "-o", out, ...settings.cliArgs.filter((a, i, all) => !["-W", "-H"].includes(a) && !["-W", "-H"].includes(all[i - 1]))];
+      if (negative) argv.push("-n", negative);
+      return { argv, text: `Editing ${init} with ${file} (${settings.label}, keeping ${Math.round((1 - strength) * 100)}% of the picture)`, result: out };
     }
     default:
       throw new Error(`Unknown step ${kind}`);
@@ -572,12 +598,14 @@ function needOllama() {
 // ---- running steps with a live log -------------------------------------------
 
 const runs = new Map();
-let nextRun = 1;
+// Ids are random, so on the hosted site one person cannot read another's
+// log by counting; `owner` says whose run it is.
+const newRunId = () => crypto.randomBytes(8).toString("hex");
 
-export function startRun(kind, args, machine, { token = "", fetchImpl = fetch, hubBase } = {}) {
+export function startRun(kind, args, machine, { token = "", fetchImpl = fetch, hubBase, owner = null } = {}) {
   const spec = commandFor(kind, args, machine, hubBase);
-  const id = String(nextRun++);
-  const run = { id, kind, status: "running", lines: [], listeners: new Set(), result: spec.result ?? null, startedAt: Date.now() };
+  const id = newRunId();
+  const run = { id, kind, status: "running", lines: [], listeners: new Set(), result: spec.result ?? null, startedAt: Date.now(), owner };
   runs.set(id, run);
   const emit = (line) => {
     run.lines.push(line);
@@ -675,9 +703,9 @@ export function recordTiming(key, timing) {
 
 // A run driven by server code rather than a command: `work(emit)` does the
 // job and the page follows the same live log.
-export function startCustomRun(text, work) {
-  const id = String(nextRun++);
-  const run = { id, kind: "custom", status: "running", lines: [], listeners: new Set(), result: null, startedAt: Date.now(), cancelled: false };
+export function startCustomRun(text, work, { owner = null } = {}) {
+  const id = newRunId();
+  const run = { id, kind: "custom", status: "running", lines: [], listeners: new Set(), result: null, startedAt: Date.now(), cancelled: false, owner };
   // Settles when the work is over, for callers that wait rather than watch.
   let settle;
   run.finished = new Promise((resolve) => (settle = resolve));
@@ -706,9 +734,10 @@ export function startCustomRun(text, work) {
 
 // Asks the chat server to download a model itself, through Ollama's own
 // API, and relays its progress. Nothing passes through this computer.
-export function pullOnChatServer(name, fetchImpl = fetch) {
+export function pullOnChatServer(name, fetchImpl = fetch, remote = "", { owner = null } = {}) {
   if (!OLLAMA_NAME_RE.test(name)) throw new Error("Bad model name");
-  const base = ollamaUrl();
+  if (!remote) throw new Error("No chat server is set");
+  const base = ollamaUrl(remote);
   return startCustomRun(`Downloading ${name} on the chat server`, async (emit, cancelled) => {
     const stop = new AbortController();
     const res = await fetchImpl(`${base}/api/pull`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name, name, stream: true }), signal: stop.signal });
@@ -737,7 +766,7 @@ export function pullOnChatServer(name, fetchImpl = fetch) {
         last = text;
       }
     }
-  });
+  }, { owner });
 }
 
 export function cancelRun(id) {

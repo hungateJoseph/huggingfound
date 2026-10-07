@@ -222,6 +222,35 @@ test("image generation needs the model file in place and sizes SDXL at 768", () 
   fs.rmSync(dist, { recursive: true, force: true });
 });
 
+test("editing a picture paints over an earlier result with img2img, by this or another image model", () => {
+  const dist = path.join(BIN_DIR, "sd");
+  fs.mkdirSync(dist, { recursive: true });
+  fs.writeFileSync(path.join(dist, "sd-cli"), "#!/bin/sh\n");
+  fs.chmodSync(path.join(dist, "sd-cli"), 0o755);
+  const model = modelPath("a/painter", "p.safetensors");
+  fs.mkdirSync(path.dirname(model), { recursive: true });
+  fs.writeFileSync(model, "");
+  const made = path.join(DATA_DIR, "output", "image-1700000000000.png");
+  fs.mkdirSync(path.dirname(made), { recursive: true });
+  fs.writeFileSync(made, "");
+  const args = { repo: "a/painter", file: "p.safetensors", init: "image-1700000000000.png", prompt: "a lighthouse at dusk, darker sky", negative: "blurry", strength: 0.4 };
+  const spec = commandFor("edit-image", args, mac);
+  assert.equal(spec.argv[spec.argv.indexOf("-i") + 1], made);
+  assert.equal(spec.argv[spec.argv.indexOf("--strength") + 1], "0.4");
+  assert.equal(spec.argv[spec.argv.indexOf("-m") + 1], model);
+  assert.equal(spec.argv[spec.argv.indexOf("-n") + 1], "blurry");
+  assert.ok(!spec.argv.includes("-W"), "the picture keeps its own size");
+  assert.match(spec.result, /image-1700000000000-edit-\d+\.png$/);
+  assert.match(spec.text, /keeping 60% of the picture/);
+  assert.equal(commandFor("edit-image", { ...args, strength: 5 }, mac).argv[spec.argv.indexOf("--strength") + 1], "0.95", "strength is clamped");
+  assert.throws(() => commandFor("edit-image", { ...args, init: "../.env" }, mac), /Bad edit arguments/);
+  assert.throws(() => commandFor("edit-image", { ...args, init: "image-1.png" }, mac), /no longer here/);
+  assert.throws(() => commandFor("edit-image", { ...args, file: "missing.safetensors" }, mac), /not downloaded yet/);
+  removeFolder("a/painter");
+  fs.rmSync(made, { force: true });
+  fs.rmSync(dist, { recursive: true, force: true });
+});
+
 test("quality presets: Default is the plain 20 steps, Fast and Max change sampler and steps", () => {
   const d = imageSettings("default", { fast: false, xl: false });
   assert.equal(d.steps, 20);

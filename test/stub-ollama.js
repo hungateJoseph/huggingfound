@@ -4,11 +4,22 @@ import http from "node:http";
 // with progress lines, chats, deletes, loads a model on request, and can be
 // taken down to play a machine that has not finished starting.
 export function startStubOllama() {
-  const state = { models: [{ name: "llama3.2:3b", size: 2 * 1024 ** 3 }], chats: [], pulls: [], deleted: [], loaded: [], down: false };
+  const state = { models: [{ name: "llama3.2:3b", size: 2 * 1024 ** 3 }], chats: [], pulls: [], deleted: [], loaded: [], origins: [], down: false };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
+      // Like Ollama with OLLAMA_ORIGINS set: pages from allowed sites may call it directly.
+      if (req.headers.origin) {
+        res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+      }
+      if (req.method === "OPTIONS") {
+        res.statusCode = 204;
+        return res.end();
+      }
+      state.origins.push(req.headers.origin ?? null);
       if (state.down) {
         res.statusCode = 502;
         return res.end("not yet");

@@ -12,6 +12,10 @@ up yourself and connect to it through a tunnel.
 
 ## Let HuggingFound rent it
 
+This works in the app on your computer and, signed in, on huggingfound.com.
+On the site your browser talks to the rented machine directly, so what you
+say to a model never passes through the site.
+
 HuggingFound can rent the machine at [RunPod](https://www.runpod.io), a GPU
 cloud that bills by the hour, and manage it for you: start it, point the
 chat server at it, stop it when it sits idle, and delete it when you are
@@ -33,10 +37,10 @@ done. You pay RunPod; HuggingFound charges nothing and never sees your card.
    | 141 GB | 100 GB | the biggest open models | $3 to $4 an hour |
 
 4. Pick a size and a disk for its models (50 GB unless you plan to keep
-   several big ones), and click **Rent it**. A model's window also offers
-   this: when a chat model is too big for your computer, a line under its
-   size says which card holds it and opens this section with that size
-   chosen.
+   several big ones), and click **Rent it**. Every chat model's window also
+   offers this: two buttons at the top choose between your computer and a
+   rented GPU, and choosing the GPU without one asks whether you have a
+   RunPod key, takes it, and opens this section with the right size chosen.
 
 The machine takes two to four minutes to start. Meanwhile:
 

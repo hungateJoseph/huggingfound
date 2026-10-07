@@ -483,8 +483,8 @@ await step("a conversation survives re-renders, an outside click and closing the
   // The finished answer can be handed to Claude for a check; the review streams in under it.
   assert.equal(await page.locator("#messages .check-go").count(), 13, "one button per answer");
   await page.locator("#messages .check-go").last().click();
-  await page.waitForFunction(() => /word7 is not a word\./.test([...document.querySelectorAll("#messages .review-body")].at(-1)?.textContent ?? ""));
-  assert.match(await page.locator("#messages .review-foot").last().innerText(), /Checked by claude-opus-5\. Sent to Anthropic: your question and this answer\./);
+  await page.waitForFunction(() => /word7 is not a word\./.test([...document.querySelectorAll("#messages .check .review-body")].at(-1)?.textContent ?? ""));
+  assert.match(await page.locator("#messages .check .review-foot").last().innerText(), /Checked by claude-opus-5\. Sent to Anthropic: your question and this answer\./);
   assert.equal(await page.locator("#messages .check-go").last().innerText(), "Ask Claude again");
   assert.equal(reviewed.length, 1);
   assert.equal(reviewed[0].kind, "text");
@@ -492,16 +492,37 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(reviewed[0].question, "hello there", "the question that led to the answer goes with it");
   assert.match(reviewed[0].answer, /^word0 .*word39 $/s);
 
+  // The answer can be handed on to be improved: Claude revises it, and the revision joins the conversation with its chain of hands.
+  await page.locator("#messages .improve-go").last().click();
+  const improve = page.locator("#messages .improve").last();
+  await improve.waitFor();
+  assert.ok((await improve.locator(".improve-by option").allTextContents()).some((t) => /Claude \(revises the answer\)/.test(t)));
+  await improve.locator(".improve-request").fill("shorter");
+  await improve.locator(".improve-by").selectOption("claude");
+  await improve.locator(".improve-run").click();
+  await page.waitForFunction(() => /word7 is not a word\./.test([...document.querySelectorAll("#messages .improve .review-body")].at(-1)?.textContent ?? ""));
+  assert.equal(reviewed.at(-1).mode, "edit");
+  assert.equal(reviewed.at(-1).request, "shorter");
+  await improve.locator("button", { hasText: "Use this as the answer" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#messages .msg").length === 27);
+  assert.match(await page.locator("#messages .msg").last().innerText(), /word7 is not a word/);
+  assert.match(await page.locator("#messages .chain").last().innerText(), /Made by qwen-test, revised by Claude \(shorter\)/);
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("chat:qwen-test"))).at(-1).chain[0].by, "Claude", "the chain is kept with the message");
+  // The conversation downloads as a Markdown file.
+  const [download] = await Promise.all([page.waitForEvent("download"), page.click("#chat-download")]);
+  assert.equal(download.suggestedFilename(), "qwen-test-conversation.md");
+
   // Closing and reopening the model brings the conversation back, reply included.
   await page.click("#close-modal");
   assert.equal(await page.locator("#modal").isVisible(), false);
   await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().click();
   await page.waitForSelector("#chat-send");
-  assert.equal(await page.locator("#messages .msg").count(), 26);
-  assert.match(await page.locator("#messages .msg").last().innerText(), /word39 /);
-  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("chat:qwen-test"))).length, 26, "kept on this computer");
-  assert.match(await page.locator("#messages .review-body").last().innerText(), /This has one problem\.\nword7 is not a word\./, "the review is kept with the answer");
-  assert.match(await page.locator("#messages .review-foot").last().innerText(), /Checked earlier by Claude/);
+  assert.equal(await page.locator("#messages .msg").count(), 27);
+  assert.match(await page.locator("#messages .msg").last().innerText(), /word7 is not a word/);
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("chat:qwen-test"))).length, 27, "kept on this computer");
+  const kept = page.locator("#messages .check", { hasText: "Checked earlier by Claude" });
+  assert.equal(await kept.count(), 1);
+  assert.match(await kept.locator(".review-body").innerText(), /This has one problem\.\nword7 is not a word\./, "the review is kept with the answer");
 
   // New chat starts over.
   await page.click("#chat-clear");
@@ -520,30 +541,31 @@ await step("cards keep the Hub's one-line description once what people say is ga
   assert.ok(blurbs.some((b) => b.trim().length > 0), "the description is still there");
 });
 
-await step("a model too big for this computer offers a rented GPU of the right size", async () => {
+await step("every chat model asks where to run it; picking a GPU without a key asks for the key", async () => {
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
   await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
   await page.waitForSelector("#steps .step");
+  const options = await page.$$eval(".where .where-opt", (els) => els.map((e) => [e.textContent, e.classList.contains("on")]));
+  assert.deepEqual(options, [["On this computer", true], ["On a rented GPU, by the hour", false]]);
   assert.match(await page.locator("#modal-body .notice.warn").innerText(), /larger than the memory/);
   const offer = page.locator("#modal-body .notice.info", { hasText: "rented GPU" });
   assert.match(await offer.innerText(), /a 48 GB card holds this 25\.6 GB file/);
   assert.equal(await page.locator("#rent-bar").isVisible(), false, "nothing rented yet");
-  await page.click("#rent-from-model");
-  await page.waitForSelector("#settings:not([hidden])");
-  assert.match(await page.locator("#runpod-status").innerText(), /No key saved/);
-  assert.equal(await page.locator("#rent-panel").innerText(), "", "no sizes without a key");
-  await page.keyboard.press("Escape");
-});
-
-await step("saving a RunPod key lists the sizes with the cheapest free card and its price", async () => {
-  await page.click("#open-settings");
-  await page.fill("#runpod-key", RUNPOD_KEY);
-  await page.click("#save-runpod");
+  await page.click('.where-opt[data-where="rented"]');
+  await page.waitForSelector(".rent-ask");
+  assert.match(await page.locator(".rent-ask").innerText(), /Do you have a RunPod API key\?[\s\S]*wants a 48 GB card/);
+  assert.equal(await page.locator(".where-opt.on").innerText(), "On this computer", "nothing rented, so the plan stays local");
+  await page.click("#ask-no");
+  assert.match(await page.locator("#ask-no-box").innerText(), /runpod\.io/);
+  await page.click("#ask-yes");
+  assert.equal(await page.locator("#ask-no-box").isVisible(), false);
+  await page.fill("#ask-key", RUNPOD_KEY);
+  await page.click("#ask-save");
   await page.waitForSelector("#rent-panel .tier");
   assert.match(await page.locator("#runpod-status").innerText(), /A key is saved \(rpa_\*+cdef\)/);
   const tiers = await page.$$eval("#rent-panel .tier", (els) => els.map((e) => [e.querySelector("b").textContent, e.querySelector(".price").textContent, e.querySelector("input").disabled, e.querySelector("input").checked]));
-  // The model window asked for 48 GB a moment ago, so that size is chosen.
+  // The model window asked for 48 GB, so that size is chosen.
   assert.deepEqual(tiers, [
     ["24 GB GPU", "RTX 4090, $0.44 an hour", false, false],
     ["48 GB GPU", "A40, $0.40 an hour", false, true],
@@ -555,10 +577,10 @@ await step("saving a RunPod key lists the sizes with the cheapest free card and 
 });
 
 await step("renting from the model window preselects its size, and the bar shows the running cost", async () => {
-  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
-  await page.waitForSelector("#rent-from-model");
+  await page.waitForFunction(() => /No GPU is rented right now[\s\S]*A40 at \$0\.40 an hour/.test(document.querySelector(".rent-ask")?.textContent ?? ""), null, { timeout: 10000 });
+  assert.match(await page.locator(".rent-ask").innerText(), /No GPU is rented right now[\s\S]*A40 at \$0\.40 an hour/, "with a key saved, the question becomes an offer");
   assert.match(await page.locator("#modal-body .notice.info", { hasText: "rented GPU" }).innerText(), /a 48 GB card \(A40, \$0\.40 an hour\)/, "the price is on the model window too");
-  await page.click("#rent-from-model");
+  await page.click("#ask-rent");
   await page.waitForSelector("#rent-panel .tier");
   assert.equal(await page.locator('#rent-panel input[name="rent-tier"]:checked').inputValue(), "48");
   await page.fill("#rent-disk", "60");
@@ -576,10 +598,17 @@ await step("renting from the model window preselects its size, and the bar shows
   await page.click("#close-settings");
   // The model window now plans one step on the machine and says it is starting.
   await page.waitForSelector("#steps .step");
-  const titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
+  assert.equal(await page.locator(".where-opt.on").innerText(), "On a rented GPU");
+  let titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
   assert.deepEqual(titles, ["Download the model on the chat server (25.6 GB)"]);
   assert.match(await page.locator("#steps .step .text").innerText(), /rented GPU is still starting/);
   assert.match(await page.locator("#modal-body .spec").innerText(), /Fits the server's 48 GB GPU/);
+  // The other button plans it for this computer again, machine or no machine.
+  await page.click('.where-opt[data-where="local"]');
+  await page.waitForFunction(() => document.querySelectorAll("#steps .step").length >= 3);
+  assert.equal(await page.locator(".where-opt.on").innerText(), "On this computer");
+  await page.click('.where-opt[data-where="rented"]');
+  await page.waitForFunction(() => document.querySelectorAll("#steps .step").length === 1);
   await page.keyboard.press("Escape");
 });
 
@@ -614,12 +643,139 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click("#close-settings");
 });
 
+// ---- the hosted site, signed in ----------------------------------------------
+// A second server in hosted mode with accounts. The session cookie is
+// issued directly, standing in for Google's button; the rented machine is
+// the same stand-in Ollama, which the page must now talk to itself.
+const hostedHome = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-browser-hosted-"));
+const hosted = createServer({ envFile: path.join(hostedHome, ".env"), scanFile: path.join(hostedHome, "scan.json"), voicesFile: path.join(hostedHome, "voices.json"), hubBase: stub.base, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, hosted: true, refreshHours: 0, accountsDir: path.join(hostedHome, "accounts"), accountsSecret: "browser-test-secret-0123456789", googleClientId: "", runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, idleWatch: false });
+await new Promise((resolve) => hosted.listen(0, "127.0.0.1", resolve));
+const hostedBase = `http://127.0.0.1:${hosted.address().port}`;
+await hosted.refresh();
+const visitor = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+visitor.on("pageerror", (e) => errors.push(`hosted: ${e.message}`));
+visitor.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(`hosted: ${m.text()}`));
+visitor.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));
+
+await step("hosted: a visitor who is not signed in is offered sign-in before a GPU, and Settings stay hidden", async () => {
+  await visitor.goto(hostedBase);
+  await visitor.waitForSelector("#home-hint");
+  assert.equal(await visitor.locator("#open-settings").isVisible(), false);
+  assert.equal(await visitor.locator("#sign-in").isVisible(), true);
+  assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
+  await visitor.click("#sign-in");
+  await visitor.waitForSelector("#signin:not([hidden])");
+  assert.match(await visitor.locator("#google-button").innerText(), /not set up/, "no Google client id in this test");
+  await visitor.keyboard.press("Escape");
+  await visitor.click("#nav-browse");
+  await visitor.click(".tab[data-tab=chat]");
+  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await visitor.waitForSelector(".where");
+  await visitor.click('.where-opt[data-where="rented"]');
+  await visitor.waitForSelector(".rent-ask");
+  assert.match(await visitor.locator(".rent-ask").innerText(), /needs an account/);
+  assert.equal(await visitor.locator("#steps .step .go").count(), 0, "no Run buttons for steps on a visitor's own computer");
+  await visitor.keyboard.press("Escape");
+});
+
+await step("hosted: signed in, Settings hold only the account's keys, and the privacy page answers", async () => {
+  const user = hosted.accounts.findOrCreate({ email: "ana@example.com", name: "Ana" });
+  await visitor.context().addCookies([{ name: "hf_session", value: hosted.accounts.issue(user.id), url: hostedBase }]);
+  await visitor.reload();
+  await visitor.waitForSelector("#account:not([hidden])");
+  assert.match(await visitor.locator("#account").innerText(), /Ana/);
+  assert.equal(await visitor.locator("#sign-in").isVisible(), false);
+  await visitor.click("#open-settings");
+  await visitor.waitForSelector("#settings:not([hidden])");
+  assert.equal(await visitor.locator("#token").isVisible(), false, "no Hugging Face token on the site");
+  assert.equal(await visitor.locator("#chat-server").isVisible(), false, "no hand-set chat server on the site");
+  assert.equal(await visitor.locator("#image-server").isVisible(), false);
+  assert.equal(await visitor.locator("#runpod-key").isVisible(), true);
+  assert.equal(await visitor.locator("#claude-key").isVisible(), true);
+  assert.match(await visitor.locator("#account-line").innerText(), /ana@example\.com/);
+  await visitor.fill("#claude-key", "sk-ant-api03-browsertestkey0123456789");
+  await visitor.click("#save-claude");
+  await visitor.waitForFunction(() => /A key is saved/.test(document.querySelector("#claude-status").textContent));
+  await visitor.fill("#runpod-key", RUNPOD_KEY);
+  await visitor.click("#save-runpod");
+  await visitor.waitForSelector("#rent-panel .tier");
+  await visitor.click("#close-settings");
+  const res = await visitor.request.get(`${hostedBase}/privacy.html`);
+  assert.equal(res.status(), 200);
+  assert.match(await res.text(), /does not pass through this site/);
+});
+
+await step("hosted: the model window rents the GPU, the download runs on it, and the chat goes straight from the browser to the machine", async () => {
+  await visitor.click("#nav-browse");
+  await visitor.click(".tab[data-tab=chat]");
+  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await visitor.waitForSelector(".where");
+  await visitor.click('.where-opt[data-where="rented"]');
+  await visitor.waitForSelector("#ask-rent");
+  await visitor.click("#ask-rent");
+  await visitor.waitForSelector("#rent-panel .tier");
+  assert.equal(await visitor.locator('#rent-panel input[name="rent-tier"]:checked').inputValue(), "48");
+  rentedOllama.state.down = false;
+  acceptDialogs = true;
+  await visitor.click("#rent-go");
+  await visitor.waitForSelector("#rent-bar:not([hidden])");
+  acceptDialogs = false;
+  const made = runpod.state.created.at(-1);
+  assert.equal(made.env.OLLAMA_ORIGINS, hostedBase, "Ollama on the machine accepts this site's pages");
+  await visitor.click("#close-settings");
+  await visitor.waitForSelector("#steps .step .go");
+  assert.equal(await visitor.locator(".where-opt.on").innerText(), "On a rented GPU");
+  assert.equal(await visitor.locator("#modal-body .get-app").count(), 0, "no need for the app when the machine does the work");
+  // Two polls bring the stand-in machine to RUNNING; the page's own poll would take longer.
+  await visitor.request.get(`${hostedBase}/api/rent`);
+  await visitor.request.get(`${hostedBase}/api/rent`);
+  acceptDialogs = true;
+  await visitor.click("#steps .step .go");
+  await visitor.waitForSelector("#steps .step.done", { timeout: 15000 });
+  acceptDialogs = false;
+  assert.ok(rentedOllama.state.pulls.some((p) => /Cydonia/.test(p)));
+  await visitor.waitForSelector("#chat-send");
+  assert.match(await visitor.locator(".chat-tools").innerText(), /on the rented GPU/);
+  const before = rentedOllama.state.chats.length;
+  await visitor.fill("#chat-text", "hello machine");
+  await visitor.click("#chat-send");
+  await visitor.waitForFunction(() => /from the server/.test(document.querySelector("#messages")?.textContent ?? ""));
+  assert.equal(rentedOllama.state.chats.length, before + 1, "the message reached the machine");
+  assert.equal(rentedOllama.state.chats.at(-1).messages.at(-1).content, "hello machine");
+  assert.ok(rentedOllama.state.origins.includes(hostedBase), "sent by the page itself, from the site's origin");
+  // Improve goes to Claude with the account's saved key; the site relays that one request.
+  await visitor.locator("#messages .improve-go").last().click();
+  const improve = visitor.locator("#messages .improve").last();
+  await improve.locator(".improve-request").fill("shorter");
+  await improve.locator(".improve-by").selectOption("claude");
+  await improve.locator(".improve-run").click();
+  await visitor.waitForFunction(() => /word7 is not a word/.test([...document.querySelectorAll("#messages .improve .review-body")].at(-1)?.textContent ?? ""));
+  assert.equal(reviewed.at(-1).mode, "edit");
+  assert.equal(await visitor.locator("#chat-download").isVisible(), true);
+  await visitor.keyboard.press("Escape");
+});
+
+await step("hosted: deleting the account deletes the machine and signs out", async () => {
+  await visitor.keyboard.press("Escape");
+  const podId = (await (await visitor.request.get(`${hostedBase}/api/rent`)).json()).id;
+  await visitor.click("#open-settings");
+  await visitor.waitForSelector("#delete-account");
+  acceptDialogs = true;
+  await visitor.click("#delete-account");
+  await visitor.waitForSelector("#sign-in:not([hidden])");
+  acceptDialogs = false;
+  assert.equal(runpod.state.pods[podId].status, "TERMINATED");
+  assert.equal(await visitor.locator("#rent-bar").isVisible(), false);
+  assert.equal(await visitor.locator("#open-settings").isVisible(), false);
+});
+
 await step("no errors reached the console", () => {
   assert.deepEqual(errors, [], errors.join(" | "));
 });
 
 await browser.close();
 server.close();
+hosted.close();
 stub.server.close();
 runpod.server.close();
 rentedOllama.server.close();

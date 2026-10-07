@@ -29,6 +29,25 @@ Start with one line that gives the verdict in plain words. Then say what matches
 
 The app shows your reply exactly as written, as plain text. Do not use markdown headings, bold or tables. Keep it short.`;
 
+// Claude as an editor rather than a reviewer: the person says what should
+// change about an answer, and gets the revised answer back, ready to use.
+const EDIT_TEXT_SYSTEM = `You revise answers written by small open-source language models that people run on their own computers. The person will show you what they asked, what the model answered, and what they want changed. Make exactly that change, fix anything plainly wrong that you touch on the way, and keep everything else as it was.
+
+Reply with only the revised answer, complete, so it can replace the old one as it stands. No preamble, no explanation, no closing remark. Keep the old answer's form: if it was code, reply with code in a fenced block; if it was a list, keep the list. Do not use markdown headings, bold or tables.`;
+
+// For a picture, Claude cannot paint, so it writes the edit for an image
+// model that can: a new description for a pass that keeps the picture's
+// layout and changes what the description says.
+const EDIT_IMAGE_SYSTEM = `You help people edit pictures made by open-source image models they run on their own computers. The person will show you a picture, the description it was made from, and the change they want. The edit will be done by an image model painting over this very picture from a new description (an image-to-image pass): it keeps the composition and changes what the description changes, and it understands short comma-separated phrases, not sentences or "no" and "not".
+
+Look at the picture and work out what the new description has to say so that the change happens and everything else stays. Reply with exactly these lines, each starting with the word shown:
+
+Description: the full new description, every important element of the picture included, with the change made
+Avoid: what the model must not paint, comma-separated
+Keep: a whole number from 20 to 90, the percentage of the current picture to keep: 85 for a touch-up such as colours, lighting or a small object; 60 for changing or adding things; 35 for a different scene on the same layout
+
+Then one or two plain sentences on what this edit can and cannot achieve with such a model. Plain text only; no markdown.`;
+
 export class ReviewError extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -49,6 +68,9 @@ export function buildRequest(input, { outputDir } = {}) {
     fallbacks: "default",
   };
   const from = input.model ? `a local model (${input.model})` : "a local model";
+  const editing = input.mode === "edit";
+  const request = String(input.request ?? "").trim();
+  if (editing && !request) throw new ReviewError("Say what should change.");
   if (input.kind === "text") {
     const answer = String(input.answer ?? "");
     if (!answer.trim()) throw new ReviewError("There is no answer to check yet.");
@@ -56,8 +78,10 @@ export function buildRequest(input, { outputDir } = {}) {
     const instructions = String(input.system ?? "").trim();
     const parts = [`I asked ${from}:`, `<request>\n${question || "(the request was not kept)"}\n</request>`];
     if (instructions) parts.push(`It had these standing instructions:`, `<instructions>\n${instructions}\n</instructions>`);
-    parts.push(`It answered:`, `<answer>\n${answer}\n</answer>`, `Is the answer right? Check it and tell me what, if anything, is wrong.`);
-    return { ...base, system: TEXT_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
+    parts.push(`It answered:`, `<answer>\n${answer}\n</answer>`);
+    if (editing) parts.push(`Change this about the answer:`, `<change>\n${request}\n</change>`, `Reply with only the revised answer.`);
+    else parts.push(`Is the answer right? Check it and tell me what, if anything, is wrong.`);
+    return { ...base, system: editing ? EDIT_TEXT_SYSTEM : TEXT_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "image") {
     // The picture is either one this app made (named by file) or, on the
@@ -81,10 +105,11 @@ export function buildRequest(input, { outputDir } = {}) {
     if (bytes.length > MAX_IMAGE_BYTES) throw new ReviewError("That picture is larger than 5 MB, which is more than Claude accepts.");
     const prompt = String(input.prompt ?? "").trim();
     const negative = String(input.negative ?? "").trim();
-    const text = [`${from[0].toUpperCase()}${from.slice(1)} made this picture from my description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, negative ? `I asked it to avoid:\n\n<avoid>\n${negative}\n</avoid>` : "I gave it nothing to avoid.", "How well does the picture match, what is wrong with it, and what should I ask for instead?"].join("\n\n");
+    const ask = editing ? `I want this changed about the picture:\n\n<change>\n${request}\n</change>\n\nWrite the Description, Avoid and Keep lines for the image-to-image pass.` : "How well does the picture match, what is wrong with it, and what should I ask for instead?";
+    const text = [`${from[0].toUpperCase()}${from.slice(1)} made this picture from my description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, negative ? `I asked it to avoid:\n\n<avoid>\n${negative}\n</avoid>` : "I gave it nothing to avoid.", ask].join("\n\n");
     return {
       ...base,
-      system: IMAGE_SYSTEM,
+      system: editing ? EDIT_IMAGE_SYSTEM : IMAGE_SYSTEM,
       messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: mediaType, data: bytes.toString("base64") } }, { type: "text", text }] }],
     };
   }

@@ -17,11 +17,14 @@
       <nav class="views">
         <button class="view-link on" id="nav-home">Search</button>
         <button class="view-link" id="nav-browse">Browse</button>
+        <a class="view-link hosted-only" id="nav-privacy" href="/privacy.html">Privacy</a>
       </nav>
       <div class="top-right">
         <span class="muted small" id="machine-line"></span>
         <button class="ghost hosted-only" id="open-checker">Check an answer</button>
-        <button class="ghost local-only" id="open-settings">Settings</button>
+        <button class="ghost" id="open-settings">Settings</button>
+        <button class="primary" id="sign-in" hidden>Sign in</button>
+        <div class="account" id="account" hidden></div>
       </div>
     </div>
   </header>
@@ -168,6 +171,20 @@ npm start</code>
     </div>
   </div>
 
+  <div class="modal" id="signin" hidden>
+    <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="signin-title">
+      <div class="modal-head">
+        <div>
+          <h2 id="signin-title">Sign in</h2>
+          <p class="muted small">An account keeps your RunPod and Anthropic keys and the GPU you rent, so the next visit is quick. It keeps nothing else: what you search for, say to a model, give it or get back never reaches this site's storage, and the chat with your rented GPU goes straight from your browser to it. <a href="/privacy.html">How privacy works here</a>.</p>
+        </div>
+        <button class="ghost" id="close-signin" aria-label="Close">Close</button>
+      </div>
+      <div id="google-button"></div>
+      <p class="muted small" id="signin-error"></p>
+    </div>
+  </div>
+
   <div class="modal" id="checker" hidden>
     <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="checker-title">
       <div class="modal-head">
@@ -236,6 +253,7 @@ npm start</code>
         </div>
         <button class="ghost" id="close-settings" aria-label="Close">Close</button>
       </div>
+      <div class="local-only">
       <label class="field">
         <span>Hugging Face token (optional)</span>
         <input type="password" id="token" autocomplete="off" placeholder="hf_...">
@@ -246,6 +264,8 @@ npm start</code>
         <button class="primary" id="save-token">Save</button>
         <button class="ghost" id="clear-token">Remove token</button>
       </div>
+      </div>
+      <div class="local-only">
       <label class="field">
         <span>Chat server (optional)</span>
         <input type="url" id="chat-server" autocomplete="off" placeholder="http://127.0.0.1:11435">
@@ -260,6 +280,7 @@ npm start</code>
       <div class="actions">
         <button class="primary" id="save-chat-server">Save</button>
         <button class="ghost" id="clear-chat-server">Use this computer</button>
+      </div>
       </div>
       <div class="rent" id="rent">
         <h3>Rent a GPU by the hour</h3>
@@ -276,6 +297,7 @@ npm start</code>
         </div>
         <div id="rent-panel"></div>
       </div>
+      <div class="local-only">
       <label class="field">
         <span>Image server (optional)</span>
         <input type="url" id="image-server" autocomplete="off" placeholder="http://192.168.1.20:1234">
@@ -285,6 +307,7 @@ npm start</code>
       <div class="actions">
         <button class="primary" id="save-image-server">Save</button>
         <button class="ghost" id="clear-image-server">Use this computer</button>
+      </div>
       </div>
       <label class="field">
         <span>Anthropic API key (optional)</span>
@@ -296,6 +319,7 @@ npm start</code>
         <button class="primary" id="save-claude">Save</button>
         <button class="ghost" id="clear-claude">Remove</button>
       </div>
+      <div class="local-only">
       <label class="field">
         <span>GitHub token (optional)</span>
         <input type="password" id="github-token" autocomplete="off" placeholder="github_pat_... or ghp_...">
@@ -334,6 +358,15 @@ npm start</code>
         <h3>Space used by models</h3>
         <p class="muted small" id="storage-total"></p>
         <ul id="storage-list"></ul>
+      </div>
+      </div>
+      <div class="hosted-only account-box" id="account-box">
+        <h3>Your account</h3>
+        <p class="muted small" id="account-line"></p>
+        <div class="actions">
+          <button class="ghost" id="delete-account">Delete my account</button>
+        </div>
+        <small class="muted">Deletes the keys, the rented GPU and everything on it. Nothing else is kept about you.</small>
       </div>
     </div>
   </div>

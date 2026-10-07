@@ -50,10 +50,17 @@ test("the state says it is hosted and describes a typical laptop, not this machi
 });
 
 test("nothing that runs, downloads, chats or changes settings is reachable", async () => {
-  for (const p of ["/api/run", "/api/chat", "/api/settings", "/api/scan", "/api/voices/gather", "/api/remove", "/api/unload", "/api/upload", "/api/runs/1/cancel", "/api/rent", "/api/rent/stop"]) {
+  // What never happens on the server itself, signed in or not.
+  for (const p of ["/api/chat", "/api/scan", "/api/voices/gather", "/api/unload", "/api/upload"]) {
     const res = await post(p, {});
     assert.equal(res.status, 403, p);
     assert.match((await res.json()).error, /your own computer/);
+  }
+  // What a signed-in person may do (keys, renting, downloads onto the rented machine) asks for sign-in first.
+  for (const p of ["/api/run", "/api/settings", "/api/remove", "/api/runs/1/cancel", "/api/rent", "/api/rent/stop"]) {
+    const res = await post(p, {});
+    assert.equal(res.status, 401, p);
+    assert.match((await res.json()).error, /Sign in|not set up/);
   }
   for (const p of ["/api/storage", "/api/result?file=x.png", "/api/image-server"]) {
     assert.equal((await get(p)).status, 403, p);
@@ -109,7 +116,7 @@ test("a check needs the visitor's own key or the owner's dev code", async () => 
   assert.equal((await (await get("/api/state")).json()).claudeHosted.devCode, true);
   const none = await check({ "X-Forwarded-For": "10.0.0.1" });
   assert.equal(none.status, 401);
-  assert.match((await none.json()).error, /your own Anthropic API key, or the site owner's dev code/);
+  assert.match((await none.json()).error, /your own Anthropic API key \(sign in to save one\), or the site owner's dev code/);
   const bad = await check({ "X-Forwarded-For": "10.0.0.1", "X-Anthropic-Key": "hello" });
   assert.equal(bad.status, 400);
   assert.equal(checks.length, 0, "nothing reached Claude");

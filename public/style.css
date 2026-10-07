@@ -330,3 +330,31 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 .pill.ready { background: var(--ok-soft); color: var(--ok); }
 .pill.stopped { background: #efece5; color: var(--muted); }
 .pill.error { background: var(--bad-soft); color: var(--bad); }
+
+/* Elements hidden by script stay hidden whatever a display rule says. */
+[hidden] { display: none !important; }
+/* Accounts on the hosted site. */
+.account { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.account .avatar { width: 26px; height: 26px; border-radius: 50%; }
+.account button { font-size: 13px; padding: 4px 10px; }
+.account-box { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+#google-button { min-height: 44px; margin: 8px 0; }
+.view-link[href] { text-decoration: none; }
+/* Where a chat model runs: this computer or a rented GPU. */
+.where { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
+.where-opt { border-radius: 999px; padding: 7px 14px; }
+.where-opt.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.rent-ask { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; font-size: 14px; }
+.rent-ask p { margin: 0 0 6px; }
+/* Improving an output: handing it to Claude or to another model. */
+.improve-wrap { display: grid; gap: 6px; justify-self: start; max-width: 90%; width: 100%; }
+.improve-wrap > button { justify-self: start; font-size: 13px; padding: 4px 10px; }
+.improve { display: grid; gap: 8px; margin-top: 4px; width: 100%; }
+.improve textarea { font: inherit; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; width: 100%; background: var(--surface); color: var(--ink); resize: vertical; }
+.improve .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.improve select { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
+.chain { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.tools-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.tools-row button, .tools-row a.button { font-size: 13px; padding: 4px 10px; }
+a.button { display: inline-block; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); text-decoration: none; background: transparent; }
+.image-card { margin-top: 10px; }

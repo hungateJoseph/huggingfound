@@ -10,7 +10,7 @@ import { createHub } from "./hf.js";
 import { chatServerMachine, describeMachine, hostedMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullOnChatServer, setChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
+import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
@@ -18,7 +18,8 @@ import { cleanSummary, extractiveSummary, summarize, summarizerModel } from "./s
 import { rankModels } from "./find.js";
 import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
-import { RentError, TIERS, createRental } from "./rent.js";
+import { RentError, TIERS, createRental, tierFor } from "./rent.js";
+import { AuthError, createAccounts } from "./accounts.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 // The gathered voices index per file, re-read only when the file changes.
@@ -29,12 +30,19 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
 // Keys the hosted site takes from the process environment rather than a file.
 const HOSTED_ENV_KEYS = ["HF_TOKEN", "GITHUB_TOKEN", "YOUTUBE_API_KEY", "REDDIT_CLIENT_ID"];
 
-// What a public copy of the site must not do: run programs, download models,
-// write settings or touch the disk it runs on. Those belong on the visitor's
-// own computer, where HuggingFound does them.
-const NOT_HOSTED = new Set(["/api/settings", "/api/scan", "/api/voices/gather", "/api/storage", "/api/remove", "/api/image-server", "/api/unload", "/api/run", "/api/chat", "/api/upload", "/api/result", "/api/chat-server", "/api/rent"]);
+// What a public copy of the site must not do: run programs on itself,
+// download to its own disk, chat through itself or touch the disk it runs
+// on. Those belong on the visitor's own computer, where HuggingFound does
+// them, or on the GPU a signed-in person rents, which the browser talks to
+// directly so that nothing said to a model passes through this server.
+const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "/api/image-server", "/api/unload", "/api/chat", "/api/upload", "/api/result"]);
+// What a signed-in person may do on the hosted site: keep keys, rent a
+// machine, have it download models, and follow those downloads.
+const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
+// The keys a hosted account may keep; everything else is for the local app.
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES"]);
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30, runpodBase, runpodProxy, idleWatch = true } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30, runpodBase, runpodProxy, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
   // A hosted copy does not know the visitor's computer; it describes a
   // typical laptop and leaves the running to HuggingFound on their machine.
   const machine = hosted ? hostedMachine() : describeMachine();
@@ -45,14 +53,37 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     for (const key of HOSTED_ENV_KEYS) if (process.env[key]) saved[key] = process.env[key];
     return saved;
   };
-  // Chat models run through Ollama here, or on the chat server from
-  // Settings; fit and speed for them follow whichever machine that is.
-  const chatServer = () => (hosted ? "" : env().OLLAMA_SERVER || "");
-  // The GPU HuggingFound rents by the hour, when asked to; it owns the chat
-  // server setting while the machine exists, and stops it when idle.
-  const rental = hosted ? null : createRental({ env: () => readEnv(envFile), save: (updates) => writeEnv(envFile, updates), fetchImpl, base: runpodBase, proxyUrl: runpodProxy });
-  const rentedChat = () => Boolean(rental?.owns(chatServer()));
-  const machineFor = (runnerId) => (runnerId === "ollama" && chatServer() ? chatServerMachine(chatServer(), env().OLLAMA_SERVER_GB) : machine);
+  // Accounts exist on the hosted site only: on a computer the app is its
+  // owner's, and settings live in the .env file. Without a secret the
+  // hosted site still searches and browses, but nobody can sign in.
+  const accounts = hosted && accountsSecret ? createAccounts({ dir: accountsDir, secret: accountsSecret, sessionSecret: sessionSecret || accountsSecret, googleClientId, jwksUrl: googleJwks, fetchImpl }) : null;
+  // One rental per settings store: the .env file on a computer, each
+  // account on the hosted site. A rental owns the chat server setting while
+  // its machine exists and stops the machine when idle.
+  const rentals = new Map();
+  const rentalFor = (key, settings, save) => {
+    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, base: runpodBase, proxyUrl: runpodProxy }));
+    return rentals.get(key);
+  };
+  const localSettings = () => readEnv(envFile);
+  const localSave = (updates) => writeEnv(envFile, updates);
+  const rental = hosted ? null : rentalFor("local", localSettings, localSave);
+  // Who is asking and where their settings are: the file on a computer, or
+  // the signed-in person's account on the hosted site.
+  const contextFor = (req) => {
+    if (!hosted) return { user: null, settings: localSettings, save: localSave, rental };
+    const user = accounts?.userFromRequest(req) ?? null;
+    if (!user) return { user: null, settings: () => ({}), save: () => {}, rental: null };
+    const settings = () => accounts.settings(user.id);
+    const save = (updates) => accounts.saveSettings(user.id, updates);
+    return { user, settings, save, rental: rentalFor(user.id, settings, save) };
+  };
+  // Chat models run through Ollama here, or on the chat server: the rented
+  // machine, or an address typed into Settings on a computer. Fit and
+  // speed for them follow whichever machine that is.
+  const chatServer = (ctx) => ctx.settings().OLLAMA_SERVER || "";
+  const rentedChat = (ctx) => Boolean(ctx.rental?.owns(chatServer(ctx)));
+  const machineFor = (runnerId, ctx) => (runnerId === "ollama" && chatServer(ctx) ? chatServerMachine(chatServer(ctx), ctx.settings().OLLAMA_SERVER_GB) : machine);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
   const hub_ = hub;
   const civitai = createCivitai({ fetchImpl, base: civitaiBase });
@@ -95,13 +126,13 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     return Boolean(devCode) && crypto.timingSafeEqual(a, b);
   };
   // Who pays for a hosted check: { apiKey } to use, or { status, error }.
-  const hostedAccess = (req) => {
+  const hostedAccess = (req, ctx) => {
     const who = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "unknown";
-    const own = String(req.headers["x-anthropic-key"] ?? "").trim();
+    const own = String(req.headers["x-anthropic-key"] ?? "").trim() || (ctx.user ? ctx.settings().ANTHROPIC_API_KEY || "" : "");
     const code = String(req.headers["x-dev-code"] ?? "").trim();
     if (own) {
       if (!/^sk-ant-[\w-]{20,300}$/.test(own)) return { status: 400, error: "That does not look like an Anthropic API key (they start with sk-ant-)." };
-      if (tooMany(who, "check", reviewLimit)) return { status: 429, error: "That is a lot of checks in an hour from one address. Try again later." };
+      if (tooMany(ctx.user?.id ?? who, "check", reviewLimit)) return { status: 429, error: "That is a lot of checks in an hour. Try again later." };
       return { apiKey: own };
     }
     if (code) {
@@ -110,7 +141,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (!reviewer && !claudeKey()) return { status: 503, error: "The site has no Anthropic key configured for the dev code." };
       return { apiKey: "" };
     }
-    return { status: 401, error: "Checks on this site need your own Anthropic API key, or the site owner's dev code." };
+    return { status: 401, error: ctx.user ? "Save an Anthropic API key in Settings, or enter one above, to have Claude check this." : "Checks on this site need your own Anthropic API key (sign in to save one), or the site owner's dev code." };
   };
   let refreshing = null;
   let lastRefresh = null;
@@ -125,10 +156,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (origin && !origin.startsWith("http://localhost") && !origin.startsWith("http://127.0.0.1") && !(hosted && sameHost(origin, req.headers.host))) {
           return send(res, 403, { error: "Forbidden" });
         }
-        if (hosted && (NOT_HOSTED.has(url.pathname) || url.pathname.startsWith("/api/runs/") || url.pathname.startsWith("/api/rent/"))) {
+        if (hosted && NOT_HOSTED.has(url.pathname)) {
           return send(res, 403, { error: "Not on the hosted site. Run HuggingFound on your own computer to download and try models." });
         }
-        return await api(req, res, url);
+        const ctx = contextFor(req);
+        if (hosted && !ctx.user && (SIGNED_IN.has(url.pathname) || url.pathname.startsWith("/api/runs/") || url.pathname.startsWith("/api/rent/"))) {
+          return send(res, 401, { error: accounts ? "Sign in to do this on the site, or run HuggingFound on your own computer." : "Sign-in is not set up on this site yet. Run HuggingFound on your own computer to download and try models." });
+        }
+        return await api(req, res, url, ctx);
       }
       if (url.pathname.startsWith("/output/")) return serveFile(res, path.join(OUTPUT_DIR, path.basename(url.pathname)));
       return serveFile(res, path.join(PUBLIC, url.pathname === "/" ? "index.html" : url.pathname), PUBLIC);
@@ -150,12 +185,20 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   }
   server.refresh = refresh;
   server.rental = rental;
-  if (rental) {
-    if (idleWatch) rental.watch();
-    // A machine left from last time: find out what became of it, so a
-    // deleted one is forgotten and a running one shows in the banner.
-    if (readEnv(envFile).RUNPOD_POD_ID) rental.status({ probe: false }).catch(() => {});
+  server.accounts = accounts;
+  server.rentals = rentals;
+  // Machines left from last time, on this computer or in any account: find
+  // out what became of each, so a deleted one is forgotten, a running one
+  // shows in its owner's banner, and the idle watch covers it.
+  if (rental && localSettings().RUNPOD_POD_ID) rental.status({ probe: false }).catch(() => {});
+  if (accounts) {
+    for (const id of accounts.withPods()) {
+      const settings = () => accounts.settings(id);
+      rentalFor(id, settings, (updates) => accounts.saveSettings(id, updates)).status({ probe: false }).catch(() => {});
+    }
   }
+  server.checkIdle = () => Promise.all([...rentals.values()].map((r) => r.checkIdle().catch(() => false)));
+  if (idleWatch) setInterval(server.checkIdle, 60e3).unref();
   return server;
 
   // One pass: the scan, then the voices for every model in it.
@@ -177,6 +220,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     return refreshing;
   }
 
+  // The scan is shared by everyone, so its speed lines describe this
+  // computer (or a typical laptop on the hosted site), not anyone's server.
   async function scanHub() {
     const previous = readScan(scanFile);
     const known = new Set((previous?.models ?? []).map((m) => m.id));
@@ -216,41 +261,76 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     return { ...run, todo: todo.length, total: ids.length };
   }
 
-  async function api(req, res, url) {
-    setChatServer(chatServer());
+  async function api(req, res, url, ctx) {
     if (req.method === "GET" && url.pathname === "/api/state") {
-      const saved = env();
+      const saved = ctx.settings();
+      const remote = chatServer(ctx);
       return send(res, 200, {
         machine,
         hosted,
+        // Who is signed in on the hosted site, and whether anyone can.
+        user: ctx.user ? { email: ctx.user.email, name: ctx.user.name, picture: ctx.user.picture } : null,
+        auth: hosted ? { google: accounts?.googleClientId() || "", ready: Boolean(accounts) } : null,
         refresh: hosted ? { hours: refreshHours, last: lastRefresh } : null,
         categories: CATEGORIES,
-        runners: hosted ? noRunners() : await detect(fetchImpl),
+        // On the hosted site the runners are the rented machine's, if any.
+        runners: hosted ? (remote ? await detect(fetchImpl, remote) : noRunners()) : await detect(fetchImpl, remote),
         token: saved.HF_TOKEN ? mask(saved.HF_TOKEN) : "",
         imageServer: saved.IMAGE_SERVER || "",
-        chatServer: chatServer() ? { url: chatServer(), gpuGb: chatServerMachine(chatServer(), saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(chatServer(), saved.OLLAMA_SERVER_GB).comfortableGb, rented: rentedChat() } : null,
+        // `direct` tells the page to talk to the machine itself, so what is
+        // said to a model never passes through this server.
+        chatServer: remote ? { url: remote, gpuGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).comfortableGb, rented: rentedChat(ctx), direct: hosted } : null,
         runpodKey: saved.RUNPOD_API_KEY ? mask(saved.RUNPOD_API_KEY) : "",
-        rental: rental ? rental.cached() : null,
+        rental: ctx.rental ? ctx.rental.cached() : hosted ? null : { rented: false },
         rentTiers: TIERS,
-        stopOnQuit: saved.RUNPOD_STOP_ON_QUIT !== "0",
+        stopOnQuit: !hosted && saved.RUNPOD_STOP_ON_QUIT !== "0",
         redditApp: saved.REDDIT_CLIENT_ID ? mask(saved.REDDIT_CLIENT_ID) : "",
         githubToken: saved.GITHUB_TOKEN ? mask(saved.GITHUB_TOKEN) : "",
         youtubeKey: saved.YOUTUBE_API_KEY ? mask(saved.YOUTUBE_API_KEY) : "",
         claudeKey: saved.ANTHROPIC_API_KEY ? mask(saved.ANTHROPIC_API_KEY) : "",
-        claudeReady: !hosted && claudeReady(),
-        // The hosted site checks with a visitor's own key, or the owner's dev code when one is set.
-        claudeHosted: hosted ? { devCode: Boolean(devCode) } : null,
+        claudeReady: hosted ? Boolean(saved.ANTHROPIC_API_KEY) : claudeReady(),
+        // The hosted site checks with a visitor's own key (saved to their account or typed in), or the owner's dev code when one is set.
+        claudeHosted: hosted ? { devCode: Boolean(devCode), saved: Boolean(saved.ANTHROPIC_API_KEY) } : null,
         envFile: tildify(envFile),
         scan: readScan(scanFile, { meta: true }),
         voices: voicesMeta(),
         summarizer: writtenSummaries ? await summarizerModel(fetchImpl) : null,
-        picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner) }).text })),
+        picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }).text })),
         speedTier: speedTier(machine),
       });
+    }
+    // Signing in and out of the hosted site, and deleting an account.
+    if (req.method === "POST" && url.pathname === "/api/auth/google") {
+      if (!accounts) return send(res, 503, { error: "Sign-in is not set up on this site." });
+      const body = await json(req);
+      try {
+        const profile = await accounts.verifyGoogle(body.credential);
+        const user = accounts.findOrCreate(profile);
+        res.setHeader("Set-Cookie", accounts.cookie(accounts.issue(user.id)));
+        return send(res, 200, { ok: true, user: { email: user.email, name: user.name, picture: user.picture } });
+      } catch (err) {
+        return send(res, err instanceof AuthError ? err.status : 500, { error: err.message });
+      }
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+      if (accounts) res.setHeader("Set-Cookie", accounts.clearCookie());
+      return send(res, 200, { ok: true });
+    }
+    // Deleting an account deletes the rented machine too, and every key.
+    if (req.method === "POST" && url.pathname === "/api/account/delete") {
+      if (ctx.rental && ctx.settings().RUNPOD_POD_ID) await ctx.rental.remove().catch(() => {});
+      rentals.delete(ctx.user.id);
+      accounts.remove(ctx.user.id);
+      res.setHeader("Set-Cookie", accounts.clearCookie());
+      return send(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/api/settings") {
       const body = await json(req);
       const updates = {};
+      if (hosted) {
+        const stray = Object.keys(body).find((k) => !ACCOUNT_KEYS.has(k));
+        if (stray) return send(res, 400, { error: `${stray} is a setting of the app on your own computer, not of this site.` });
+      }
       if ("HF_TOKEN" in body) {
         if (typeof body.HF_TOKEN !== "string") return send(res, 400, { error: "HF_TOKEN must be a string" });
         updates.HF_TOKEN = body.HF_TOKEN.trim();
@@ -291,7 +371,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         updates.IMAGE_SERVER = value;
       }
       if (!Object.keys(updates).length) return send(res, 400, { error: "Nothing to save" });
-      writeEnv(envFile, updates);
+      ctx.save(updates);
       // A new token can change what the Hub is willing to show.
       details.clear();
       return send(res, 200, { ok: true });
@@ -313,7 +393,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       let hub = [];
       let hubError = null;
       const [hubResult, asked] = await Promise.all([
-        hub_().search(q).then((models) => models.map(withSpeed).map(withVoice)).catch((err) => {
+        hub_().search(q).then((models) => models.map((m) => withSpeed(m, ctx)).map(withVoice)).catch((err) => {
           hubError = err.message;
           return [];
         }),
@@ -321,14 +401,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       ]);
       hub = hubResult;
       const hideRefusing = url.searchParams.get("showRefusing") !== "1";
-      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner) }).text })), voices: index, hideRefusing });
+      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }).text })), voices: index, hideRefusing });
       return send(res, 200, { q, ...ranked, models: ranked.models.slice(0, 60), hideRefusing, hubError, gathered: Object.keys(index).length, scanned: scan.models.length, took: Date.now() - started, ...asked });
     }
     if (req.method === "GET" && url.pathname === "/api/search") {
       const q = url.searchParams.get("q") ?? "";
       if (!q.trim()) return send(res, 400, { error: "Say what you are looking for" });
       const models = await hub().search(q);
-      return send(res, 200, { q, models: models.map(withSpeed).map(withVoice) });
+      return send(res, 200, { q, models: models.map((m) => withSpeed(m, ctx)).map(withVoice) });
     }
     if (req.method === "GET" && url.pathname === "/api/models") {
       const scan = readScan(scanFile) ?? { at: null, models: [] };
@@ -345,6 +425,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
     if (req.method === "POST" && url.pathname.startsWith("/api/runs/") && url.pathname.endsWith("/cancel")) {
       const id = url.pathname.slice("/api/runs/".length, -"/cancel".length);
+      if (hosted && getRun(id)?.owner !== ctx.user?.id) return send(res, 404, { error: "No such run" });
       return cancelRun(id) ? send(res, 200, { ok: true }) : send(res, 404, { error: "No such run" });
     }
     // Which models people describe with these words.
@@ -411,41 +492,64 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       // the tag rules cannot place still gets a plan.
       const pick = PICKS.find((p) => p.id === id);
       if (pick && !model.gatedBlocked) model.runner = { id: pick.runner, name: RUNNER_NAMES[pick.runner], easy: true };
+      // A chat model runs here or on the rented GPU; `where` is the choice
+      // the page made, and the plan is built for that machine. Without a
+      // choice the rented machine wins when there is one.
+      const remote = chatServer(ctx);
+      const where = model.runner?.id === "ollama" ? (url.searchParams.get("where") || (remote ? "rented" : "local")) : "local";
+      const useRemote = where === "rented" && remote;
+      const planMachine = useRemote ? chatServerMachine(remote, ctx.settings().OLLAMA_SERVER_GB) : machine;
+      const detected = useRemote ? withRental(await detect(fetchImpl, remote), ctx) : hosted ? noRunners() : await detect(fetchImpl);
       const plan = model.gatedBlocked
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
-        : buildPlan({ model, files: model.files, machine: machineFor(model.runner?.id), detected: hosted ? noRunners() : withRental(await detect(fetchImpl)), hasToken: !hosted && Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer() });
-      return send(res, 200, { model, plan });
+        : buildPlan({ model, files: model.files, machine: planMachine, detected, hasToken: !hosted && Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer() });
+      // What the page needs to offer the other place: the size of GPU this
+      // file wants, and whether a machine is rented already.
+      const choice = model.runner?.id === "ollama" ? { where: useRemote ? "rented" : "local", rented: Boolean(remote), tier: tierFor(plan.file?.gb ?? guessSizeGb({ id, runnerId: "ollama" }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY) } : null;
+      return send(res, 200, { model, plan, choice });
     }
     if (req.method === "GET" && url.pathname === "/api/storage") {
-      return send(res, 200, await storage(fetchImpl));
+      return send(res, 200, await storage(fetchImpl, chatServer(ctx)));
     }
     if (req.method === "POST" && url.pathname === "/api/remove") {
       const body = await json(req);
+      // On the hosted site the only thing to remove is a model on the rented machine.
+      if (hosted && (body.kind !== "ollama" || !chatServer(ctx))) return send(res, 403, { error: "Only models on your rented GPU can be removed from here." });
       try {
         if (body.kind === "file") removeFile(body.repo, body.file);
         else if (body.kind === "folder") removeFolder(body.repo);
-        else if (body.kind === "ollama") await removeOllamaModel(body.name, fetchImpl);
+        else if (body.kind === "ollama") await removeOllamaModel(body.name, fetchImpl, chatServer(ctx));
         else if (body.kind === "outputs") clearOutputs();
         else return send(res, 400, { error: "kind must be file, folder, ollama or outputs" });
       } catch (err) {
         return send(res, 400, { error: err.message });
       }
-      return send(res, 200, await storage(fetchImpl));
+      return send(res, 200, hosted ? { ok: true } : await storage(fetchImpl, chatServer(ctx)));
     }
     // Renting a GPU by the hour: what is on offer, what is rented, and
     // starting, stopping and deleting it.
     if (url.pathname === "/api/rent" || url.pathname.startsWith("/api/rent/")) {
       const action = url.pathname.slice("/api/rent".length).replace(/^\//, "");
+      const mine = ctx.rental;
       try {
-        if (req.method === "GET" && action === "options") return send(res, 200, { configured: rental.configured(), tiers: rental.configured() ? await rental.tiers() : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false })) });
-        if (req.method === "GET" && action === "") return send(res, 200, await rental.status());
+        if (req.method === "GET" && action === "options") return send(res, 200, { configured: mine.configured(), tiers: mine.configured() ? await mine.tiers() : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false })) });
+        if (req.method === "GET" && action === "") return send(res, 200, await mine.status());
         if (req.method === "POST" && action === "") {
           const body = await json(req);
-          return send(res, 200, await rental.rent({ gb: body.gb, diskGb: body.diskGb ?? 50 }));
+          // On the hosted site the browser talks to the machine itself, so
+          // Ollama there must accept requests from this site's address.
+          const origins = hosted ? [siteOrigin || `${String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers.host}`] : [];
+          return send(res, 200, await mine.rent({ gb: body.gb, diskGb: body.diskGb ?? 50, origins }));
         }
-        if (req.method === "POST" && action === "stop") return send(res, 200, await rental.stop());
-        if (req.method === "POST" && action === "start") return send(res, 200, await rental.start());
-        if (req.method === "POST" && action === "delete") return send(res, 200, await rental.remove());
+        // A message sent straight from the browser to the machine tells the
+        // idle watch the machine is in use; nothing of the message comes here.
+        if (req.method === "POST" && action === "touch") {
+          mine.touch();
+          return send(res, 200, { ok: true });
+        }
+        if (req.method === "POST" && action === "stop") return send(res, 200, await mine.stop());
+        if (req.method === "POST" && action === "start") return send(res, 200, await mine.start());
+        if (req.method === "POST" && action === "delete") return send(res, 200, await mine.remove());
         return send(res, 404, { error: "Not found" });
       } catch (err) {
         return send(res, err instanceof RentError ? err.status : 500, { error: err.message });
@@ -453,7 +557,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
     // Whether the chat server answers, and what it holds.
     if (req.method === "GET" && url.pathname === "/api/chat-server") {
-      const configured = chatServer();
+      const configured = chatServer(ctx);
       if (!configured) return send(res, 200, { configured: "", ok: false });
       try {
         const [version, tags] = await Promise.all([
@@ -482,26 +586,31 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const body = await json(req);
       try {
         const args = { ...(body.args ?? {}) };
+        const remote = chatServer(ctx);
+        // The page says where a chat model's step belongs; a rented machine
+        // is the default while there is one, this computer otherwise.
+        const where = body.where || (remote ? "rented" : "local");
+        if (hosted && !(where === "rented" && remote && body.kind === "pull-model")) return send(res, 403, { error: "On this site the only step that runs is a download onto your rented GPU. Everything else runs in HuggingFound on your own computer." });
         // The remote address comes from settings, never from the page.
         if (body.kind === "generate-image") {
-          const remote = env().IMAGE_SERVER;
-          if (remote) args.remote = remote;
+          const imageRemote = env().IMAGE_SERVER;
+          if (imageRemote) args.remote = imageRemote;
           else delete args.remote;
         }
-        // With a chat server, Ollama steps happen there: the download is asked of the server, and nothing is installed here.
-        if (chatServer() && ["install-ollama", "start-ollama", "create-model"].includes(body.kind)) return send(res, 400, { error: "Chat models run on the chat server from Settings; this step is for running them on this computer." });
-        if (chatServer() && body.kind === "pull-model") {
+        if (where === "rented" && !remote) return send(res, 400, { error: "No GPU is rented. Rent one in Settings, or run the model on this computer." });
+        if (where === "rented" && ["install-ollama", "start-ollama", "create-model"].includes(body.kind)) return send(res, 400, { error: "Chat models run on the chat server from Settings; this step is for running them on this computer." });
+        if (where === "rented" && body.kind === "pull-model") {
           // A download keeps a rented machine awake, and the model is loaded
           // into the GPU afterwards so the first message is not the slow one.
-          const release = rental.hold();
-          const run = pullOnChatServer(String(args.name ?? ""), fetchImpl);
+          const release = ctx.rental?.hold() ?? (() => {});
+          const run = pullOnChatServer(String(args.name ?? ""), fetchImpl, remote, { owner: ctx.user?.id ?? null });
           run.finished.then((status) => {
             release();
-            if (status === "done" && rentedChat()) warm(String(args.name ?? ""));
+            if (status === "done" && rentedChat(ctx)) warm(String(args.name ?? ""), remote);
           });
           return send(res, 200, { id: run.id });
         }
-        const run = startRun(String(body.kind ?? ""), args, machine, { token: env().HF_TOKEN, fetchImpl, hubBase });
+        const run = startRun(String(body.kind ?? ""), args, machine, { token: env().HF_TOKEN, fetchImpl, hubBase, owner: ctx.user?.id ?? null });
         return send(res, 200, { id: run.id });
       } catch (err) {
         return send(res, 400, { error: err.message });
@@ -509,13 +618,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
     if (req.method === "GET" && url.pathname.startsWith("/api/runs/")) {
       const run = getRun(url.pathname.slice("/api/runs/".length));
-      if (!run) return send(res, 404, { error: "No such run" });
+      // A run's log is its owner's; on the hosted site nobody else may follow it.
+      if (!run || (hosted && run.owner !== ctx.user?.id)) return send(res, 404, { error: "No such run" });
       return stream(res, run);
     }
     if (req.method === "POST" && url.pathname === "/api/chat") {
       const body = await json(req);
-      rental.touch();
-      const upstream = await fetchImpl(`${ollamaUrl()}/api/chat`, {
+      ctx.rental?.touch();
+      const upstream = await fetchImpl(`${ollamaUrl(chatServer(ctx))}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: String(body.model ?? ""), messages: Array.isArray(body.messages) ? body.messages.slice(-40) : [], stream: true }),
@@ -548,7 +658,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     if (req.method === "POST" && url.pathname === "/api/review") {
       let use = {};
       if (hosted) {
-        const access = hostedAccess(req);
+        const access = hostedAccess(req, ctx);
         if (access.error) return send(res, access.status, { error: access.error });
         use = { apiKey: access.apiKey };
       } else if (!claudeReady()) {
@@ -597,16 +707,16 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
 
   // When the chat server is the rented machine, the plan can say whether it
   // is starting or stopped rather than "check the tunnel".
-  function withRental(detected) {
-    if (!rentedChat()) return detected;
-    return { ...detected, ollama: { ...detected.ollama, rented: rental.cached() } };
+  function withRental(detected, ctx) {
+    if (!rentedChat(ctx)) return detected;
+    return { ...detected, ollama: { ...detected.ollama, rented: ctx.rental.cached() } };
   }
 
   // Asks the chat server to load a model into memory and keep it there, so
   // the first message after a download answers at once. Best effort.
-  async function warm(name) {
+  async function warm(name, remote) {
     try {
-      await fetchImpl(`${ollamaUrl()}/api/generate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name, keep_alive: "1h" }), signal: AbortSignal.timeout(90000) });
+      await fetchImpl(`${ollamaUrl(remote)}/api/generate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name, keep_alive: "1h" }), signal: AbortSignal.timeout(90000) });
     } catch {
       // the model loads on the first message instead
     }
@@ -742,10 +852,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   }
 
   // A rough speed line for a listing card, from the size guessed off the name.
-  function withSpeed(m) {
+  function withSpeed(m, ctx = null) {
     if (!m.runner?.easy) return { ...m, speed: "" };
     const sizeGb = guessSizeGb({ id: m.id, runnerId: m.runner.id });
-    return { ...m, speed: sizeGb ? estimate({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine: machineFor(m.runner.id) }).text : "" };
+    return { ...m, speed: sizeGb ? estimate({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine: ctx ? machineFor(m.runner.id, ctx) : machine }).text : "" };
   }
 
   // whisper.cpp is happiest with 16 kHz wav. Other formats go through

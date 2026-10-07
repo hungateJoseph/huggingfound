@@ -210,7 +210,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
     // Rents a machine of the given size with Ollama on it and makes it the
     // chat server. The disk holds the models; it must be bigger than them.
-    async rent({ gb, diskGb = 50 } = {}) {
+    async rent({ gb, diskGb = 50, origins = [] } = {}) {
       const tier = TIERS.find((t) => t.gb === Number(gb));
       if (!tier) throw new RentError(`Pick a size: ${TIERS.map((t) => `${t.gb} GB`).join(", ")}.`);
       const disk = Math.round(Number(diskGb));
@@ -222,6 +222,11 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const offer = (await tiers()).find((t) => t.gb === tier.gb);
       if (!offer?.gpu) throw new RentError(`RunPod lists no ${tier.gb} GB card right now.`, 503);
       if (!offer.available) throw new RentError(`Every ${tier.gb} GB card at RunPod is taken right now. Try another size or try again later.`, 503);
+      // Browsers may talk to the machine directly from these origins (the
+      // hosted site's address); Ollama refuses other sites' pages.
+      const env = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h" };
+      const allowed = origins.filter((o) => /^https?:\/\/[\w.-]+(?::\d+)?$/.test(String(o)));
+      if (allowed.length) env.OLLAMA_ORIGINS = allowed.join(",");
       const pod = await request("POST", "/pods", {
         name: "huggingfound",
         image: OLLAMA_IMAGE,
@@ -229,7 +234,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         cloud: "SECURE",
         disk: CONTAINER_DISK_GB,
         ports: [`${OLLAMA_PORT}/http`],
-        env: { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h" },
+        env,
         mounts: { persistent: { size: disk, path: MODELS_PATH } },
       });
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
