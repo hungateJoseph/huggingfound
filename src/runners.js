@@ -739,6 +739,25 @@ export function pullOnChatServer(name, fetchImpl = fetch, remote = "", { owner =
   if (!remote) throw new Error("No chat server is set");
   const base = ollamaUrl(remote);
   return startCustomRun(`Downloading ${name} on the chat server`, async (emit, cancelled) => {
+    // A machine rented a moment ago reports itself running before Ollama
+    // on it answers (its container is still being fetched); the download
+    // waits for it rather than failing on the proxy's 404.
+    const started = Date.now();
+    let said = false;
+    for (;;) {
+      if (cancelled()) return;
+      try {
+        const probe = await fetchImpl(`${base}/api/version`, { signal: AbortSignal.timeout(5000) });
+        if (probe.ok) break;
+      } catch {
+        // not up yet
+      }
+      if (Date.now() - started > 10 * 60e3) throw new Error("Ollama on the chat server did not answer in ten minutes; check the machine in Settings");
+      if (!said) emit("Waiting for Ollama on the machine to start (a new machine takes a few minutes)");
+      said = true;
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+    if (said) emit("The machine is up.");
     const stop = new AbortController();
     const res = await fetchImpl(`${base}/api/pull`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name, name, stream: true }), signal: stop.signal });
     if (!res.ok) throw new Error(`the chat server answered HTTP ${res.status}`);

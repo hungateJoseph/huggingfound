@@ -149,11 +149,22 @@ test("while it starts, the plan says so; once Ollama answers it is ready", async
   assert.doesNotMatch(plan.steps[0].text, /not answering|starting/);
 });
 
-test("a download runs on the machine and the model is loaded into its memory afterwards", async () => {
+test("a download waits for Ollama on a machine that is still starting, then runs there and loads the model afterwards", async () => {
+  ollama.state.down = true;
   const res = await post("/api/run", { kind: "pull-model", args: { name: PULLED } });
   assert.equal(res.status, 200);
   const { id } = await res.json();
-  const log = await (await get(`/api/runs/${id}`)).text();
+  await new Promise((r) => setTimeout(r, 100));
+  const early = await (await get(`/api/runs/${id}`)).text();
+  assert.match(early, /Waiting for Ollama on the machine to start/);
+  assert.doesNotMatch(early, /Done\.|Failed/);
+  ollama.state.down = false;
+  let log = "";
+  for (let i = 0; i < 80 && !/Done\.|Failed/.test(log); i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    log = await (await get(`/api/runs/${id}`)).text();
+  }
+  assert.match(log, /The machine is up\./);
   assert.match(log, /on the chat server/);
   assert.match(log, /Done\./);
   assert.deepEqual(ollama.state.pulls, [PULLED]);
