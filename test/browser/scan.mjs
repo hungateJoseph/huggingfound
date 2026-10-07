@@ -524,6 +524,17 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(await kept.count(), 1);
   assert.match(await kept.locator(".review-body").innerText(), /This has one problem\.\nword7 is not a word\./, "the review is kept with the answer");
 
+  // A picture link in an answer shows as the picture, with its alt text as a caption; the rest stays text.
+  await page.evaluate(() => addMsg("assistant", "Here it is: ![a red cat](https://example.com/cat.png) and also https://example.com/dog.jpg?x=1 done"));
+  const pics = page.locator("#messages .msg").last().locator(".msg-image");
+  assert.equal(await pics.count(), 2);
+  assert.equal(await pics.first().locator("img").getAttribute("src"), "https://example.com/cat.png");
+  assert.equal(await pics.first().locator("img").getAttribute("alt"), "a red cat");
+  assert.equal(await pics.first().locator(".caption").innerText(), "a red cat");
+  assert.equal(await pics.nth(1).locator("img").getAttribute("src"), "https://example.com/dog.jpg?x=1");
+  assert.match(await page.locator("#messages .msg").last().innerText(), /Here it is:[\s\S]*done/);
+  assert.equal(await page.locator("#messages .msg.user").last().locator(".msg-image").count(), 0, "what the person typed stays plain");
+
   // New chat starts over.
   await page.click("#chat-clear");
   await page.waitForFunction(() => document.querySelectorAll("#messages .msg").length === 0);

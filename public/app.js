@@ -1285,6 +1285,8 @@ function renderChat(box, modelName) {
       const live = $("#chat-live");
       if (live && mine() && reply.trim()) {
         const stick = nearBottom(live.parentElement);
+        // The finished answer shows its pictures; while it streamed it was plain text.
+        renderRich(live, reply);
         checkFor(live, said);
         if (stick) live.parentElement.scrollTop = live.parentElement.scrollHeight;
       }
@@ -1556,10 +1558,67 @@ async function repaint({ repo, file, request, context, prompt, negative, strengt
 function addMsg(role, text) {
   const el = document.createElement("div");
   el.className = `msg ${role}`;
-  el.textContent = text;
+  if (role === "assistant") renderRich(el, text);
+  else el.textContent = text;
   $("#messages").appendChild(el);
   $("#messages").scrollTop = $("#messages").scrollHeight;
   return el;
+}
+
+// A model's answer may carry pictures: a Markdown image, or a bare address
+// ending in an image type. Those show as the picture itself, with the
+// alt text as its caption; everything else stays plain text. Only the
+// browser fetches the picture, from wherever the model pointed.
+const IMAGE_MD = /!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g;
+const IMAGE_URL = /https?:\/\/[^\s<>"')]+?\.(?:png|jpe?g|webp|gif)(?:\?[^\s<>"')]*)?/gi;
+function renderRich(el, text) {
+  el.textContent = "";
+  const pieces = [];
+  let last = 0;
+  for (const m of String(text).matchAll(IMAGE_MD)) {
+    pieces.push({ text: text.slice(last, m.index) });
+    pieces.push({ url: m[2], alt: m[1] });
+    last = m.index + m[0].length;
+  }
+  pieces.push({ text: text.slice(last) });
+  for (const piece of pieces) {
+    if (piece.url) {
+      el.appendChild(pictureLink(piece.url, piece.alt));
+      continue;
+    }
+    let from = 0;
+    for (const m of piece.text.matchAll(IMAGE_URL)) {
+      el.appendChild(document.createTextNode(piece.text.slice(from, m.index)));
+      el.appendChild(pictureLink(m[0], ""));
+      from = m.index + m[0].length;
+    }
+    el.appendChild(document.createTextNode(piece.text.slice(from)));
+  }
+}
+
+function pictureLink(url, alt) {
+  const a = document.createElement("a");
+  a.className = "msg-image";
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  const img = document.createElement("img");
+  img.src = url;
+  img.alt = alt;
+  img.loading = "lazy";
+  img.referrerPolicy = "no-referrer";
+  // A picture that will not load falls back to the address it came from.
+  img.addEventListener("error", () => {
+    a.textContent = url;
+  });
+  a.appendChild(img);
+  if (alt) {
+    const cap = document.createElement("span");
+    cap.className = "caption";
+    cap.textContent = alt;
+    a.appendChild(cap);
+  }
+  return a;
 }
 
 function qualityLabel(q, info, fast) {
