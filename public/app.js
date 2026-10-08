@@ -2082,6 +2082,7 @@ document.addEventListener("keydown", (e) => {
     $("#settings").hidden = true;
     $("#checker").hidden = true;
     $("#signin").hidden = true;
+    $("#gpu-models").hidden = true;
     state.open = null;
   }
 });
@@ -2291,6 +2292,7 @@ function renderRental() {
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
         ${r.status === "EXITED" || r.status === "ERROR" ? `<button class="primary" id="rent-start">Start</button>` : ""}
+        <button class="ghost" id="rent-models">Models on it</button>
         <button class="ghost" id="rent-delete">Delete machine and models</button>
         <a class="muted small" href="https://www.runpod.io/console/pods" target="_blank" rel="noopener">Open RunPod</a>
       </div>
@@ -2307,6 +2309,10 @@ function renderRental() {
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
+    panel.querySelector("#rent-models")?.addEventListener("click", () => {
+      $("#settings").hidden = true;
+      openGpuModels();
+    });
     panel.querySelector("#rent-save-idle").addEventListener("click", async () => {
       try {
         await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), ...(state.hosted ? {} : { RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked }) });
@@ -2451,7 +2457,9 @@ function renderRentBar(r) {
   const cost = running && r.costPerHour != null ? `, ${money(r.costPerHour)} an hour` : "";
   const time = running && r.uptimeSeconds ? `, running ${minutesText(r.uptimeSeconds)}${r.spent != null ? ` (about ${money(r.spent)})` : ""}` : "";
   bar.hidden = false;
-  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}, ${esc(word)}${cost}${time}.</span><span class="buttons">${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-settings">Manage</button></span></div>`;
+  const held = (r.chatModels ?? 0) + (r.imageModels ?? 0);
+  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}, ${esc(word)}${cost}${time}.</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-settings">Manage</button></span></div>`;
+  bar.querySelector("#bar-models").addEventListener("click", openGpuModels);
   bar.querySelector("#bar-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
   bar.querySelector("#bar-start")?.addEventListener("click", () => rentAction("start", null));
   bar.querySelector("#bar-settings").addEventListener("click", () => {
@@ -2459,6 +2467,75 @@ function renderRentBar(r) {
     $("#rent").scrollIntoView({ block: "start" });
   });
 }
+
+// ---- the models on the rented machine --------------------------------------------
+// One place, reachable from the bar on every view, that lists everything the
+// machine holds: chat models and which one is loaded, image models and which
+// one is in the GPU, each with Open (its window, planned for the machine)
+// and Remove.
+
+function openGpuModels() {
+  $("#gpu-models").hidden = false;
+  renderGpuModels();
+}
+
+async function renderGpuModels() {
+  const body = $("#gpu-models-body");
+  const sub = $("#gpu-models-sub");
+  const r = state.rental;
+  if (!r?.rented) {
+    sub.textContent = "No GPU is rented.";
+    body.innerHTML = "";
+    return;
+  }
+  const [word] = rentalPhase(r);
+  sub.textContent = `${r.gpu || "GPU"}${r.gb ? `, ${r.gb} GB` : ""}, ${word}${r.costPerHour != null ? `, ${money(r.costPerHour)} an hour` : ""}.`;
+  body.innerHTML = `<p class="muted small">Looking at the machine</p>`;
+  let models;
+  try {
+    models = await api.get("/api/rent/models");
+  } catch (err) {
+    body.innerHTML = `<p class="muted small">Could not ask the machine: ${esc(err.message)}</p>`;
+    return;
+  }
+  const row = (m, kind) => {
+    const title = kind === "chat" ? m.name : `${m.file}`;
+    const live = kind === "chat" ? m.running : m.loaded;
+    return `<li data-kind="${kind}" data-id="${esc(m.id ?? "")}" data-name="${esc(m.name ?? "")}" data-repo="${esc(m.repo ?? "")}" data-file="${esc(m.file ?? "")}">
+      <div><div class="name">${esc(title)}</div><div class="sub">${m.id ? `<span>${esc(m.id)}</span>` : ""}<span>${m.gb ? `${m.gb} GB` : ""}</span>${live ? `<span class="pill live">${kind === "chat" ? "loaded, answering" : "loaded in the GPU"}</span>` : ""}</div></div>
+      <div class="buttons">${m.id ? `<button class="primary" data-open>Open</button>` : ""}<button class="ghost" data-remove>Remove</button></div>
+    </li>`;
+  };
+  const chat = models.chatOk ? (models.chat.length ? `<ul class="gpu-list">${models.chat.map((m) => row(m, "chat")).join("")}</ul>` : `<p class="muted small">No chat models on it yet. Open a chat model and download it there.</p>`) : `<p class="muted small">Ollama on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
+  const images = !r.images ? `<p class="muted small">This machine runs chat models only; a machine rented now runs image models too.</p>` : models.imagesOk ? (models.images.length ? `<ul class="gpu-list">${models.images.map((m) => row(m, "image")).join("")}</ul>` : `<p class="muted small">No image models on it yet. Open an image model and download it there.</p>`) : `<p class="muted small">The image agent on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
+  body.innerHTML = `<h3>Chat models</h3>${chat}<h3>Image models</h3>${images}<p class="muted small">Models stay on the machine's disk while it is stopped and go when it is deleted. Each download onto it, and each conversation or picture, counts as use for the idle timer.</p><div class="actions"><button class="ghost" id="gpu-models-refresh">Refresh</button></div>`;
+  body.querySelector("#gpu-models-refresh").addEventListener("click", renderGpuModels);
+  for (const li of body.querySelectorAll("li")) {
+    li.querySelector("[data-open]")?.addEventListener("click", () => {
+      whereFor.set(li.dataset.id, "rented");
+      state.rentAsk = null;
+      $("#gpu-models").hidden = true;
+      openModel(li.dataset.id);
+    });
+    li.querySelector("[data-remove]").addEventListener("click", async () => {
+      const what = li.dataset.kind === "chat" ? li.dataset.name : li.dataset.file;
+      if (!confirm(`Remove ${what} from the rented GPU? It frees the machine's disk; the model can be downloaded again any time.`)) return;
+      try {
+        await api.post("/api/remove", li.dataset.kind === "chat" ? { kind: "ollama", name: li.dataset.name } : { kind: "gpu-file", repo: li.dataset.repo, file: li.dataset.file });
+      } catch (err) {
+        alert(err.message);
+        return;
+      }
+      renderGpuModels();
+      if (state.open) openModel(state.open);
+    });
+  }
+}
+
+$("#close-gpu-models").addEventListener("click", () => ($("#gpu-models").hidden = true));
+$("#gpu-models").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.hidden = true;
+});
 
 // While a machine exists its status is refreshed: often while it starts,
 // once a minute after that for the running time and the cost.

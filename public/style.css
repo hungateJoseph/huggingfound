@@ -385,3 +385,12 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .private-image summary { cursor: pointer; font-weight: 600; }
 .private-image .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .private-image select { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
+/* The models on the rented machine. */
+.gpu-list { list-style: none; padding: 0; margin: 8px 0 16px; display: grid; gap: 8px; }
+.gpu-list li { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+.gpu-list .name { font-weight: 600; word-break: break-word; }
+.gpu-list .sub { color: var(--muted); font-size: 13px; margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.gpu-list .buttons { display: flex; gap: 6px; }
+.gpu-list .buttons button { font-size: 13px; padding: 4px 10px; }
+.pill.live { background: var(--ok-soft); color: var(--ok); }
+#gpu-models h3 { margin: 12px 0 4px; font-size: 15px; }

@@ -28,6 +28,8 @@ export function startStubOllama() {
       res.setHeader("Content-Type", "application/json");
       if (req.url === "/api/version") return res.end(JSON.stringify({ version: "0.9.9" }));
       if (req.url === "/api/tags") return res.end(JSON.stringify({ models: state.models }));
+      // The model most recently talked to counts as loaded.
+      if (req.url === "/api/ps") return res.end(JSON.stringify({ models: state.chats.length ? state.models.filter((m) => m.name === state.chats.at(-1).model) : [] }));
       if (req.url === "/api/pull") {
         state.pulls.push(data.model);
         const total = 4 * 1024 ** 3;

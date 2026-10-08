@@ -604,6 +604,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       try {
         if (req.method === "GET" && action === "options") return send(res, 200, { configured: mine.configured(), tiers: mine.configured() ? await mine.tiers() : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false })) });
         if (req.method === "GET" && action === "registries") return send(res, 200, { registries: mine.configured() ? await mine.registries() : [] });
+        // Everything on the machine right now: chat models (and which are
+        // loaded) from Ollama, image models (and the loaded one) from the agent.
+        if (req.method === "GET" && action === "models") return send(res, 200, await machineModels(ctx));
         if (req.method === "GET" && action === "") return send(res, 200, await mine.status());
         if (req.method === "POST" && action === "") {
           const body = await json(req);
@@ -788,6 +791,44 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       return send(res, 200, { text: file.endsWith(".txt") ? fs.readFileSync(full, "utf8") : null, url: `/output/${file}` });
     }
     send(res, 404, { error: "Not found" });
+  }
+
+  // The models on the rented machine, named so the page can open each one's
+  // window: an Ollama name like hf.co/owner/repo:Q4_K_M is the Hub
+  // repository owner/repo; an image file is kept under its repository.
+  async function machineModels(ctx) {
+    const remote = chatServer(ctx);
+    const agent = imageAgent(ctx);
+    const out = { chat: [], images: [], chatOk: false, imagesOk: false, loaded: null };
+    const ask = async (url, timeout = 4000) => {
+      const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeout) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    };
+    if (remote) {
+      try {
+        const [tags, ps] = await Promise.all([ask(`${remote}/api/tags`), ask(`${remote}/api/ps`).catch(() => ({ models: [] }))]);
+        const running = new Set((ps.models ?? []).map((m) => m.name));
+        out.chat = (tags.models ?? []).map((m) => {
+          const hub = /^hf\.co\/([\w.-]+\/[\w.-]+)(?::|$)/.exec(m.name);
+          return { name: m.name, id: hub ? hub[1] : null, gb: Math.round(((m.size ?? 0) / 1024 ** 3) * 10) / 10, running: running.has(m.name) };
+        });
+        out.chatOk = true;
+      } catch {
+        // not answering
+      }
+    }
+    if (agent) {
+      try {
+        const [list, health] = await Promise.all([ask(`${agent}/models`), ask(`${agent}/health`).catch(() => ({}))]);
+        out.loaded = health.loaded ?? null;
+        out.images = (list.models ?? []).map((m) => ({ repo: m.repo, file: m.file, id: m.repo, gb: Math.round((m.gb ?? 0) * 10) / 10, loaded: health.loaded === `${m.repo}/${m.file}` }));
+        out.imagesOk = true;
+      } catch {
+        // not answering
+      }
+    }
+    return out;
   }
 
   // What the rented machine's agent holds, for an image model's plan: the

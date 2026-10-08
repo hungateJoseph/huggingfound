@@ -219,6 +219,30 @@ test("an image model's plan on the rented GPU is one download, done by the machi
   agent.state.down = false;
 });
 
+test("everything on the machine is listed in one place: chat models with the loaded one, image models with the one in the GPU", async () => {
+  const SD = "second-state/stable-diffusion-v1-5-GGUF";
+  const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";
+  await post("/api/run", { kind: "pull-image-model", args: { repo: SD, file: FILE }, where: "rented" }).then((r) => r.json()).then(({ id }) => get(`/api/runs/${id}`).then((r) => r.text()));
+  // A picture job on the agent marks the file as loaded; a chat marks the chat model as running.
+  await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: SD, file: FILE, prompt: "a cat" }) });
+  await post("/api/chat", { model: PULLED, messages: [{ role: "user", content: "hi" }] });
+  const models = await json("/api/rent/models");
+  assert.equal(models.chatOk, true);
+  assert.equal(models.imagesOk, true);
+  const qwen = models.chat.find((m) => m.name === PULLED);
+  assert.deepEqual(qwen, { name: PULLED, id: QWEN, gb: 4, running: true }, "an hf.co name maps back to its repository");
+  const llama = models.chat.find((m) => m.name === "llama3.2:3b");
+  assert.equal(llama.id, null, "a model not from the Hub has no window to open");
+  assert.equal(llama.running, false);
+  assert.deepEqual(models.images, [{ repo: SD, file: FILE, id: SD, gb: 1.1, loaded: true }]);
+  // The status carries the counts, for the bar.
+  const status = await json("/api/rent");
+  assert.equal(status.chatModels, 2);
+  assert.equal(status.imageModels, 1);
+  await post("/api/remove", { kind: "gpu-file", repo: SD, file: FILE });
+  assert.deepEqual((await json("/api/rent/models")).images, []);
+});
+
 test("stopping ends the charge and frees the chat server; starting brings both back", async () => {
   const stopped = await (await post("/api/rent/stop", {})).json();
   assert.equal(stopped.rented, true);

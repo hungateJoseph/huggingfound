@@ -145,7 +145,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     return out;
   }
 
-  function summarize(pod, ready, imagesReady = false) {
+  function summarize(pod, ready, imagesReady = false, counts = {}) {
     const cost = typeof pod.cost === "number" ? pod.cost : null;
     const uptime = pod.runtime?.uptime ?? (pod.status === "RUNNING" && pod.startedAt ? Math.max(0, (now() - new Date(pod.startedAt).getTime()) / 1000) : 0);
     // The pod's own gpu.memory is the machine's system RAM, not the card's;
@@ -167,6 +167,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       agent: hasAgent() ? agentFor(pod.id) : null,
       images: hasAgent(),
       imagesReady: Boolean(imagesReady),
+      // How many models the machine holds, so the page can say so at a glance.
+      chatModels: counts.chat ?? 0,
+      imageModels: counts.images ?? 0,
       idleMinutes: idleMinutes(),
       idleSeconds: Math.round((now() - lastActivity) / 1000),
       dataCenter: pod.dataCenterId ?? null,
@@ -174,12 +177,13 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     };
   }
 
-  async function probe(url, path = "/api/version") {
+  // Asks the machine's Ollama or agent; the parsed answer, or null when it does not answer.
+  async function probe(url, path = "/api/tags") {
     try {
       const res = await fetchImpl(`${url}${path}`, { signal: AbortSignal.timeout(4000) });
-      return res.ok;
+      return res.ok ? await res.json() : null;
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -257,8 +261,16 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         return { rented: false, gone: true };
       }
       const running = pod.status === "RUNNING";
-      const [ready, imagesReady] = running && wantProbe ? await Promise.all([probe(urlFor(id)), hasAgent() ? probe(agentFor(id), "/health") : false]) : [Boolean(last?.ready) && running, Boolean(last?.imagesReady) && running];
-      last = summarize(pod, ready, imagesReady);
+      let ready = Boolean(last?.ready) && running;
+      let imagesReady = Boolean(last?.imagesReady) && running;
+      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0 };
+      if (running && wantProbe) {
+        const [tags, health] = await Promise.all([probe(urlFor(id)), hasAgent() ? probe(agentFor(id), "/health") : null]);
+        ready = Boolean(tags);
+        imagesReady = Boolean(health?.ok);
+        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0 };
+      }
+      last = summarize(pod, ready, imagesReady, counts);
       return last;
     },
 

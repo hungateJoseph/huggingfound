@@ -928,6 +928,35 @@ await step("hosted: an image model is downloaded onto the rented GPU and picture
   await visitor.keyboard.press("Escape");
 });
 
+await step("hosted: the bar opens one list of everything on the machine, with Open and Remove", async () => {
+  // The poll refreshes the counts in the bar.
+  await visitor.request.get(`${hostedBase}/api/rent`);
+  await visitor.reload();
+  await visitor.waitForSelector("#bar-models");
+  await visitor.waitForFunction(() => /\d+ models? on it/.test(document.querySelector("#bar-models").textContent));
+  await visitor.click("#bar-models");
+  await visitor.waitForSelector("#gpu-models .gpu-list li");
+  const text = await visitor.locator("#gpu-models-body").innerText();
+  assert.match(text, /Chat models[\s\S]*Cydonia[\s\S]*Image models[\s\S]*stable-diffusion-v1-5-pruned-emaonly-Q8_0\.gguf/);
+  assert.match(text, /loaded in the GPU/);
+  const chatRow = visitor.locator('#gpu-models li[data-kind="chat"]', { hasText: "Cydonia" });
+  assert.match(await chatRow.innerText(), /TheDrummer\/Cydonia-24B-v2-GGUF/);
+  assert.equal(await visitor.locator('#gpu-models li[data-kind="chat"]', { hasText: "llama3.2:3b" }).locator("[data-open]").count(), 0, "a model not from the Hub has no window to open");
+  await chatRow.locator("[data-open]").click();
+  await visitor.waitForSelector("#steps .step");
+  assert.equal(await visitor.locator(".where-opt.on").innerText(), "On a rented GPU");
+  assert.equal(await visitor.locator("#gpu-models").isVisible(), false);
+  await visitor.keyboard.press("Escape");
+  await visitor.click("#bar-models");
+  await visitor.waitForSelector('#gpu-models li[data-kind="image"]');
+  acceptDialogs = true;
+  await visitor.locator('#gpu-models li[data-kind="image"] [data-remove]').click();
+  await visitor.waitForFunction(() => !document.querySelector('#gpu-models li[data-kind="image"]'));
+  acceptDialogs = false;
+  assert.ok(rentedAgent.state.deleted.length > 0);
+  await visitor.keyboard.press("Escape");
+});
+
 await step("hosted: deleting the account deletes the machine and signs out", async () => {
   await visitor.keyboard.press("Escape");
   const podId = (await (await visitor.request.get(`${hostedBase}/api/rent`)).json()).id;
