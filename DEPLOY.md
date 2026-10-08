@@ -154,6 +154,15 @@ only if the package is public:
    then **Package settings**.
 2. Under **Danger Zone**, **Change visibility** to **Public**.
 
+The image holds only software (Ollama, stable-diffusion.cpp, Node and the
+agent from this repository), never keys or anyone's data, so a public
+package exposes nothing. For a single-owner setup that wants it private
+anyway: keep the package private, save a registry login in RunPod
+(**Settings, Container registry auth**, with a GitHub token that has
+`read:packages`), and set `HUGGINGFOUND_GPU_REGISTRY` to that credential's
+id; the pod is then created with it. That cannot serve other people's
+rentals, which run in their own RunPod accounts.
+
 Until then HuggingFound rents the plain `ollama/ollama` image instead, so
 chat models work and image models stay on people's own computers; the
 switch happens by itself once the package is public (each rental checks

@@ -16,6 +16,11 @@ export const GPU_IMAGE = process.env.HUGGINGFOUND_GPU_IMAGE || "ghcr.io/hungatej
 // The plain Ollama image, used when the full one cannot be pulled (not
 // published yet, or the package not public): chat models only.
 export const OLLAMA_IMAGE = "ollama/ollama";
+// For a single-owner setup that keeps the image private: the id of a
+// container registry credential saved in the RunPod account (Settings,
+// Container registry auth), passed with each pod so RunPod can pull it.
+// It cannot serve other people's rentals, which run in their own accounts.
+export const GPU_REGISTRY_AUTH = process.env.HUGGINGFOUND_GPU_REGISTRY || "";
 export const OLLAMA_PORT = 11434;
 export const AGENT_PORT = 7860;
 
@@ -67,7 +72,7 @@ export class RentError extends Error {
 // `env()` reads the saved settings and `save(updates)` writes them: the
 // RunPod key, the id of the pod HuggingFound made, and the chat server
 // address, which the rental owns while a pod exists.
-export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, imageCheck = (img) => imagePullable(img, fetchImpl), now = Date.now }) {
+export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), now = Date.now }) {
   let options = { at: 0, key: "", tiers: null };
   let last = null;
   let lastActivity = now();
@@ -273,11 +278,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         env.HF_ORIGINS = allowed.join(",");
       }
       // The full image when it can be pulled, otherwise plain Ollama: a
-      // machine for chat models only, rather than no machine.
-      const full = await imageCheck(image);
+      // machine for chat models only, rather than no machine. With a
+      // registry credential the image is private and RunPod pulls it with
+      // that, so the public check is skipped.
+      const full = registry ? true : await imageCheck(image);
       const pod = await request("POST", "/pods", {
         name: "huggingfound",
         image: full ? image : OLLAMA_IMAGE,
+        ...(full && registry ? { registry } : {}),
         gpu: { id: offer.gpu.id, count: 1 },
         cloud: "SECURE",
         disk: CONTAINER_DISK_GB,

@@ -306,6 +306,18 @@ test("when the full image cannot be pulled, a plain Ollama machine is rented ins
   assert.equal(readEnv(file).RUNPOD_POD_AGENT, undefined);
 });
 
+test("a registry credential keeps the image private: it travels with the pod and the public check is skipped", async () => {
+  const file = path.join(home, "private.env");
+  writeEnv(file, { RUNPOD_API_KEY: KEY });
+  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, agentUrl: () => agent.url, registry: "reg_abc123", imageCheck: async () => false });
+  const r = await rental.rent({ gb: 24, diskGb: 50 });
+  const made = runpod.state.created.at(-1);
+  assert.equal(made.registry, "reg_abc123");
+  assert.notEqual(made.image, "ollama/ollama");
+  assert.equal(r.images, true);
+  await rental.remove();
+});
+
 test("the idle watch stops a machine nobody has used, but not during a download or when turned off", async () => {
   let clock = 1_000_000_000_000;
   const file = path.join(home, "idle.env");
