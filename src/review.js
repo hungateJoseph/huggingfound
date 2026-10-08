@@ -79,8 +79,9 @@ export function buildRequest(input, { outputDir } = {}) {
     const parts = [`I asked ${from}:`, `<request>\n${question || "(the request was not kept)"}\n</request>`];
     if (instructions) parts.push(`It had these standing instructions:`, `<instructions>\n${instructions}\n</instructions>`);
     parts.push(`It answered:`, `<answer>\n${answer}\n</answer>`);
+    const focus = String(input.focus ?? "").trim();
     if (editing) parts.push(`Change this about the answer:`, `<change>\n${request}\n</change>`, `Reply with only the revised answer.`);
-    else parts.push(`Is the answer right? Check it and tell me what, if anything, is wrong.`);
+    else parts.push(`Is the answer right? Check it and tell me what, if anything, is wrong.${focus ? ` Pay particular attention to: ${focus}` : ""}`);
     return { ...base, system: editing ? EDIT_TEXT_SYSTEM : TEXT_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "image") {
@@ -105,7 +106,8 @@ export function buildRequest(input, { outputDir } = {}) {
     if (bytes.length > MAX_IMAGE_BYTES) throw new ReviewError("That picture is larger than 5 MB, which is more than Claude accepts.");
     const prompt = String(input.prompt ?? "").trim();
     const negative = String(input.negative ?? "").trim();
-    const ask = editing ? `I want this changed about the picture:\n\n<change>\n${request}\n</change>\n\nWrite the Description, Avoid and Keep lines for the image-to-image pass.` : "How well does the picture match, what is wrong with it, and what should I ask for instead?";
+    const focus = String(input.focus ?? "").trim();
+    const ask = editing ? `I want this changed about the picture:\n\n<change>\n${request}\n</change>\n\nWrite the Description, Avoid and Keep lines for the image-to-image pass.` : `How well does the picture match, what is wrong with it, and what should I ask for instead?${focus ? ` Pay particular attention to: ${focus}` : ""}`;
     const text = [`${from[0].toUpperCase()}${from.slice(1)} made this picture from my description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, negative ? `I asked it to avoid:\n\n<avoid>\n${negative}\n</avoid>` : "I gave it nothing to avoid.", ask].join("\n\n");
     return {
       ...base,

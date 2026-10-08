@@ -493,27 +493,27 @@ await step("a conversation survives re-renders, an outside click and closing the
   });
   assert.ok(scrolled);
 
-  // The finished answer can be handed to Claude for a check; the review streams in under it.
-  assert.equal(await page.locator("#messages .check-go").count(), 13, "one button per answer");
-  await page.locator("#messages .check-go").last().click();
-  await page.waitForFunction(() => /word7 is not a word\./.test([...document.querySelectorAll("#messages .check .review-body")].at(-1)?.textContent ?? ""));
-  assert.match(await page.locator("#messages .check .review-foot").last().innerText(), /Checked by claude-opus-5\. Sent to Anthropic: your question and this answer\./);
-  assert.equal(await page.locator("#messages .check-go").last().innerText(), "Ask Claude again");
+  // One control per answer: Claude's check comes first in it, and the review streams in under it.
+  assert.equal(await page.locator("#messages .improve-go").count(), 13, "one control per answer");
+  await page.locator("#messages .improve-go").last().click();
+  const improve = page.locator("#messages .improve-wrap").last();
+  await improve.locator(".improve").waitFor();
+  assert.equal(await improve.locator(".improve-by").inputValue(), "claude-check", "the check is the first choice");
+  await improve.locator(".improve-run").click();
+  await page.waitForFunction(() => /word7 is not a word\./.test([...document.querySelectorAll("#messages .improve-wrap .review-body")].at(-1)?.textContent ?? ""));
+  assert.match(await improve.locator(".review-foot").innerText(), /Checked by claude-opus-5\. Sent to Anthropic: your question and this answer\./);
   assert.equal(reviewed.length, 1);
   assert.equal(reviewed[0].kind, "text");
   assert.equal(reviewed[0].model, "qwen-test");
   assert.equal(reviewed[0].question, "hello there", "the question that led to the answer goes with it");
   assert.match(reviewed[0].answer, /^word0 .*word39 $/s);
 
-  // The answer can be handed on to be improved: Claude revises it, and the revision joins the conversation with its chain of hands.
-  await page.locator("#messages .improve-go").last().click();
-  const improve = page.locator("#messages .improve").last();
-  await improve.waitFor();
+  // The same control hands the answer on to be improved: Claude revises it, and the revision joins the conversation with its chain of hands.
   assert.ok((await improve.locator(".improve-by option").allTextContents()).some((t) => /Claude \(revises the answer\)/.test(t)));
   await improve.locator(".improve-request").fill("shorter");
   await improve.locator(".improve-by").selectOption("claude");
   await improve.locator(".improve-run").click();
-  await page.waitForFunction(() => /word7 is not a word\./.test([...document.querySelectorAll("#messages .improve .review-body")].at(-1)?.textContent ?? ""));
+  await page.waitForFunction(() => /^Claude's revision/.test([...document.querySelectorAll("#messages .improve-wrap .review-head")].at(-1)?.textContent ?? "") && /word7 is not a word\./.test([...document.querySelectorAll("#messages .improve-wrap .review-body")].at(-1)?.textContent ?? ""));
   assert.equal(reviewed.at(-1).mode, "edit");
   assert.equal(reviewed.at(-1).request, "shorter");
   await improve.locator("button", { hasText: "Use this as the answer" }).click();
@@ -533,7 +533,7 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(await page.locator("#messages .msg").count(), 27);
   assert.match(await page.locator("#messages .msg").last().innerText(), /word7 is not a word/);
   assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("chat:qwen-test"))).length, 27, "kept on this computer");
-  const kept = page.locator("#messages .check", { hasText: "Checked earlier by Claude" });
+  const kept = page.locator("#messages .improve-wrap", { hasText: "Checked earlier by Claude" });
   assert.equal(await kept.count(), 1);
   assert.match(await kept.locator(".review-body").innerText(), /This has one problem\.\nword7 is not a word\./, "the review is kept with the answer");
 
@@ -572,9 +572,8 @@ await step("every chat model asks where to run it; picking a GPU without a key a
   await page.waitForSelector("#steps .step");
   const options = await page.$$eval(".where .where-opt", (els) => els.map((e) => [e.textContent, e.classList.contains("on")]));
   assert.deepEqual(options, [["On this computer", true], ["On a rented GPU, by the hour", false]]);
-  assert.match(await page.locator("#modal-body .notice.warn").innerText(), /larger than the memory/);
-  const offer = page.locator("#modal-body .notice.info", { hasText: "rented GPU" });
-  assert.match(await offer.innerText(), /a 48 GB card holds this 25\.6 GB file/);
+  assert.match(await page.locator("#modal-body .notice.warn").innerText(), /Larger than this computer has to spare.*pick On a rented GPU above/);
+  assert.equal(await page.locator("#modal-body .notice.info").count(), 0, "no second notice saying the same");
   assert.equal(await page.locator("#rent-bar").isVisible(), false, "nothing rented yet");
   await page.click('.where-opt[data-where="rented"]');
   await page.waitForSelector(".rent-ask");
@@ -603,7 +602,6 @@ await step("every chat model asks where to run it; picking a GPU without a key a
 await step("renting from the model window preselects its size, and the bar shows the running cost", async () => {
   await page.waitForFunction(() => /No GPU is rented right now[\s\S]*A40 at \$0\.40 an hour/.test(document.querySelector(".rent-ask")?.textContent ?? ""), null, { timeout: 10000 });
   assert.match(await page.locator(".rent-ask").innerText(), /No GPU is rented right now[\s\S]*A40 at \$0\.40 an hour/, "with a key saved, the question becomes an offer");
-  assert.match(await page.locator("#modal-body .notice.info", { hasText: "rented GPU" }).innerText(), /a 48 GB card \(A40, \$0\.40 an hour\)/, "the price is on the model window too");
   await page.click("#ask-rent");
   await page.waitForSelector("#rent-panel .tier");
   assert.equal(await page.locator('#rent-panel input[name="rent-tier"]:checked').inputValue(), "48");
@@ -870,11 +868,11 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   assert.ok(rentedOllama.state.origins.includes(hostedBase), "sent by the page itself, from the site's origin");
   // Improve goes to Claude with the account's saved key; the site relays that one request.
   await visitor.locator("#messages .improve-go").last().click();
-  const improve = visitor.locator("#messages .improve").last();
+  const improve = visitor.locator("#messages .improve-wrap").last();
   await improve.locator(".improve-request").fill("shorter");
   await improve.locator(".improve-by").selectOption("claude");
   await improve.locator(".improve-run").click();
-  await visitor.waitForFunction(() => /word7 is not a word/.test([...document.querySelectorAll("#messages .improve .review-body")].at(-1)?.textContent ?? ""));
+  await visitor.waitForFunction(() => /word7 is not a word/.test([...document.querySelectorAll("#messages .improve-wrap .review-body")].at(-1)?.textContent ?? ""));
   assert.equal(reviewed.at(-1).mode, "edit");
   assert.equal(await visitor.locator("#chat-download").isVisible(), true);
   await visitor.keyboard.press("Escape");
@@ -887,7 +885,7 @@ await step("hosted: an image model is downloaded onto the rented GPU and picture
   await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).click();
   await visitor.waitForSelector(".where");
   assert.equal(await visitor.locator(".where-opt.on").innerText(), "On a rented GPU", "the machine is there, so it is the default");
-  assert.match(await visitor.locator("#modal-body .notice.info").first().innerText(), /pictures are made there/);
+  assert.match(await visitor.locator("#modal-body").innerText(), /Runs on your rented GPU; your browser talks to the machine directly/);
   const titles = await visitor.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
   assert.equal(titles.length, 1);
   assert.match(titles[0], /Download the model on the rented GPU/);

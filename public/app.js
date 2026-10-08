@@ -79,9 +79,9 @@ async function load() {
 // The words that change when the site is a public copy rather than the app
 // on this computer: nothing runs here, so the page points at the app.
 function renderHostedCopy() {
-  $("#home-lead").textContent = "Say it in plain words. HuggingFound looks through Hugging Face, the model cards, the community discussions and the wider web, and ranks what fits by what people say about it. Pick one, then run it on your own computer with HuggingFound, or rent a GPU by the hour and chat with it right here.";
+  $("#home-lead").textContent = "Say it in plain words. HuggingFound searches Hugging Face and what people say about each model, then runs the one you pick on your computer or on a GPU rented by the hour.";
   $("#browse .intro h1").textContent = "Open models, on your computer or on a rented GPU.";
-  $("#browse .intro .lead").textContent = `This catalogue is scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours, with what people say about each model summed up on its card. Fit and speed are shown for a typical 16 GB laptop, or for your rented GPU once you have one. Chat models run through Ollama, images through stable-diffusion.cpp and speech through whisper.cpp.`;
+  $("#browse .intro .lead").textContent = `Scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours, with what people say summed up on each card. Fit and speed are for a typical 16 GB laptop, or for your rented GPU once you have one.`;
   $("#only-runnable-text").textContent = "Only models that run with Ollama, whisper.cpp or stable-diffusion.cpp";
   $(".speed-note").textContent = "Speed lines are rough guesses for a typical laptop without a separate GPU, from the model's size. A GPU or Apple Silicon is several times faster, and the first run is slower while things load.";
 }
@@ -604,8 +604,6 @@ function renderModel(model, plan, choice = null) {
   if (choice && state.rentAsk === model.id && choice.where === "local") {
     parts.push(rentAskHtml(choice, plan));
   }
-  if (plan.remote && plan.runner === "ollama") parts.push(`<div class="notice info">${choice?.rented && state.chatServer?.rented ? "This model is downloaded to your rented GPU and runs there" : `This model is downloaded and run on the chat server at ${esc(plan.remote)}`}; nothing large comes to ${state.hosted ? "your" : "this"} computer.${state.hosted ? " Your browser talks to the machine directly; what you say to the model does not pass through this site." : " Change this in Settings."}</div>`);
-  if (plan.remote && plan.runner === "sd" && plan.tryWith?.agent) parts.push(`<div class="notice info">This model is downloaded to your rented GPU and pictures are made there, in seconds; nothing large comes to ${state.hosted ? "your" : "this"} computer. Your browser asks the machine directly, so what you ask for does not pass through ${state.hosted ? "this site" : "the app"}, and each picture is saved only when you download it.</div>`);
   parts.push(`<div class="spec">
     <div><b>Makes</b>${esc(makesOf(model).text)}</div>
     <div><b>File</b>${plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : esc(plan.file.name)}</div>
@@ -614,23 +612,15 @@ function renderModel(model, plan, choice = null) {
     <div><b>Runs with</b>${{ ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[plan.runner]}</div>
     <div><b>${state.hosted ? "Speed" : plan.remote && plan.runner === "ollama" ? "Speed there" : "Speed here"}</b>${esc(plan.speed?.text ?? "")}${plan.measured ? `<span class="measured">${esc(plan.measured)}</span>` : ""}</div>
   </div>
-  <p class="muted small">${state.hosted ? "Speed is a rough guess from the file size for a typical laptop without a separate GPU; a GPU or Apple Silicon is several times faster." : `Speed is a rough guess from the file size and this computer's hardware. The first run is slower while the model loads${plan.runner === "sd" ? " and the graphics shaders compile" : ""}; after a real run the measured time shows here.`}</p>`);
-  if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "This file is larger than a typical laptop has to spare; it wants 32 GB of memory or a big GPU." : "This file is larger than the memory this computer has to spare. It may still download, but it will be slow or fail to load. A smaller model is a better first try."}</div>`);
-  // A chat model too big for here can run on a GPU rented by the hour.
-  const tier = plan.fit.level === "no" && plan.runner === "ollama" && !plan.remote ? (state.rentTiers ?? []).find((t) => plan.file.gb <= t.files) : null;
-  if (tier) {
-    const offer = (state.rentOptions ?? []).find((t) => t.gb === tier.gb);
-    const price = offer?.pricePerHour != null ? ` (${offer.gpu.name}, ${money(offer.pricePerHour)} an hour)` : "";
-    parts.push(`<div class="notice info">A rented GPU runs it: a ${tier.gb} GB card${price} holds this ${plan.file.gb.toFixed(1)} GB file, billed by the hour, with nothing downloaded to ${state.hosted ? "your" : "this"} computer. <button class="ghost" id="rent-from-model">Run it on a rented GPU</button></div>`);
-  }
+  <p class="muted small">${plan.remote && (plan.runner === "ollama" || plan.tryWith?.agent) ? `Runs on your rented GPU; your browser talks to the machine directly and nothing passes through ${state.hosted ? "this site" : "the app"}. Speed is a guess for that card.` : state.hosted ? "Speed is a guess for a typical laptop without a separate GPU." : "Speed is a guess for this computer; a measured time replaces it after a real run."}</p>`);
+  if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "Larger than a typical laptop has to spare." : "Larger than this computer has to spare; it may load slowly or not at all."}${choice && !choice.rented ? " A rented GPU holds it: pick On a rented GPU above." : choice ? " Pick On a rented GPU above." : ""}</div>`);
   const onSite = state.hosted && !plan.remote;
-  if (onSite) parts.push(`<h3>How to run it</h3><p class="muted small">These are the steps HuggingFound does for you on your computer, one click each. They can also be done by hand.</p>`);
+  if (onSite) parts.push(`<h3>How to run it</h3>`);
   parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
-  if (onSite) parts.push(`<div class="get-app hosted-only"><b>Run HuggingFound on your computer</b> to do these with one click and try the model in a chat, image or transcription box right here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
+  if (onSite) parts.push(`<div class="get-app hosted-only"><b>HuggingFound on your computer</b> does these steps with one click and opens a try box here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
 npm install
 npm start</code></div>`);
-  if (onSite) parts.push(`<div class="actions"><button class="ghost" id="check-from-model">Ran it? Have Claude check its answer</button></div>`);
   if (!onSite) parts.push(`<div class="try" id="try"></div>`);
   parts.push(`<div class="voices" id="voices"><h3>What people say</h3><p class="muted small">Reading the model card and the community discussions</p></div>`);
   body.innerHTML = parts.join("");
@@ -642,8 +632,6 @@ npm start</code></div>`);
   for (const btn of body.querySelectorAll(".go")) {
     btn.addEventListener("click", () => runStep(model, plan, Number(btn.dataset.index)));
   }
-  body.querySelector("#check-from-model")?.addEventListener("click", () => state.openChecker?.(model.name));
-  body.querySelector("#rent-from-model")?.addEventListener("click", () => chooseWhere(model.id, "rented"));
   for (const btn of body.querySelectorAll("[data-where]")) btn.addEventListener("click", () => chooseWhere(model.id, btn.dataset.where));
   wireRentAsk(body, model, choice);
   renderTry(model, plan);
@@ -1292,7 +1280,7 @@ function renderChat(box, modelName) {
       <textarea id="chat-system" rows="2" placeholder="Who the model is and how it should answer, for example: You are a terse assistant that answers in plain English.">${esc(savedSystem)}</textarea>
       <small class="muted">Sent before every conversation as the system message; models follow this far more than a request typed into the chat. It sets a persona and rules, and it cannot change what a model was trained to refuse.</small>
     </details>
-    ${effortHtml("chat", CHAT_EFFORTS, "Thorough uses the model's thinking pass when it has one; a model without one is simply asked to be careful.")}
+    ${effortHtml("chat", CHAT_EFFORTS, "")}
     <div class="chat">
       <div class="chat-tools"><span class="muted small">${chat.messages.length ? "The conversation is kept in this browser until you start a new one." : `Ask anything; the answer comes from ${esc(modelName)} on ${state.plan?.remote ? "the rented GPU" : "this computer"}.`}</span><span class="tools-row"><button class="ghost" id="chat-download" ${chat.messages.length ? "" : "hidden"}>Download</button><button class="ghost" id="chat-clear">New chat</button></span></div>
       <div class="messages" id="messages"></div>
@@ -1306,8 +1294,8 @@ function renderChat(box, modelName) {
     const at = chat.messages.indexOf(m);
     return chat.messages.slice(0, at).reverse().find((x) => x.role === "user")?.content ?? "";
   };
-  // Each finished answer can be checked by Claude, or handed to Claude or
-  // another model to be improved; the question is the user turn before it.
+  // Each finished answer has one control: Claude checks it or revises it,
+  // or another model revises it; the question is the user turn before it.
   const checkFor = (el, m) => {
     if (m.chain?.length) {
       const chain = document.createElement("div");
@@ -1316,19 +1304,18 @@ function renderChat(box, modelName) {
       el.after(chain);
       el = chain;
     }
-    el = addCheck(el, {
-      label: "Ask Claude to check this",
-      sent: "your question and this answer",
-      saved: m.review ?? "",
-      payload: () => ({ kind: "text", model: modelName, question: questionFor(m), answer: m.content, system: chat.messages[0]?.role === "system" ? chat.messages[0].content : "" }),
-      onDone: (text) => {
-        m.review = text;
-        saveChat(modelName, chat);
-      },
-    });
     addImprove(el, {
       kind: "text",
       current: modelName,
+      check: {
+        sent: "your question and this answer",
+        saved: m.review ?? "",
+        payload: () => ({ kind: "text", model: modelName, question: questionFor(m), answer: m.content, system: chat.messages[0]?.role === "system" ? chat.messages[0].content : "" }),
+        onDone: (text) => {
+          m.review = text;
+          saveChat(modelName, chat);
+        },
+      },
       context: () => ({ question: questionFor(m), answer: m.content, system: chat.messages[0]?.role === "system" ? chat.messages[0].content : "" }),
       onUse: (text, by, request) => {
         const revised = { role: "assistant", content: text, chain: [...(m.chain ?? []), { by, request }] };
@@ -1546,20 +1533,23 @@ function imageHelpers(context = {}) {
   return out;
 }
 
-// Adds "Improve this" after `anchor`. `context()` gives what the helper
-// needs; `onUse(text, by, request)` takes a revised answer; `onImage(file,
-// by, request)` takes an edited picture.
-function addImprove(anchor, { kind, current, context, onUse = null, onImage = null }) {
+// Adds one control after `anchor`: "Improve or check". Its first choice is
+// Claude checking the output (pointing out mistakes, changing nothing); the
+// others revise it. `context()` gives what a helper needs; `check` holds
+// what the check sends and what to do with it; `onUse(text, by, request)`
+// takes a revised answer; `onImage(file, by, request)` an edited picture.
+function addImprove(anchor, { kind, current, context, check = null, onUse = null, onImage = null }) {
   const helpers = kind === "text" ? textHelpers(current) : imageHelpers(context());
+  if (check && claudeAvailable()) helpers.unshift({ id: "claude-check", label: kind === "text" ? "Claude checks it (points out mistakes, changes nothing)" : "Claude checks it (how well it matches, what to ask for instead)" });
   const wrap = document.createElement("div");
   wrap.className = "improve-wrap";
-  const choices = helpers.length ? helpers.map((h) => `<option value="${esc(h.id)}">${esc(h.label)}</option>`).join("") : `<option value="">${state.hosted ? "Sign in and save an Anthropic key, or download another model, to have someone improve this" : kind === "text" ? "Add an Anthropic key in Settings, or download a second chat model, to have someone improve this" : "Add an Anthropic key in Settings, or download an image model, to have someone improve this"}</option>`;
-  wrap.innerHTML = `<button class="ghost improve-go">Improve this</button>
+  const choices = helpers.length ? helpers.map((h) => `<option value="${esc(h.id)}">${esc(h.label)}</option>`).join("") : `<option value="">${state.hosted ? "Sign in and save an Anthropic key, or download another model, to have someone look at this" : kind === "text" ? "Add an Anthropic key in Settings, or download a second chat model, to have someone look at this" : "Add an Anthropic key in Settings, or download an image model, to have someone look at this"}</option>`;
+  wrap.innerHTML = `<button class="ghost improve-go">${check ? "Improve or check" : "Improve this"}</button>
     <div class="improve" hidden>
-      <textarea class="improve-request" rows="2" placeholder="${kind === "text" ? "What should change? For example: make it shorter, fix the loop, answer in French" : "What should change? For example: make the sky darker, remove the second person, turn it into a watercolour"}"></textarea>
       <div class="row"><label class="muted small">Done by</label><select class="improve-by" ${helpers.length ? "" : "disabled"}>${choices}</select><button class="primary improve-run" ${helpers.length ? "" : "disabled"}>Go</button></div>
-      <div class="review" hidden><div class="review-head"></div><div class="review-body"></div><div class="review-foot muted small"></div></div>
-    </div>`;
+      <textarea class="improve-request" rows="2" placeholder="${kind === "text" ? "What should change? For example: make it shorter, fix the loop, answer in French" : "What should change? For example: make the sky darker, remove the second person, turn it into a watercolour"}"></textarea>
+    </div>
+    <div class="review" hidden><div class="review-head"></div><div class="review-body"></div><div class="review-foot muted small"></div></div>`;
   anchor.after(wrap);
   const form = wrap.querySelector(".improve");
   const btn = wrap.querySelector(".improve-go");
@@ -1567,25 +1557,44 @@ function addImprove(anchor, { kind, current, context, onUse = null, onImage = nu
   const head = wrap.querySelector(".review-head");
   const body = wrap.querySelector(".review-body");
   const foot = wrap.querySelector(".review-foot");
+  const select = wrap.querySelector(".improve-by");
+  const request = wrap.querySelector(".improve-request");
+  const scroller = wrap.closest(".messages");
+  // For a check the request is optional: what to pay attention to.
+  const syncPlaceholder = () => {
+    if (select.value === "claude-check") request.placeholder = "Anything to look at in particular? (optional)";
+  };
+  select.addEventListener("change", syncPlaceholder);
+  syncPlaceholder();
+  if (check?.saved) {
+    box.hidden = false;
+    head.textContent = "Claude's check";
+    body.textContent = check.saved;
+    foot.textContent = "Checked earlier by Claude.";
+  }
   btn.addEventListener("click", () => {
     form.hidden = !form.hidden;
-    if (!form.hidden) wrap.querySelector(".improve-request").focus();
+    if (!form.hidden) request.focus();
   });
   wrap.querySelector(".improve-run").addEventListener("click", async () => {
-    const request = wrap.querySelector(".improve-request").value.trim();
-    const by = wrap.querySelector(".improve-by").value;
-    if (!request || !by) return;
+    const ask = request.value.trim();
+    const by = select.value;
+    if (!by || (by !== "claude-check" && !ask)) {
+      request.focus();
+      return;
+    }
     const run = wrap.querySelector(".improve-run");
     run.disabled = true;
     box.hidden = false;
     body.textContent = "";
     foot.innerHTML = "";
     try {
-      if (by === "claude") await improveWithClaude({ kind, request, context: context(), head, body, foot, onUse, onImage });
-      else if (by.startsWith("model:")) await improveWithModel({ model: by.slice(6), request, context: context(), head, body, foot, onUse });
+      if (by === "claude-check") await checkWithClaude({ ...check, focus: ask, head, body, foot, scroller });
+      else if (by === "claude") await improveWithClaude({ kind, request: ask, context: context(), head, body, foot, onUse, onImage });
+      else if (by.startsWith("model:")) await improveWithModel({ model: by.slice(6), request: ask, context: context(), head, body, foot, onUse });
       else if (by.startsWith("image:") || by.startsWith("agent:")) {
         const [repo, file] = by.slice(6).split("|");
-        await repaint({ repo, file, request, context: context(), prompt: `${context().prompt}, ${request}`, negative: context().negative, strength: 0.55, head, body, foot, onImage });
+        await repaint({ repo, file, request: ask, context: context(), prompt: `${context().prompt}, ${ask}`, negative: context().negative, strength: 0.55, head, body, foot, onImage });
       }
     } catch (err) {
       foot.textContent = `This did not finish: ${err.message}`;
@@ -1617,6 +1626,39 @@ function useButton(label, onClick) {
   b.textContent = label;
   b.addEventListener("click", onClick);
   return b;
+}
+
+// Claude's check: the output goes to Claude with the person's own key, and
+// the review streams in. Nothing is sent until the person asks.
+async function checkWithClaude({ sent, payload, focus = "", onDone = null, after = null, head, body, foot, scroller = null }) {
+  const creds = state.hosted ? hostedCredentials() ?? (state.claudeHosted?.saved ? {} : null) : {};
+  if (state.hosted && !creds) throw new Error(`This needs an Anthropic API key: ${state.user ? "save one in Settings" : "sign in and save one in Settings"}, or enter one in the Check an answer panel.`);
+  head.textContent = "Claude's check";
+  foot.textContent = `Sent to Anthropic: ${sent}.`;
+  const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify({ ...(await payload()), ...(focus ? { focus } : {}) }) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+  let text = "";
+  let end = null;
+  await readLines(res, (j) => {
+    if (j.error) throw new Error(j.error);
+    if (j.text) {
+      const stick = scroller ? nearBottom(scroller) : false;
+      text += j.text;
+      body.textContent = text;
+      if (stick) scroller.scrollTop = scroller.scrollHeight;
+    }
+    if (j.done) end = j;
+  });
+  if (end?.declined) {
+    body.textContent = "";
+    foot.textContent = end.note || "Claude declined to review this.";
+    return;
+  }
+  foot.textContent = `Checked by ${end?.model ?? "Claude"}. ${end?.note ? end.note + " " : ""}Sent to Anthropic: ${sent}.`;
+  if (text) {
+    onDone?.(text);
+    after?.(text, foot);
+  }
 }
 
 async function improveWithClaude({ kind, request, context, head, body, foot, onUse, onImage }) {
@@ -1807,7 +1849,7 @@ function renderImage(box, t) {
   box.innerHTML = `<h3>Try it</h3>
     ${remote}
     ${style}
-    <div class="effort-title">Effort <span class="muted small">more steps take longer and give a better picture</span></div>
+    <div class="effort-title">Effort</div>
     <div class="quality" id="quality">${options}</div>
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="Describe a picture, for example: a lighthouse at dusk, oil painting"></textarea>
@@ -1882,25 +1924,23 @@ function showPicture(into, { file = null, data = null, prompt, negative, model, 
     ${chain.length ? `<div class="chain">${esc(chainText(madeBy, chain))}</div>` : ""}
     <p class="muted small tools-row"><span>${file ? `Saved to ~/HuggingFound/output/${esc(file)}.` : "Made on the rented GPU; it lives in this page until you download it."}</span><a class="button" href="${esc(src)}" download="${esc(name)}">Download</a></p>`;
   into.appendChild(card);
-  const anchor = card.lastElementChild;
-  const checked = addCheck(anchor, {
-    label: "Ask Claude to check this picture",
-    sent: "this picture and your description",
-    payload: () => (file ? { kind: "image", model, file, prompt, negative } : { kind: "image", model, image: { media_type: "image/png", data }, prompt, negative }),
-    // Claude ends with a better description and avoid list; one click tries them.
-    after: (text, foot) => {
-      const better = /^Description:\s*(.+)$/m.exec(text)?.[1]?.trim();
-      const avoid = /^Avoid:\s*(.+)$/m.exec(text)?.[1]?.trim();
-      if (!better) return;
-      foot.prepend(useButton("Use Claude's suggestion", () => {
-        $("#image-prompt").value = better;
-        if (avoid) $("#image-negative").value = avoid;
-        $("#image-prompt").focus();
-      }));
-    },
-  });
-  addImprove(checked, {
+  addImprove(card.lastElementChild, {
     kind: "image",
+    check: {
+      sent: "this picture and your description",
+      payload: () => (file ? { kind: "image", model, file, prompt, negative } : { kind: "image", model, image: { media_type: "image/png", data }, prompt, negative }),
+      // Claude ends with a better description and avoid list; one click tries them.
+      after: (text, foot) => {
+        const better = /^Description:\s*(.+)$/m.exec(text)?.[1]?.trim();
+        const avoid = /^Avoid:\s*(.+)$/m.exec(text)?.[1]?.trim();
+        if (!better) return;
+        foot.prepend(useButton("Use Claude's suggestion", () => {
+          $("#image-prompt").value = better;
+          if (avoid) $("#image-negative").value = avoid;
+          $("#image-prompt").focus();
+        }));
+      },
+    },
     context: () => ({ file, data, prompt, negative, model, agent, repo, modelFile }),
     onImage: (edited, by, request, details) => {
       const next = [...chain, { by, request, verb: "edited" }];
@@ -1949,7 +1989,7 @@ async function agentPicture(agent, { repo, file, prompt, negative, quality, init
 function renderTranscribe(box, t) {
   box.innerHTML = `<h3>Try it</h3>
     <p class="muted small">Pick a recording. WAV works everywhere; MP3, M4A and others are converted with ffmpeg${t.ffmpeg ? ", which is installed" : ", which is not installed, so whisper.cpp reads them directly and may refuse some formats"}.</p>
-    ${effortHtml("transcribe", OTHER_EFFORTS, "Thorough searches more candidate transcriptions for each stretch of speech, which catches names and mumbled words at a cost in time.")}
+    ${effortHtml("transcribe", OTHER_EFFORTS, "")}
     <div class="file-row">
       <input type="file" id="audio" accept="audio/*,video/*">
       <button class="primary" id="audio-go">Transcribe</button>
@@ -2148,6 +2188,9 @@ function renderAccount() {
   // in for good; a guest sees it too, to keep their keys.
   $("#sign-in").hidden = (user && !user.guest) || !state.auth?.ready;
   $("#open-settings").hidden = !user;
+  // The paste-in checker is for visitors with nothing running here; with a
+  // machine, every answer has its own Improve or check.
+  $("#open-checker").hidden = Boolean(user);
   const box = $("#account");
   box.hidden = !user;
   const until = user?.expiresAt ? new Date(user.expiresAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
@@ -2293,9 +2336,7 @@ function renderRental() {
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
         ${r.status === "EXITED" || r.status === "ERROR" ? `<button class="primary" id="rent-start">Start</button>` : ""}
-        <button class="ghost" id="rent-models">Models on it</button>
         <button class="ghost" id="rent-delete">Delete machine and models</button>
-        <a class="muted small" href="https://www.runpod.io/console/pods" target="_blank" rel="noopener">Open RunPod</a>
       </div>
       <label class="field">
         <span>Stop after this many idle minutes</span>
@@ -2310,10 +2351,6 @@ function renderRental() {
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
-    panel.querySelector("#rent-models")?.addEventListener("click", () => {
-      $("#settings").hidden = true;
-      openGpuModels();
-    });
     panel.querySelector("#rent-save-idle").addEventListener("click", async () => {
       try {
         await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), ...(state.hosted ? {} : { RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked }) });
