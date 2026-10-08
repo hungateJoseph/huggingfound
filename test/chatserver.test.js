@@ -156,6 +156,13 @@ test("chat goes to the server, and its models are listed and removed there", asy
   const res = await post("/api/chat", { model: PULLED, messages: [{ role: "user", content: "hi" }] });
   assert.match(await res.text(), /from the server/);
   assert.equal(ollama.state.chats.at(-1).model, PULLED);
+  assert.equal(ollama.state.chats.at(-1).think, undefined, "no effort knobs unless the page sends them");
+  // Effort knobs pass through; anything else from the page does not.
+  await post("/api/chat", { model: PULLED, messages: [{ role: "user", content: "hi" }], think: true, options: { num_predict: 400, num_ctx: "big", seed: 7 }, keep_alive: "forever" });
+  const sent = ollama.state.chats.at(-1);
+  assert.equal(sent.think, true);
+  assert.deepEqual(sent.options, { num_predict: 400 });
+  assert.equal(sent.keep_alive, undefined);
   const st = await json("/api/storage");
   assert.equal(st.ollamaRemote, ollama.url);
   assert.equal(st.ollama.length, 2);

@@ -673,10 +673,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     if (req.method === "POST" && url.pathname === "/api/chat") {
       const body = await json(req);
       ctx.rental?.touch();
+      // Effort travels as Ollama's own knobs: whether the model thinks first,
+      // and a few numeric options; nothing else from the page reaches Ollama.
+      const options = {};
+      for (const key of ["num_predict", "num_ctx", "temperature", "top_p"]) if (Number.isFinite(body.options?.[key])) options[key] = body.options[key];
       const upstream = await fetchImpl(`${ollamaUrl(chatServer(ctx))}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: String(body.model ?? ""), messages: Array.isArray(body.messages) ? body.messages.slice(-40) : [], stream: true }),
+        body: JSON.stringify({ model: String(body.model ?? ""), messages: Array.isArray(body.messages) ? body.messages.slice(-40) : [], stream: true, ...(typeof body.think === "boolean" ? { think: body.think } : {}), ...(Object.keys(options).length ? { options } : {}) }),
       });
       res.writeHead(upstream.ok ? 200 : upstream.status, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
       const reader = upstream.body.getReader();

@@ -25,8 +25,10 @@ const dead = "http://127.0.0.1:1";
 // Ollama is not installed here; its chat endpoint is answered by a slow
 // stand-in so the chat box can be driven while a reply is still arriving.
 const REPLY_WORDS = 40;
+const chatBodies = [];
 const fetchImpl = (url, init) => {
   if (String(url).endsWith("/api/chat")) {
+    chatBodies.push(JSON.parse(init.body));
     const stream = new ReadableStream({
       async start(controller) {
         for (let i = 0; i < REPLY_WORDS; i++) {
@@ -396,6 +398,7 @@ await step("an image model offers Fast, Default and Max with Default chosen", as
   assert.equal(done[1], true, "the planted file counts as downloaded");
   if (done[0]) {
     await page.waitForSelector("#quality input");
+    assert.match(await page.locator("#try .effort-title").innerText(), /Effort/);
     const values = await page.$$eval("#quality input", (els) => els.map((e) => [e.value, e.checked]));
     assert.deepEqual(values, [["fast", false], ["default", true], ["max", false]]);
     assert.match(await page.locator("#quality").innerText(), /20 steps, the standard settings/);
@@ -453,6 +456,9 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(await page.locator("#messages .msg").count(), 24, "the earlier conversation is back");
   assert.match(await page.locator("#messages .msg").last().innerText(), /earlier answer 11/);
 
+  // Effort: Standard is chosen by default; Thorough turns the model's thinking on and adds a care instruction, for this request only.
+  assert.equal(await page.locator('.effort[data-kind="chat"] input:checked').inputValue(), "standard");
+  await page.click('.effort[data-kind="chat"] input[value="thorough"]');
   await page.fill("#chat-text", "hello there");
   await page.click("#chat-send");
   await page.waitForFunction(() => /word3 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
@@ -461,6 +467,11 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.waitForFunction(() => /word9 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
   assert.ok((await page.evaluate(() => document.querySelector("#messages").scrollTop)) < 10, "the view stays where the reader put it");
   assert.equal(await page.locator("#chat-send").isDisabled(), true);
+  assert.equal(chatBodies.at(-1).think, true);
+  assert.equal(chatBodies.at(-1).messages[0].role, "system");
+  assert.match(chatBodies.at(-1).messages[0].content, /check your work/);
+  assert.equal(chatBodies.at(-1).messages.at(-1).content, "hello there");
+  assert.equal(await page.evaluate(() => localStorage.getItem("effort:chat")), "thorough", "remembered for next time");
 
   // A click beside the window used to close it and throw the conversation away.
   await page.mouse.click(8, 8);

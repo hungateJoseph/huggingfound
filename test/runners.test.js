@@ -104,16 +104,25 @@ test("anything that is not a plain repo or file name is refused", () => {
   assert.throws(() => commandFor("make-coffee", {}, mac), /Unknown step/);
 });
 
-test("transcribe only reads recordings from the upload folder", () => {
+test("transcribe only reads recordings from the upload folder, and effort sets the beam search", () => {
   const audio = path.join(UPLOAD_DIR, "clip.wav");
   fs.writeFileSync(audio, "");
-  try {
-    const spec = commandFor("transcribe", { repo: "ggerganov/whisper.cpp", file: "ggml-base.en.bin", audio }, mac);
-    assert.ok(spec.argv.includes(audio));
-    assert.match(spec.result, /clip\.txt$/);
-  } catch (err) {
-    assert.match(err.message, /not installed/);
-  }
+  const dist = path.join(BIN_DIR, "whisper");
+  fs.mkdirSync(dist, { recursive: true });
+  fs.writeFileSync(path.join(dist, "whisper-cli"), "#!/bin/sh\n");
+  fs.chmodSync(path.join(dist, "whisper-cli"), 0o755);
+  const spec = commandFor("transcribe", { repo: "ggerganov/whisper.cpp", file: "ggml-base.en.bin", audio }, mac);
+  assert.ok(spec.argv.includes(audio));
+  assert.match(spec.result, /clip\.txt$/);
+  assert.ok(!spec.argv.includes("-bs"), "standard effort leaves whisper's defaults");
+  const careful = commandFor("transcribe", { repo: "ggerganov/whisper.cpp", file: "ggml-base.en.bin", audio, effort: "thorough" }, mac);
+  assert.equal(careful.argv[careful.argv.indexOf("-bs") + 1], "8");
+  assert.equal(careful.argv[careful.argv.indexOf("-bo") + 1], "8");
+  assert.match(careful.text, /carefully/);
+  assert.equal(commandFor("transcribe", { repo: "ggerganov/whisper.cpp", file: "ggml-base.en.bin", audio, effort: "quick" }, mac).argv.indexOf("-bs") > 0, true);
+  assert.throws(() => commandFor("transcribe", { repo: "ggerganov/whisper.cpp", file: "ggml-base.en.bin", audio, effort: "max" }, mac), /Bad effort/);
+  assert.throws(() => commandFor("transcribe", { repo: "ggerganov/whisper.cpp", file: "ggml-base.en.bin", audio: "/etc/passwd" }, mac), /Bad transcription/);
+  fs.rmSync(dist, { recursive: true, force: true });
 });
 
 test("downloadedFiles lists repo/file paths under the models folder", () => {

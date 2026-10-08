@@ -225,6 +225,8 @@ const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
 // A file up to two folders deep inside a repository, no dot-segments.
 const SUBPATH_RE = /^(?!\.)[\w.+-]+(?:\/(?!\.)[\w.+-]+){0,2}$/;
 const OLLAMA_NAME_RE = /^[\w.:/-]+$/;
+// How hard a model is asked to work: the page offers these three for every kind.
+export const EFFORTS = new Set(["quick", "standard", "thorough"]);
 
 // Returns { argv, cwd?, description } for a step, or a { download } request
 // the runner streams itself, or throws when the arguments are not allowed.
@@ -315,7 +317,12 @@ export function commandFor(kind, args, machine, hubBase = "https://huggingface.c
       const bin = whisperBinary();
       if (!bin) throw new Error("whisper-cli is not installed");
       const out = path.join(OUTPUT_DIR, path.basename(audio, path.extname(audio)));
-      return { argv: [bin, "-m", modelPath(repo, file), "-f", audio, "-otxt", "-of", out, "-np"], text: "Transcribing", result: `${out}.txt` };
+      // Effort: a wider beam search hears more and takes longer; a single
+      // beam is the quick pass.
+      const effort = String(args.effort ?? "standard");
+      if (!EFFORTS.has(effort)) throw new Error("Bad effort");
+      const extra = effort === "thorough" ? ["-bs", "8", "-bo", "8"] : effort === "quick" ? ["-bs", "1", "-bo", "1"] : [];
+      return { argv: [bin, "-m", modelPath(repo, file), "-f", audio, "-otxt", "-of", out, "-np", ...extra], text: effort === "thorough" ? "Transcribing carefully (wide beam search)" : "Transcribing", result: `${out}.txt` };
     }
     case "generate-image": {
       const repo = String(args.repo ?? "");

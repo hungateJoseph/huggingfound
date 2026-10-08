@@ -1150,6 +1150,52 @@ function nearBottom(el) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
 }
 
+// ---- effort ---------------------------------------------------------------
+// Every model can be asked to work harder or faster. For a chat model,
+// thorough turns on its thinking pass (when it has one) and asks it to check
+// its work; quick turns thinking off and keeps the answer short. Image
+// models spend more steps; speech models search wider. The choice is kept
+// per kind in this browser.
+const CHAT_EFFORTS = {
+  quick: { label: "Quick", hint: "no thinking, short answer", think: false, options: { num_predict: 400 } },
+  standard: { label: "Standard", hint: "the model's defaults" },
+  thorough: { label: "Thorough", hint: "thinks first, checks its work; slower and better", think: true, system: "Take your time. Think the problem through step by step, consider what could go wrong, and check your work before you answer. Be thorough and precise." },
+};
+const OTHER_EFFORTS = {
+  quick: { label: "Quick", hint: "fastest" },
+  standard: { label: "Standard", hint: "the usual pass" },
+  thorough: { label: "Thorough", hint: "slower, hears more" },
+};
+function savedEffort(kind) {
+  try {
+    const v = localStorage.getItem(`effort:${kind}`);
+    return ["quick", "standard", "thorough"].includes(v) ? v : "standard";
+  } catch {
+    return "standard";
+  }
+}
+function effortHtml(kind, table, note) {
+  const current = savedEffort(kind);
+  return `<div class="effort" data-kind="${kind}"><span class="effort-title">Effort</span>${Object.entries(table).map(([k, e]) => `<label class="${k === current ? "on" : ""}"><input type="radio" name="effort-${kind}" value="${k}" ${k === current ? "checked" : ""}> <b>${e.label}</b> <span class="muted">${esc(e.hint)}</span></label>`).join("")}${note ? `<small class="muted">${esc(note)}</small>` : ""}</div>`;
+}
+function wireEffort(box, kind) {
+  const el = box.querySelector(`.effort[data-kind="${kind}"]`);
+  if (!el) return;
+  for (const input of el.querySelectorAll("input")) {
+    input.addEventListener("change", () => {
+      try {
+        localStorage.setItem(`effort:${kind}`, input.value);
+      } catch {
+        // no storage
+      }
+      for (const label of el.querySelectorAll("label")) label.classList.toggle("on", label.contains(input));
+    });
+  }
+}
+function chosenEffort(box, kind) {
+  return box.querySelector(`input[name="effort-${kind}"]:checked`)?.value ?? "standard";
+}
+
 function renderChat(box, modelName) {
   const chat = chatFor(modelName);
   box.dataset.model = modelName;
@@ -1165,6 +1211,7 @@ function renderChat(box, modelName) {
       <textarea id="chat-system" rows="2" placeholder="Who the model is and how it should answer, for example: You are a terse assistant that answers in plain English.">${esc(savedSystem)}</textarea>
       <small class="muted">Sent before every conversation as the system message; models follow this far more than a request typed into the chat. It sets a persona and rules, and it cannot change what a model was trained to refuse.</small>
     </details>
+    ${effortHtml("chat", CHAT_EFFORTS, "Thorough uses the model's thinking pass when it has one; a model without one is simply asked to be careful.")}
     <div class="chat">
       <div class="chat-tools"><span class="muted small">${chat.messages.length ? "The conversation is kept in this browser until you start a new one." : `Ask anything; the answer comes from ${esc(modelName)} on ${state.plan?.remote ? "the rented GPU" : "this computer"}.`}</span><span class="tools-row"><button class="ghost" id="chat-download" ${chat.messages.length ? "" : "hidden"}>Download</button><button class="ghost" id="chat-clear">New chat</button></span></div>
       <div class="messages" id="messages"></div>
@@ -1230,7 +1277,8 @@ function renderChat(box, modelName) {
     if (!el) return;
     const stick = nearBottom(el.parentElement);
     el.textContent = text;
-    el.classList.toggle("pending", pending);
+    // Empty while the model thinks: the bubble keeps saying so.
+    el.classList.toggle("pending", pending || !text);
     if (stick) el.parentElement.scrollTop = el.parentElement.scrollHeight;
   };
   const send = async () => {
@@ -1259,7 +1307,26 @@ function renderChat(box, modelName) {
     $("#chat-send").disabled = true;
     let reply = "";
     try {
-      const res = await chatRequest({ model: modelName, messages: messages.map(({ role, content }) => ({ role, content })) });
+      // The effort shapes this one request: a care instruction joins the
+      // system message, thinking is turned on or off, the length capped.
+      const effort = CHAT_EFFORTS[chosenEffort(box, "chat")] ?? CHAT_EFFORTS.standard;
+      const sent = messages.map(({ role, content }) => ({ role, content }));
+      if (effort.system) {
+        if (sent[0]?.role === "system") sent[0] = { role: "system", content: `${sent[0].content}\n\n${effort.system}` };
+        else sent.unshift({ role: "system", content: effort.system });
+      }
+      const body = { model: modelName, messages: sent };
+      if (typeof effort.think === "boolean") body.think = effort.think;
+      if (effort.options) body.options = effort.options;
+      let res = await chatRequest(body);
+      // A model without a thinking pass refuses the knob; ask again without it.
+      if (!res.ok && "think" in body) {
+        const why = await res.text().catch(() => "");
+        if (/think/i.test(why)) {
+          delete body.think;
+          res = await chatRequest(body);
+        }
+      }
       if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -1303,6 +1370,7 @@ function renderChat(box, modelName) {
       if (mine()) $("#chat-send").disabled = false;
     }
   };
+  wireEffort(box, "chat");
   $("#chat-send").addEventListener("click", send);
   $("#chat-download").addEventListener("click", () => {
     const lines = [`# ${modelName}`, ""];
@@ -1648,6 +1716,7 @@ function renderImage(box, t) {
   box.innerHTML = `<h3>Try it</h3>
     ${remote}
     ${style}
+    <div class="effort-title">Effort <span class="muted small">more steps take longer and give a better picture</span></div>
     <div class="quality" id="quality">${options}</div>
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="Describe a picture, for example: a lighthouse at dusk, oil painting"></textarea>
@@ -1738,12 +1807,14 @@ function showPicture(into, { file, prompt, negative, model, madeBy, chain }) {
 function renderTranscribe(box, t) {
   box.innerHTML = `<h3>Try it</h3>
     <p class="muted small">Pick a recording. WAV works everywhere; MP3, M4A and others are converted with ffmpeg${t.ffmpeg ? ", which is installed" : ", which is not installed, so whisper.cpp reads them directly and may refuse some formats"}.</p>
+    ${effortHtml("transcribe", OTHER_EFFORTS, "Thorough searches more candidate transcriptions for each stretch of speech, which catches names and mumbled words at a cost in time.")}
     <div class="file-row">
       <input type="file" id="audio" accept="audio/*,video/*">
       <button class="primary" id="audio-go">Transcribe</button>
     </div>
     <pre class="log" id="audio-log" hidden></pre>
     <div id="audio-out"></div>`;
+  wireEffort(box, "transcribe");
   $("#audio-go").addEventListener("click", async () => {
     const file = $("#audio").files[0];
     if (!file) return;
@@ -1753,7 +1824,7 @@ function renderTranscribe(box, t) {
     $("#audio-go").disabled = true;
     try {
       const up = await fetch("/api/upload", { method: "POST", headers: { "x-filename": file.name }, body: file }).then(check);
-      const { id } = await api.post("/api/run", { kind: "transcribe", args: { repo: t.repo, file: t.file, audio: up.path } });
+      const { id } = await api.post("/api/run", { kind: "transcribe", args: { repo: t.repo, file: t.file, audio: up.path, effort: chosenEffort(box, "transcribe") } });
       const result = await follow(id, (line) => {
         log.textContent += line + "\n";
         log.scrollTop = log.scrollHeight;
