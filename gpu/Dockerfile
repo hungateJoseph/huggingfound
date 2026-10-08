@@ -32,9 +32,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=build /src/build/bin/sd-cli /src/build/bin/sd-server /opt/huggingfound/bin/
 COPY --from=build /out/lib/ /opt/huggingfound/lib/
 # Every library must resolve here, or the build fails now rather than on a
-# rented machine (the runner has no GPU driver, so the binary is not run).
+# rented machine. The one exception is libcuda.so.1, the NVIDIA driver
+# library, which only a machine with a GPU has and the host supplies.
 RUN LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli \
- && ! (LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli | grep -q "not found")
+ && ! (LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli | grep "not found" | grep -v "libcuda.so.1")
 COPY agent.js start.sh /opt/huggingfound/
 RUN chmod +x /opt/huggingfound/start.sh /opt/huggingfound/bin/sd-cli /opt/huggingfound/bin/sd-server
 

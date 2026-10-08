@@ -47,5 +47,6 @@ jobs:
           tags: |
             ghcr.io/hungatejoseph/huggingfound-gpu:latest
             ghcr.io/hungatejoseph/huggingfound-gpu:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The compiled stage is too big for the Actions cache; the registry keeps it.
+          cache-from: type=registry,ref=ghcr.io/hungatejoseph/huggingfound-gpu:buildcache
+          cache-to: type=registry,ref=ghcr.io/hungatejoseph/huggingfound-gpu:buildcache,mode=max
