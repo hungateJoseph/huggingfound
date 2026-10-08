@@ -2364,6 +2364,7 @@ function renderRental() {
         return;
       }
       await load();
+      notice("Saved.", "ok");
     });
     pollRental();
     return;
@@ -2582,25 +2583,32 @@ $("#gpu-models").addEventListener("click", (e) => {
 
 // While a machine exists its status is refreshed: often while it starts,
 // once a minute after that for the running time and the cost.
+// One timer, ever: each call replaces the pending one, so however often the
+// panel is redrawn there is one poll in flight. (Two timers once doubled
+// each tick until RunPod throttled the key.)
 function pollRental() {
-  if (state.rentPoll) return;
-  const tick = async () => {
-    state.rentPoll = null;
-    if (!state.rental?.rented) return;
-    const wasReady = state.rental.ready;
-    try {
-      state.rental = await api.get("/api/rent");
-    } catch {
-      // the next tick tries again
-    }
-    renderRental();
-    if (!wasReady && state.rental?.ready) {
-      notice("The rented GPU is ready. Chat models are downloaded to it and run there.", "ok");
-      if (state.open) openModel(state.open);
-    }
-    if (state.rental?.rented) state.rentPoll = setTimeout(tick, state.rental.ready || state.rental.status === "EXITED" ? 60000 : 10000);
-  };
-  state.rentPoll = setTimeout(tick, state.rental?.ready || state.rental?.status === "EXITED" ? 60000 : 10000);
+  clearTimeout(state.rentPoll);
+  state.rentPoll = null;
+  if (!state.rental?.rented) return;
+  const quiet = state.rental.ready || state.rental.status === "EXITED";
+  state.rentPoll = setTimeout(rentalTick, quiet ? 60000 : 12000);
+}
+
+async function rentalTick() {
+  state.rentPoll = null;
+  if (!state.rental?.rented) return;
+  const wasReady = state.rental.ready;
+  try {
+    state.rental = await api.get("/api/rent");
+  } catch {
+    // the next tick tries again
+  }
+  // Redrawing schedules the next poll; nothing else does.
+  renderRental();
+  if (!wasReady && state.rental?.ready) {
+    notice("The rented GPU is ready. Chat models are downloaded to it and run there.", "ok");
+    if (state.open) openModel(state.open);
+  }
 }
 
 async function renderImageServerStatus() {

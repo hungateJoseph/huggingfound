@@ -24,7 +24,7 @@ export const GPUS = [
 ];
 
 export function startStubRunpod() {
-  const state = { pods: {}, created: [], actions: [], calls: [], nextId: 1, polls: 0, badKey: false };
+  const state = { pods: {}, created: [], actions: [], calls: [], nextId: 1, polls: 0, badKey: false, rateLimited: false };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -36,6 +36,7 @@ export function startStubRunpod() {
         res.end(data === undefined ? "" : JSON.stringify(data));
       };
       if (req.headers.authorization !== `Bearer ${KEY}` || state.badKey) return reply(401, { error: "Unauthorized" });
+      if (state.rateLimited) return reply(429, { error: "Too Many Requests" });
       const data = body ? JSON.parse(body) : {};
       if (req.method === "GET" && url.pathname === "/catalog/gpus") return reply(200, { gpus: GPUS });
       if (req.method === "GET" && url.pathname === "/registries") return reply(200, { registries: [{ id: "reg_abc123", name: "GitHub packages" }, { id: "reg_other", name: "Docker Hub" }] });

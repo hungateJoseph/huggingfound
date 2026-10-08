@@ -36,7 +36,7 @@ before(async () => {
   runpod = await startStubRunpod();
   ollama = await startStubOllama();
   agent = await startStubAgent();
-  server = createServer({ envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, idleWatch: false });
+  server = createServer({ envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, runpodStatusTtl: 0, idleWatch: false });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -346,11 +346,46 @@ test("a registry login chosen in Settings keeps the image private: it travels wi
   await rental.remove();
 });
 
+test("a page asking several times at once costs one RunPod call, and a throttled key gets the last known answer", async () => {
+  let clock = 1_700_000_000_000;
+  const file = path.join(home, "throttle.env");
+  writeEnv(file, { RUNPOD_API_KEY: KEY });
+  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, agentUrl: () => agent.url, imageCheck: async () => true, now: () => clock });
+  await rental.rent({ gb: 24, diskGb: 50 });
+  const before = runpod.state.calls.filter((c) => c.startsWith("GET /pods/")).length;
+  const [a, b, c] = await Promise.all([rental.status(), rental.status(), rental.status()]);
+  assert.equal(runpod.state.calls.filter((cl) => cl.startsWith("GET /pods/")).length, before + 1, "three askers, one call");
+  assert.equal(a, b);
+  assert.equal(b, c);
+  clock += 2000;
+  await rental.status({ probe: false });
+  assert.equal(runpod.state.calls.filter((cl) => cl.startsWith("GET /pods/")).length, before + 1, "a fresh answer is reused for a few seconds");
+  clock += 5000;
+  await rental.status({ probe: false });
+  assert.equal(runpod.state.calls.filter((cl) => cl.startsWith("GET /pods/")).length, before + 2);
+  // RunPod throttles: the catalogue falls back to the last prices, and nothing is asked again for half a minute.
+  const tiers = await rental.tiers();
+  runpod.state.rateLimited = true;
+  clock += 16 * 60e3;
+  const calls = runpod.state.calls.length;
+  const stale = await rental.tiers();
+  assert.deepEqual(stale, tiers, "yesterday's prices beat none");
+  assert.equal(runpod.state.calls.length, calls + 1, "the one throttled call");
+  await assert.rejects(rental.remove(), /rate limiting these requests; try again in \d+ seconds/);
+  const kept = await rental.status();
+  assert.equal(kept.rented, true, "the machine is still shown");
+  assert.match(kept.error, /rate limiting/);
+  assert.equal(runpod.state.calls.length, calls + 1, "nothing else reached RunPod during the back-off");
+  runpod.state.rateLimited = false;
+  clock += 31e3;
+  await rental.remove();
+});
+
 test("the idle watch stops a machine nobody has used, but not during a download or when turned off", async () => {
   let clock = 1_000_000_000_000;
   const file = path.join(home, "idle.env");
   writeEnv(file, { RUNPOD_API_KEY: KEY, RUNPOD_IDLE_MINUTES: "20" });
-  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, now: () => clock });
+  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0, now: () => clock });
   assert.equal(await rental.checkIdle(), false, "nothing rented");
   const r = await rental.rent({ gb: 24, diskGb: 50 });
   await rental.status({ probe: false });

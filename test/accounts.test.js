@@ -53,7 +53,7 @@ before(async () => {
   runpod = await startStubRunpod();
   ollama = await startStubOllama();
   agent = await startStubAgent();
-  server = createServer({ envFile: path.join(home, ".env"), scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, hosted: true, refreshHours: 0, accountsDir: path.join(home, "accounts"), accountsSecret: SECRET, googleClientId: CLIENT, googleJwks: `http://127.0.0.1:${jwks.address().port}/certs`, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, idleWatch: false, siteOrigin: "https://huggingfound.test" });
+  server = createServer({ envFile: path.join(home, ".env"), scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, hosted: true, refreshHours: 0, accountsDir: path.join(home, "accounts"), accountsSecret: SECRET, googleClientId: CLIENT, googleJwks: `http://127.0.0.1:${jwks.address().port}/certs`, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, runpodStatusTtl: 0, idleWatch: false, siteOrigin: "https://huggingfound.test" });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });

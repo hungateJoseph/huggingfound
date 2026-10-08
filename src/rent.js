@@ -45,7 +45,10 @@ export async function imagePullable(image = GPU_IMAGE, fetchImpl = fetch) {
 // mounted there so models survive a stop and start.
 const MODELS_PATH = "/root/.ollama";
 const CONTAINER_DISK_GB = 20;
-const OPTIONS_TTL = 5 * 60e3;
+const OPTIONS_TTL = 15 * 60e3;
+// After RunPod throttles the key, nothing is asked of it for this long;
+// callers get what was last known instead of piling on.
+const BACKOFF_MS = 30e3;
 
 // The sizes offered, by GPU memory. `files` is the largest model file each
 // one runs comfortably: a 4-bit model wants its own size plus room for the
@@ -83,9 +86,12 @@ export class RentError extends Error {
 // `env()` reads the saved settings and `save(updates)` writes them: the
 // RunPod key, the id of the pod HuggingFound made, and the chat server
 // address, which the rental owns while a pod exists.
-export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), now = Date.now }) {
+export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), statusTtl = 4000, now = Date.now }) {
   let options = { at: 0, key: "", tiers: null };
   let last = null;
+  let lastAt = 0;
+  let inFlight = null;
+  let throttledUntil = 0;
   let lastActivity = now();
   let holds = 0;
   let watching = null;
@@ -106,6 +112,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
   async function request(method, path, body) {
     if (!key()) throw new RentError("Add a RunPod API key in Settings to rent a GPU.", 400);
+    if (now() < throttledUntil) throw new RentError(`RunPod is rate limiting these requests; try again in ${Math.ceil((throttledUntil - now()) / 1000)} seconds.`, 429);
     let res;
     try {
       res = await fetchImpl(`${base}${path}`, {
@@ -127,7 +134,10 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     }
     if (res.status === 401 || res.status === 403) throw new RentError("RunPod refused the API key. Check it in Settings; it needs permission to manage pods.", 401);
     if (res.status === 404) throw new RentError("RunPod has no such machine any more.", 404);
-    if (res.status === 429) throw new RentError("RunPod is rate limiting these requests; try again in a minute.", 429);
+    if (res.status === 429) {
+      throttledUntil = now() + BACKOFF_MS;
+      throw new RentError("RunPod is rate limiting these requests; try again in a minute.", 429);
+    }
     if (!res.ok) throw new RentError(`RunPod answered HTTP ${res.status}${describe(data) ? `: ${describe(data)}` : ""}.`, 502);
     return data;
   }
@@ -136,7 +146,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   // with free capacity in each size, with its price an hour.
   async function tiers() {
     if (options.tiers && options.key === key() && now() - options.at < OPTIONS_TTL) return options.tiers;
-    const data = await request("GET", "/catalog/gpus?include=AVAILABILITY&product=POD&cloud=SECURE");
+    let data;
+    try {
+      data = await request("GET", "/catalog/gpus?include=AVAILABILITY&product=POD&cloud=SECURE");
+    } catch (err) {
+      // Throttled: yesterday's prices beat no prices.
+      if (err.status === 429 && options.tiers && options.key === key()) return options.tiers;
+      throw err;
+    }
     const gpus = (data?.gpus ?? []).filter((g) => g.secure !== false && Number(g.memory) > 0 && gpuSupported(g));
     const out = TIERS.map((tier) => {
       const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.secure === "number");
@@ -228,7 +245,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     if (Object.keys(updates).length) save(updates);
   }
 
-  return {
+  const self = {
     configured: () => Boolean(key()),
     // The registry logins saved in the RunPod account, by name, for Settings to offer.
     async registries() {
@@ -240,7 +257,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     // Whether the chat server (or image agent) in use is the rented machine.
     owns: (url) => Boolean(url) && Boolean(podId()) && (url === urlFor(podId()) || url === agentFor(podId())),
     tiers,
-    cached: () => (podId() ? last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null, idleMinutes: idleMinutes() } : { rented: false }),
+    // What was last learned from RunPod, with the settings that can change
+    // without asking RunPod (the idle time) read live.
+    cached: () => (podId() ? { ...(last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null }), idleMinutes: idleMinutes(), idleSeconds: Math.round((now() - lastActivity) / 1000) } : { rented: false }),
     touch() {
       lastActivity = now();
     },
@@ -257,6 +276,17 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     async status({ probe: wantProbe = true } = {}) {
       const id = podId();
       if (!id) return { rented: false };
+      // Several parts of a page ask at once; one answer serves them all,
+      // and a fresh one is not fetched again within a few seconds.
+      if (last && last.id === id && now() - lastAt < statusTtl && (last.ready || !wantProbe)) return last;
+      if (inFlight) return inFlight;
+      inFlight = fetchStatus(id, wantProbe).finally(() => (inFlight = null));
+      return inFlight;
+    },
+  };
+
+  async function fetchStatus(id, wantProbe) {
+    {
       let pod;
       try {
         pod = await request("GET", `/pods/${encodeURIComponent(id)}`);
@@ -283,9 +313,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "" };
       }
       last = summarize(pod, ready, imagesReady, counts);
+      lastAt = now();
       return last;
-    },
+    }
+  }
 
+  Object.assign(self, {
     // Rents a machine of the given size with Ollama on it and makes it the
     // chat server. The disk holds the models; it must be bigger than them.
     async rent({ gb, diskGb = 50, origins = [] } = {}) {
@@ -410,7 +443,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       await this.stop();
       return true;
     },
-  };
+  });
+  return self;
 }
 
 function describe(data) {
