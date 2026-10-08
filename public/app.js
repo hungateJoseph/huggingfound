@@ -36,7 +36,12 @@ async function load() {
   if (s.hosted && !state.openChecker) setupChecker();
   renderAccount();
   renderDiskLine();
-  $("#env-path").textContent = s.envFile;
+  if (s.hosted) {
+    $("#env-note").textContent = s.user?.guest ? "Kept with your guest keys on this site, until they expire." : "Kept with your account on this site.";
+    $("#runpod-key").nextElementSibling.textContent = "Make an account at runpod.io and add some credit, then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. It is kept encrypted with your keys here and sent only to RunPod.";
+  } else {
+    $("#env-path").textContent = s.envFile;
+  }
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
   state.imageServer = s.imageServer;
   $("#reddit-status").textContent = s.redditApp ? `An app id is saved (${s.redditApp}); Reddit is searched with it.` : "No app id saved; Reddit is skipped.";
@@ -2314,6 +2319,10 @@ async function loadRentOptions() {
   } catch (err) {
     state.rentOptions = null;
     state.rentOptionsError = err.message;
+    // RunPod throttling passes by itself; ask again when it says to, without a click.
+    const wait = /rate limiting/.test(err.message) ? (Number(/in (\d+) seconds/.exec(err.message)?.[1]) || 30) + 2 : 0;
+    clearTimeout(state.rentOptionsRetry);
+    if (wait) state.rentOptionsRetry = setTimeout(loadRentOptions, wait * 1000);
   }
   state.rentOptionsLoading = false;
   renderRental();
@@ -2378,7 +2387,8 @@ function renderRental() {
     return;
   }
   if (!state.rentOptions) {
-    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : "Could not read RunPod's offer."} <button class="ghost" id="rent-retry">Try again</button></p>`;
+    const throttled = /rate limiting/.test(state.rentOptionsError ?? "");
+    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : "Could not read RunPod's offer."}${throttled ? " RunPod allows a number of requests an hour per key; the sizes appear here by themselves once it lets requests through again, which can take up to an hour after a burst." : ""} <button class="ghost" id="rent-retry">Try again</button></p>`;
     panel.querySelector("#rent-retry").addEventListener("click", loadRentOptions);
     return;
   }
