@@ -2301,7 +2301,9 @@ function renderRental() {
       </label>
       ${state.hosted ? "" : `<label class="check"><input type="checkbox" id="rent-quit" ${state.stopOnQuit ? "checked" : ""}> Stop it when HuggingFound quits</label>`}
       <div class="actions"><button class="ghost" id="rent-save-idle">Save</button></div>
-    </div>`;
+    </div>
+    ${privateImageHtml(true)}`;
+    loadRegistries(panel);
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
@@ -2341,12 +2343,7 @@ function renderRental() {
       <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep. Fixed once rented. RunPod charges a few cents a day for it, more while the machine is stopped than running.</small>
     </label>
     <div class="actions"><button class="primary" id="rent-go" ${want ? "" : "disabled"}>Rent it</button><button class="ghost" id="rent-refresh">Refresh prices</button></div>
-    <details class="private-image" ${state.registryAuth ? "open" : ""}>
-      <summary>Private machine image</summary>
-      <p class="muted small">The machine runs HuggingFound's image, a public package of plain software. To pull it from a private package instead, save a registry login in RunPod (Settings, Container registry auth: your GitHub user name and a token with read:packages) and pick it here; it is kept with your other settings and sent to RunPod with each machine.</p>
-      <div class="row"><select id="rent-registry"><option value="">Public image (default)</option></select><button class="ghost" id="rent-registry-save">Save</button></div>
-      <p class="muted small" id="rent-registry-note"></p>
-    </details>
+    ${privateImageHtml()}
     <p class="muted small">Ollama on the machine answers at a long random address that RunPod makes for it; only this computer knows it, and it goes when the machine is deleted. The disk is set up once; the machine itself usually answers two to four minutes after renting.</p>`;
   loadRegistries(panel);
   panel.querySelector("#rent-refresh").addEventListener("click", () => {
@@ -2386,6 +2383,17 @@ function afterRentalChange() {
     state.rentAsk = null;
   }
   openModel(state.open);
+}
+
+// The private-image choice, shown with or without a machine: it applies to
+// the next machine rented.
+function privateImageHtml(hasMachine = false) {
+  return `<details class="private-image" ${state.registryAuth ? "open" : ""}>
+      <summary>Private machine image</summary>
+      <p class="muted small">The machine runs HuggingFound's image, a public package of plain software. To pull it from a private package instead, save a registry login in RunPod (Settings, Container registry auth: your GitHub user name and a token with read:packages) and pick it here; it is kept with your other settings and sent to RunPod with each machine${hasMachine ? ", starting with the next one you rent" : ""}.</p>
+      <div class="row"><select id="rent-registry"><option value="">Public image (default)</option></select><button class="ghost" id="rent-registry-save">Save</button></div>
+      <p class="muted small" id="rent-registry-note"></p>
+    </details>`;
 }
 
 // The registry logins saved in the RunPod account, offered by name.
