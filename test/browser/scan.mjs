@@ -649,8 +649,20 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.fill("#rent-idle", "45");
   await page.click("#rent-save-idle");
   await page.waitForFunction(() => /after 45 minutes/.test(document.querySelector("#rent-panel").textContent));
-  await page.click("#rent-start");
+  await page.click("#close-settings");
+  // A stopped machine is started from the model window, not replaced by a new rental.
+  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await page.waitForSelector(".where");
+  await page.click('.where-opt[data-where="rented"]');
+  await page.waitForSelector("#ask-start");
+  assert.match(await page.locator(".rent-ask").innerText(), /Your rented GPU \(NVIDIA A40, 48 GB\) is stopped/);
+  await page.click("#ask-start");
   await page.waitForFunction(() => /starting|ready/.test(document.querySelector("#rent-bar").textContent));
+  await page.waitForFunction(() => document.querySelector(".where-opt.on")?.textContent === "On a rented GPU");
+  assert.equal(await page.locator("#steps .step").count(), 1, "planned for the machine again");
+  await page.keyboard.press("Escape");
+  await page.click("#open-settings");
+  await page.waitForSelector("#rent-panel .rent-card");
   assert.equal(await page.locator("#chat-server").inputValue(), rentedOllama.url, "pointed back at it");
   acceptDialogs = true;
   await page.click("#rent-delete");

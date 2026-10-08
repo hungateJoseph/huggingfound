@@ -673,6 +673,17 @@ function chooseWhere(id, where) {
 function rentAskHtml(choice, plan) {
   const back = `<button class="ghost" data-where="local">Run it on my computer instead</button>`;
   const size = choice.tier ? `This ${plan.file?.gb ? `${plan.file.gb.toFixed(1)} GB ` : ""}file wants a ${choice.tier} GB card.` : "This file is bigger than any card on offer.";
+  // A machine that exists but is stopped (it stops itself when idle) is
+  // started again, not replaced.
+  const r = state.rental;
+  if (r?.rented) {
+    const [word] = rentalPhase(r);
+    const fits = !choice.tier || !r.gb || r.gb >= choice.tier;
+    if (r.status === "EXITED" || r.status === "ERROR") {
+      return `<div class="rent-ask"><p><b>Your rented GPU (${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}) is stopped.</b> It stopped itself after sitting idle; its models are still on its disk. Starting it takes a minute or two.${fits ? "" : ` ${esc(size)} It may be tight on this card.`}</p><div class="actions"><button class="primary" id="ask-start">Start it</button>${back}</div></div>`;
+    }
+    return `<div class="rent-ask"><p><b>Your rented GPU is ${esc(word)}.</b> This window switches to it as soon as it answers.</p><div class="actions">${back}</div></div>`;
+  }
   if (state.hosted && !state.user) {
     const hours = state.auth?.guestHours ?? 12;
     return `<div class="rent-ask">
@@ -707,6 +718,7 @@ function rentAskHtml(choice, plan) {
 
 function wireRentAsk(body, model, choice) {
   body.querySelector("#ask-signin")?.addEventListener("click", openSignIn);
+  body.querySelector("#ask-start")?.addEventListener("click", () => rentAction("start", null));
   body.querySelector("#ask-rent")?.addEventListener("click", () => {
     state.rentWant = choice.tier;
     $("#settings").hidden = false;
