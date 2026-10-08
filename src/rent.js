@@ -126,7 +126,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   async function request(method, path, body) {
     if (!key()) throw new RentError("Add a RunPod API key in Settings to rent a GPU.", 400);
     // A back-off belongs to the key that was throttled; a fresh key starts clean.
-    if (throttledKey === key() && now() < throttledUntil) throw new RentError(`RunPod is rate limiting this key; it accepts requests again in ${waitText(throttledUntil - now())}. A new key at RunPod works at once.`, 429);
+    if (throttledKey === key() && now() < throttledUntil) throw new RentError(`RunPod has stopped answering this account for now; it accepts requests again in ${waitText(throttledUntil - now())}. The daily allowance is shared by every key on the account.`, 429);
     if (!withinBudget()) throw new RentError("HuggingFound has asked RunPod enough for the moment; it asks again in a minute.", 429);
     spent.push(now());
     let res;
@@ -160,7 +160,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       throttledUntil = now() + waitMs;
       throttledKey = key();
       console.error(`RunPod rate limited ${method} ${path}: retry-after=${res.headers.get("retry-after") ?? "-"} ratelimit=${res.headers.get("ratelimit") ?? res.headers.get("x-ratelimit-remaining") ?? "-"} policy=${res.headers.get("ratelimit-policy") ?? "-"}`);
-      throw new RentError(`RunPod is rate limiting this key; it accepts requests again in ${waitText(waitMs)}. A new key at RunPod works at once.`, 429);
+      throw new RentError(`RunPod has stopped answering this account for now; it accepts requests again in ${waitText(waitMs)}. The daily allowance is shared by every key on the account.`, 429);
     }
     if (!res.ok) throw new RentError(`RunPod answered HTTP ${res.status}${describe(data) ? `: ${describe(data)}` : ""}.`, 502);
     return data;

@@ -2321,7 +2321,7 @@ async function loadRentOptions() {
     state.rentOptionsError = err.message;
     // RunPod throttling passes by itself; ask again when it says to, without a click.
     const m = /again in (\d+) (seconds|minutes|hours)/.exec(err.message);
-    const wait = /rate limiting/.test(err.message) ? Math.min((Number(m?.[1]) || 30) * ({ seconds: 1, minutes: 60, hours: 3600 }[m?.[2]] ?? 1) + 2, 900) : 0;
+    const wait = /stopped answering|rate limiting|enough for the moment/.test(err.message) ? Math.min((Number(m?.[1]) || 30) * ({ seconds: 1, minutes: 60, hours: 3600 }[m?.[2]] ?? 1) + 2, 900) : 0;
     clearTimeout(state.rentOptionsRetry);
     if (wait) state.rentOptionsRetry = setTimeout(loadRentOptions, wait * 1000);
   }
@@ -2388,8 +2388,8 @@ function renderRental() {
     return;
   }
   if (!state.rentOptions) {
-    const throttled = /rate limiting/.test(state.rentOptionsError ?? "");
-    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : "Could not read RunPod's offer."}${throttled ? " Limits are per key, so a fresh key made at RunPod (Credentials, API Keys) and saved above works straight away; otherwise the sizes appear here by themselves when this key is accepted again." : ""} <button class="ghost" id="rent-retry">Try again</button></p>`;
+    const throttled = /stopped answering|rate limiting/.test(state.rentOptionsError ?? "");
+    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : "Could not read RunPod's offer."}${throttled ? " The sizes appear here by themselves when RunPod answers again." : ""} <button class="ghost" id="rent-retry">Try again</button></p>`;
     panel.querySelector("#rent-retry").addEventListener("click", loadRentOptions);
     return;
   }
