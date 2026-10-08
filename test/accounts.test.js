@@ -174,6 +174,7 @@ test("renting from the site makes a machine the browser may talk to directly, an
   assert.deepEqual(s.chatServer, { url: ollama.url, agent: agent.url, gpuGb: 24, comfortableGb: 21, rented: true, direct: true });
   assert.equal(made.env.HF_ORIGINS, "https://huggingfound.test", "the agent accepts this site's pages too");
   assert.deepEqual(made.ports, ["11434/http", "7860/http"]);
+  assert.equal(made.gpu.minCudaVersion, "12.4");
   assert.equal(s.rental.id, r.id);
   assert.equal(s.runners.ollama.remote, ollama.url);
   const b = await json("/api/state", ben);

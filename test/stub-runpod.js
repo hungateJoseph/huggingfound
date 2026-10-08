@@ -9,6 +9,10 @@ export const KEY = "rpa_testkey_0123456789abcdef";
 
 export const GPUS = [
   { id: "NVIDIA RTX A5000", name: "RTX A5000", memory: 24, secure: true, price: { secure: 0.27 }, availability: "NONE" },
+  // Cheap and free, but the image server is not compiled for these: never picked.
+  { id: "NVIDIA GeForce RTX 5090", name: "RTX 5090", memory: 32, secure: true, manufacturer: "NVIDIA", price: { secure: 0.2 }, availability: "HIGH" },
+  { id: "Tesla V100-SXM2-32GB", name: "V100", memory: 32, secure: true, manufacturer: "NVIDIA", price: { secure: 0.19 }, availability: "HIGH" },
+  { id: "NVIDIA RTX PRO 6000 Blackwell", name: "RTX PRO 6000", memory: 96, secure: true, manufacturer: "NVIDIA", price: { secure: 0.9 }, availability: "HIGH" },
   { id: "NVIDIA GeForce RTX 4090", name: "RTX 4090", memory: 24, secure: true, price: { secure: 0.44 }, availability: "HIGH" },
   { id: "NVIDIA L4", name: "L4", memory: 24, secure: true, price: { secure: 0.48 }, availability: "HIGH" },
   { id: "NVIDIA A40", name: "A40", memory: 48, secure: true, price: { secure: 0.4 }, availability: "MEDIUM" },

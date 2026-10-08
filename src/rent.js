@@ -51,6 +51,16 @@ const OPTIONS_TTL = 5 * 60e3;
 // one runs comfortably: a 4-bit model wants its own size plus room for the
 // conversation. The thresholds match machine.js (90% of the memory is
 // usable, 80% of that is a comfortable fit).
+// The machine image's image server is compiled for NVIDIA Ampere, Ada and
+// Hopper cards (compute 8.0 to 9.0) against CUDA 12.4. Newer Blackwell
+// cards and older Turing or Volta ones would fail at the first picture, so
+// they are never picked, and the host has to offer CUDA 12.4 or newer.
+export const MIN_CUDA = "12.4";
+const UNSUPPORTED_GPU = /\b(50\d0|B100|B200|B300|GB200|GB300|RTX PRO|V100|T4|P100|P40|A2|2080|2070|2060|TITAN)\b/i;
+export function gpuSupported(gpu) {
+  return (gpu.manufacturer ?? "NVIDIA") === "NVIDIA" && !UNSUPPORTED_GPU.test(String(gpu.id ?? "") + " " + String(gpu.name ?? ""));
+}
+
 export const TIERS = [
   { gb: 24, min: 20, max: 32, files: 17, examples: "30B-class models at 4-bit" },
   { gb: 48, min: 40, max: 64, files: 34, examples: "70B-class models at 4-bit" },
@@ -127,7 +137,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   async function tiers() {
     if (options.tiers && options.key === key() && now() - options.at < OPTIONS_TTL) return options.tiers;
     const data = await request("GET", "/catalog/gpus?include=AVAILABILITY&product=POD&cloud=SECURE");
-    const gpus = (data?.gpus ?? []).filter((g) => g.secure !== false && Number(g.memory) > 0);
+    const gpus = (data?.gpus ?? []).filter((g) => g.secure !== false && Number(g.memory) > 0 && gpuSupported(g));
     const out = TIERS.map((tier) => {
       const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.secure === "number");
       const free = inTier.filter((g) => g.availability && g.availability !== "NONE").sort((a, b) => a.price.secure - b.price.secure);
@@ -309,7 +319,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         name: "huggingfound",
         image: full ? image : OLLAMA_IMAGE,
         ...(full && auth ? { registry: auth } : {}),
-        gpu: { id: offer.gpu.id, count: 1 },
+        gpu: { id: offer.gpu.id, count: 1, minCudaVersion: MIN_CUDA },
         cloud: "SECURE",
         disk: CONTAINER_DISK_GB,
         ports: full ? [`${OLLAMA_PORT}/http`, `${AGENT_PORT}/http`] : [`${OLLAMA_PORT}/http`],

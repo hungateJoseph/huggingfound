@@ -84,7 +84,8 @@ test("with a key, each size names the cheapest card that is actually free", asyn
   const { configured, tiers } = await json("/api/rent/options");
   assert.equal(configured, true);
   const by = Object.fromEntries(tiers.map((t) => [t.gb, t]));
-  assert.equal(by[24].gpu.name, "RTX 4090", "the cheaper A5000 has no capacity");
+  assert.equal(by[24].gpu.name, "RTX 4090", "the cheaper A5000 has no capacity, and the cheaper 5090 and V100 are cards the image server is not built for");
+  assert.equal(by[80].gpu.name, "A100 PCIe", "the cheaper RTX PRO 6000 is Blackwell, which the image server is not built for");
   assert.equal(by[24].pricePerHour, 0.44);
   assert.equal(by[24].available, true);
   assert.equal(by[48].gpu.name, "A40");
@@ -116,7 +117,7 @@ test("renting makes a machine with Ollama on it and points the chat server at it
   const made = runpod.state.created[0];
   assert.equal(made.image, GPU_IMAGE, "Ollama plus the image agent");
   assert.equal(made.name, "huggingfound");
-  assert.deepEqual(made.gpu, { id: "NVIDIA A40", count: 1 });
+  assert.deepEqual(made.gpu, { id: "NVIDIA A40", count: 1, minCudaVersion: "12.4" }, "a host whose driver the compiled CUDA runtime accepts");
   assert.equal(made.cloud, "SECURE");
   assert.deepEqual(made.ports, ["11434/http", "7860/http"]);
   assert.equal(made.env.OLLAMA_HOST, "0.0.0.0");
