@@ -16,10 +16,11 @@ export const GPU_IMAGE = process.env.HUGGINGFOUND_GPU_IMAGE || "ghcr.io/hungatej
 // The plain Ollama image, used when the full one cannot be pulled (not
 // published yet, or the package not public): chat models only.
 export const OLLAMA_IMAGE = "ollama/ollama";
-// For a single-owner setup that keeps the image private: the id of a
-// container registry credential saved in the RunPod account (Settings,
-// Container registry auth), passed with each pod so RunPod can pull it.
-// It cannot serve other people's rentals, which run in their own accounts.
+// To keep the image private: a container registry login saved in the
+// renter's own RunPod account (Settings, Container registry auth) and
+// chosen in HuggingFound's Settings, passed with each pod so RunPod can
+// pull the image with it. HUGGINGFOUND_GPU_REGISTRY sets it for a
+// single-owner app without the Settings step.
 export const GPU_REGISTRY_AUTH = process.env.HUGGINGFOUND_GPU_REGISTRY || "";
 export const OLLAMA_PORT = 11434;
 export const AGENT_PORT = 7860;
@@ -82,6 +83,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   const key = () => env().RUNPOD_API_KEY || "";
   const podId = () => env().RUNPOD_POD_ID || "";
   // Minutes without a chat or download before the machine is stopped; 0 never stops it.
+  // The registry login for this rental: the one chosen in Settings, or the app-wide one.
+  const registryAuth = () => env().RUNPOD_REGISTRY_AUTH || registry || "";
   const idleMinutes = () => {
     const raw = env().RUNPOD_IDLE_MINUTES;
     if (raw === undefined || raw === "") return 30;
@@ -211,6 +214,11 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
   return {
     configured: () => Boolean(key()),
+    // The registry logins saved in the RunPod account, by name, for Settings to offer.
+    async registries() {
+      const data = await request("GET", "/registries");
+      return (data?.registries ?? []).map((r) => ({ id: String(r.id), name: String(r.name ?? r.id) }));
+    },
     rentedUrl: () => (podId() ? urlFor(podId()) : ""),
     rentedAgent: () => (podId() ? agentFor(podId()) : ""),
     // Whether the chat server (or image agent) in use is the rented machine.
@@ -281,11 +289,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // machine for chat models only, rather than no machine. With a
       // registry credential the image is private and RunPod pulls it with
       // that, so the public check is skipped.
-      const full = registry ? true : await imageCheck(image);
+      const auth = registryAuth();
+      const full = auth ? true : await imageCheck(image);
       const pod = await request("POST", "/pods", {
         name: "huggingfound",
         image: full ? image : OLLAMA_IMAGE,
-        ...(full && registry ? { registry } : {}),
+        ...(full && auth ? { registry: auth } : {}),
         gpu: { id: offer.gpu.id, count: 1 },
         cloud: "SECURE",
         disk: CONTAINER_DISK_GB,

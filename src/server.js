@@ -40,7 +40,7 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "HIDDEN_MODELS"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH"]);
 // Models a person has hidden from search and Browse: ids, comma-separated.
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
@@ -306,6 +306,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         // said to a model never passes through this server.
         chatServer: remote ? { url: remote, agent: imageAgent(ctx) || null, gpuGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).comfortableGb, rented: rentedChat(ctx), direct: hosted } : null,
         runpodKey: saved.RUNPOD_API_KEY ? mask(saved.RUNPOD_API_KEY) : "",
+        registryAuth: saved.RUNPOD_REGISTRY_AUTH || "",
         rental: ctx.rental ? ctx.rental.cached() : hosted ? null : { rented: false },
         rentTiers: TIERS,
         hidden: hiddenList(saved.HIDDEN_MODELS),
@@ -419,6 +420,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         updates.RUNPOD_IDLE_MINUTES = String(minutes);
       }
       if ("RUNPOD_STOP_ON_QUIT" in body) updates.RUNPOD_STOP_ON_QUIT = body.RUNPOD_STOP_ON_QUIT ? "" : "0";
+      if ("RUNPOD_REGISTRY_AUTH" in body) {
+        const value = String(body.RUNPOD_REGISTRY_AUTH ?? "").trim();
+        if (value && !/^[\w-]{1,120}$/.test(value)) return send(res, 400, { error: "That does not look like a RunPod registry credential id" });
+        updates.RUNPOD_REGISTRY_AUTH = value;
+      }
       if ("HIDDEN_MODELS" in body) {
         const ids = Array.isArray(body.HIDDEN_MODELS) ? body.HIDDEN_MODELS : String(body.HIDDEN_MODELS ?? "").split(",");
         const clean = [...new Set(ids.map((x) => String(x).trim()).filter(Boolean))];
@@ -597,6 +603,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const mine = ctx.rental;
       try {
         if (req.method === "GET" && action === "options") return send(res, 200, { configured: mine.configured(), tiers: mine.configured() ? await mine.tiers() : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false })) });
+        if (req.method === "GET" && action === "registries") return send(res, 200, { registries: mine.configured() ? await mine.registries() : [] });
         if (req.method === "GET" && action === "") return send(res, 200, await mine.status());
         if (req.method === "POST" && action === "") {
           const body = await json(req);

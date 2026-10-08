@@ -381,3 +381,7 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .hidden-models ul { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
 .hidden-models li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
 .hidden-models li button { font-size: 13px; padding: 4px 10px; }
+.private-image { margin: 10px 0; font-size: 14px; }
+.private-image summary { cursor: pointer; font-weight: 600; }
+.private-image .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.private-image select { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }

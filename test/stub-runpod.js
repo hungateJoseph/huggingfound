@@ -34,6 +34,7 @@ export function startStubRunpod() {
       if (req.headers.authorization !== `Bearer ${KEY}` || state.badKey) return reply(401, { error: "Unauthorized" });
       const data = body ? JSON.parse(body) : {};
       if (req.method === "GET" && url.pathname === "/catalog/gpus") return reply(200, { gpus: GPUS });
+      if (req.method === "GET" && url.pathname === "/registries") return reply(200, { registries: [{ id: "reg_abc123", name: "GitHub packages" }, { id: "reg_other", name: "Docker Hub" }] });
       if (req.method === "POST" && url.pathname === "/pods") {
         const gpu = GPUS.find((g) => g.id === data.gpu?.id);
         if (!gpu) return reply(422, { message: "unknown gpu" });

@@ -306,10 +306,13 @@ test("when the full image cannot be pulled, a plain Ollama machine is rented ins
   assert.equal(readEnv(file).RUNPOD_POD_AGENT, undefined);
 });
 
-test("a registry credential keeps the image private: it travels with the pod and the public check is skipped", async () => {
+test("a registry login chosen in Settings keeps the image private: it travels with the pod and the public check is skipped", async () => {
+  const { registries } = await json("/api/rent/registries");
+  assert.deepEqual(registries, [{ id: "reg_abc123", name: "GitHub packages" }, { id: "reg_other", name: "Docker Hub" }]);
+  assert.equal((await post("/api/settings", { RUNPOD_REGISTRY_AUTH: "bad id!" })).status, 400);
   const file = path.join(home, "private.env");
-  writeEnv(file, { RUNPOD_API_KEY: KEY });
-  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, agentUrl: () => agent.url, registry: "reg_abc123", imageCheck: async () => false });
+  writeEnv(file, { RUNPOD_API_KEY: KEY, RUNPOD_REGISTRY_AUTH: "reg_abc123" });
+  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, agentUrl: () => agent.url, imageCheck: async () => false });
   const r = await rental.rent({ gb: 24, diskGb: 50 });
   const made = runpod.state.created.at(-1);
   assert.equal(made.registry, "reg_abc123");
