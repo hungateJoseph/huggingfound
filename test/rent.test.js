@@ -371,7 +371,7 @@ test("a page asking several times at once costs one RunPod call, and a throttled
   const stale = await rental.tiers();
   assert.deepEqual(stale, tiers, "yesterday's prices beat none");
   assert.equal(runpod.state.calls.length, calls + 1, "the one throttled call");
-  await assert.rejects(rental.remove(), /rate limiting these requests; try again in \d+ seconds/);
+  await assert.rejects(rental.remove(), /rate limiting this key; it accepts requests again in \d+ seconds/);
   const kept = await rental.status();
   assert.equal(kept.rented, true, "the machine is still shown");
   assert.match(kept.error, /rate limiting/);

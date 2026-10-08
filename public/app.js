@@ -2320,7 +2320,8 @@ async function loadRentOptions() {
     state.rentOptions = null;
     state.rentOptionsError = err.message;
     // RunPod throttling passes by itself; ask again when it says to, without a click.
-    const wait = /rate limiting/.test(err.message) ? (Number(/in (\d+) seconds/.exec(err.message)?.[1]) || 30) + 2 : 0;
+    const m = /again in (\d+) (seconds|minutes|hours)/.exec(err.message);
+    const wait = /rate limiting/.test(err.message) ? Math.min((Number(m?.[1]) || 30) * ({ seconds: 1, minutes: 60, hours: 3600 }[m?.[2]] ?? 1) + 2, 900) : 0;
     clearTimeout(state.rentOptionsRetry);
     if (wait) state.rentOptionsRetry = setTimeout(loadRentOptions, wait * 1000);
   }
@@ -2388,7 +2389,7 @@ function renderRental() {
   }
   if (!state.rentOptions) {
     const throttled = /rate limiting/.test(state.rentOptionsError ?? "");
-    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : "Could not read RunPod's offer."}${throttled ? " RunPod allows a number of requests an hour per key; the sizes appear here by themselves once it lets requests through again, which can take up to an hour after a burst." : ""} <button class="ghost" id="rent-retry">Try again</button></p>`;
+    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : "Could not read RunPod's offer."}${throttled ? " Limits are per key, so a fresh key made at RunPod (Credentials, API Keys) and saved above works straight away; otherwise the sizes appear here by themselves when this key is accepted again." : ""} <button class="ghost" id="rent-retry">Try again</button></p>`;
     panel.querySelector("#rent-retry").addEventListener("click", loadRentOptions);
     return;
   }

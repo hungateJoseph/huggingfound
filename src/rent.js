@@ -112,7 +112,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
   async function request(method, path, body) {
     if (!key()) throw new RentError("Add a RunPod API key in Settings to rent a GPU.", 400);
-    if (now() < throttledUntil) throw new RentError(`RunPod is rate limiting these requests; try again in ${Math.ceil((throttledUntil - now()) / 1000)} seconds.`, 429);
+    if (now() < throttledUntil) throw new RentError(`RunPod is rate limiting this key; it accepts requests again in ${waitText(throttledUntil - now())}. A new key at RunPod works at once.`, 429);
     let res;
     try {
       res = await fetchImpl(`${base}${path}`, {
@@ -139,10 +139,11 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // its policy, so a server's log shows what tripped it.
       const retryAfter = Number(res.headers.get("retry-after")) || 0;
       const reset = Number(res.headers.get("ratelimit-reset") || res.headers.get("x-ratelimit-reset")) || 0;
-      const waitMs = (retryAfter || reset) * 1000 || BACKOFF_MS;
-      throttledUntil = now() + Math.min(waitMs, 3600e3);
+      // A spent daily allowance means hours; the wait is honoured up to a day.
+      const waitMs = Math.min((retryAfter || reset) * 1000 || BACKOFF_MS, 86400e3);
+      throttledUntil = now() + waitMs;
       console.error(`RunPod rate limited ${method} ${path}: retry-after=${res.headers.get("retry-after") ?? "-"} ratelimit=${res.headers.get("ratelimit") ?? res.headers.get("x-ratelimit-remaining") ?? "-"} policy=${res.headers.get("ratelimit-policy") ?? "-"}`);
-      throw new RentError(`RunPod is rate limiting these requests; try again in ${Math.ceil(Math.min(waitMs, 3600e3) / 1000)} seconds.`, 429);
+      throw new RentError(`RunPod is rate limiting this key; it accepts requests again in ${waitText(waitMs)}. A new key at RunPod works at once.`, 429);
     }
     if (!res.ok) throw new RentError(`RunPod answered HTTP ${res.status}${describe(data) ? `: ${describe(data)}` : ""}.`, 502);
     return data;
@@ -451,6 +452,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     },
   });
   return self;
+}
+
+// "40 seconds", "12 minutes" or "6 hours", for a wait.
+function waitText(ms) {
+  const s = Math.ceil(ms / 1000);
+  if (s < 120) return `${s} seconds`;
+  if (s < 7200) return `${Math.ceil(s / 60)} minutes`;
+  return `${Math.ceil(s / 3600)} hours`;
 }
 
 function describe(data) {
