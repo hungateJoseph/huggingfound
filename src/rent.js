@@ -170,6 +170,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // How many models the machine holds, so the page can say so at a glance.
       chatModels: counts.chat ?? 0,
       imageModels: counts.images ?? 0,
+      // Set when the agent reports its image server cannot start on this machine.
+      imageProblem: counts.imageProblem ?? "",
       idleMinutes: idleMinutes(),
       idleSeconds: Math.round((now() - lastActivity) / 1000),
       dataCenter: pod.dataCenterId ?? null,
@@ -263,12 +265,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const running = pod.status === "RUNNING";
       let ready = Boolean(last?.ready) && running;
       let imagesReady = Boolean(last?.imagesReady) && running;
-      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0 };
+      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "" };
       if (running && wantProbe) {
         const [tags, health] = await Promise.all([probe(urlFor(id)), hasAgent() ? probe(agentFor(id), "/health") : null]);
         ready = Boolean(tags);
         imagesReady = Boolean(health?.ok);
-        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0 };
+        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "" };
       }
       last = summarize(pod, ready, imagesReady, counts);
       return last;

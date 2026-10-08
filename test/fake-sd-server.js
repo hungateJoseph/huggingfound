@@ -7,6 +7,10 @@ import fs from "node:fs";
 import http from "node:http";
 
 const args = process.argv.slice(2);
+if (args.includes("--help")) {
+  console.log("usage: sd-server [options]");
+  process.exit(0);
+}
 const flag = (name) => args[args.indexOf(name) + 1];
 const port = Number(flag("--listen-port"));
 const model = flag("-m");

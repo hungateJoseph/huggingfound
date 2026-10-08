@@ -68,8 +68,9 @@ async function finish(id) {
 }
 
 test("it answers health, and only the allowed origins may call it from a page", async () => {
+  for (let i = 0; i < 20 && (await (await get("/health")).json()).sdOk === null; i++) await new Promise((r) => setTimeout(r, 50));
   const h = await (await get("/health")).json();
-  assert.deepEqual(h, { ok: true, version: "1", loaded: null, ready: false, loading: false, models: 0 });
+  assert.deepEqual(h, { ok: true, version: "1", sdOk: true, sdProblem: "", loaded: null, ready: false, loading: false, models: 0 }, "the image server's startup check passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);

@@ -38,6 +38,26 @@ const JOB_TTL = 30 * 60e3;
 
 fs.mkdirSync(MODELS_DIR, { recursive: true });
 
+// Whether the image server can start at all on this machine, checked once
+// at startup so a broken binary shows in the machine's status rather than
+// at the first picture.
+const sdCheck = { ok: null, problem: "" };
+function checkServer() {
+  const child = spawn(SD_SERVER, ["--help"], { stdio: ["ignore", "ignore", "pipe"] });
+  let err = "";
+  child.stderr.on("data", (c) => (err += c));
+  child.on("error", (e) => {
+    sdCheck.ok = false;
+    sdCheck.problem = e.message;
+  });
+  child.on("exit", (code) => {
+    if (sdCheck.ok === false) return;
+    sdCheck.ok = code === 0;
+    sdCheck.problem = code === 0 ? "" : err.trim().split("\n").pop() || `exit code ${code}`;
+  });
+}
+checkServer();
+
 // ---- the image server --------------------------------------------------------
 
 const sd = { proc: null, file: null, ready: false, loading: null, errors: [], tail: "" };
@@ -306,7 +326,7 @@ const server = http.createServer(async (req, res) => {
     }
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/health") {
-      return send(res, 200, { ok: true, version: VERSION, loaded: sd.file ? path.relative(MODELS_DIR, sd.file).split(path.sep).join("/") : null, ready: sd.ready, loading: Boolean(sd.loading), models: listModels().length });
+      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, loaded: sd.file ? path.relative(MODELS_DIR, sd.file).split(path.sep).join("/") : null, ready: sd.ready, loading: Boolean(sd.loading), models: listModels().length });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels() });
     if (req.method === "POST" && url.pathname === "/download") {

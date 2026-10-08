@@ -16,13 +16,25 @@ WORKDIR /src
 RUN git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp.git .
 RUN cmake -B build -DSD_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90" \
  && cmake --build build --config Release -j"$(nproc)"
+# Every shared library the binaries need that the Ollama image will not
+# have (the CUDA runtime, cuBLAS, NCCL and whatever else the toolkit linked
+# in), found by asking the binaries themselves rather than by guessing.
+RUN mkdir -p /out/lib \
+ && for bin in build/bin/sd-server build/bin/sd-cli; do \
+      ldd "$bin" | awk '$3 ~ /^\// && ($3 ~ /cuda|cublas|nccl|curand|cusparse|cudnn|nvrtc|nvJitLink/) {print $3}'; \
+    done | sort -u | while read -r lib; do cp -L "$lib" /out/lib/; done \
+ && ls -la /out/lib
 
 FROM ollama/ollama:latest
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils libgomp1 && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz | tar -xJ -C /opt \
  && mv /opt/node-v22.23.3-linux-x64 /opt/node
 COPY --from=build /src/build/bin/sd-cli /src/build/bin/sd-server /opt/huggingfound/bin/
-COPY --from=build /usr/local/cuda/lib64/libcudart.so.12* /usr/local/cuda/lib64/libcublas.so.12* /usr/local/cuda/lib64/libcublasLt.so.12* /opt/huggingfound/lib/
+COPY --from=build /out/lib/ /opt/huggingfound/lib/
+# Every library must resolve here, or the build fails now rather than on a
+# rented machine (the runner has no GPU driver, so the binary is not run).
+RUN LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli \
+ && ! (LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli | grep -q "not found")
 COPY agent.js start.sh /opt/huggingfound/
 RUN chmod +x /opt/huggingfound/start.sh /opt/huggingfound/bin/sd-cli /opt/huggingfound/bin/sd-server
 
