@@ -40,7 +40,10 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "HIDDEN_MODELS"]);
+// Models a person has hidden from search and Browse: ids, comma-separated.
+const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
+const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
 export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30, runpodBase, runpodProxy, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
   // A hosted copy does not know the visitor's computer; it describes a
@@ -302,6 +305,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         runpodKey: saved.RUNPOD_API_KEY ? mask(saved.RUNPOD_API_KEY) : "",
         rental: ctx.rental ? ctx.rental.cached() : hosted ? null : { rented: false },
         rentTiers: TIERS,
+        hidden: hiddenList(saved.HIDDEN_MODELS),
         stopOnQuit: !hosted && saved.RUNPOD_STOP_ON_QUIT !== "0",
         redditApp: saved.REDDIT_CLIENT_ID ? mask(saved.REDDIT_CLIENT_ID) : "",
         githubToken: saved.GITHUB_TOKEN ? mask(saved.GITHUB_TOKEN) : "",
@@ -412,6 +416,13 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         updates.RUNPOD_IDLE_MINUTES = String(minutes);
       }
       if ("RUNPOD_STOP_ON_QUIT" in body) updates.RUNPOD_STOP_ON_QUIT = body.RUNPOD_STOP_ON_QUIT ? "" : "0";
+      if ("HIDDEN_MODELS" in body) {
+        const ids = Array.isArray(body.HIDDEN_MODELS) ? body.HIDDEN_MODELS : String(body.HIDDEN_MODELS ?? "").split(",");
+        const clean = [...new Set(ids.map((x) => String(x).trim()).filter(Boolean))];
+        if (clean.some((x) => !MODEL_ID_RE.test(x))) return send(res, 400, { error: "Hidden models must be repository ids like owner/name" });
+        if (clean.length > 1000) return send(res, 400, { error: "That is more hidden models than can be kept" });
+        updates.HIDDEN_MODELS = clean.join(",");
+      }
       if ("IMAGE_SERVER" in body) {
         if (typeof body.IMAGE_SERVER !== "string") return send(res, 400, { error: "IMAGE_SERVER must be a string" });
         const value = body.IMAGE_SERVER.trim().replace(/\/+$/, "");

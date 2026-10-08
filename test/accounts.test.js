@@ -150,8 +150,11 @@ test("a signed-in person keeps only their own keys, and the hosted settings refu
   assert.match(s.claudeKey, /^sk-a\*+wxyz$/);
   assert.equal(s.claudeReady, true);
   assert.equal(s.claudeHosted.saved, true);
+  assert.equal((await post("/api/settings", { HIDDEN_MODELS: ["polite/Polite-Chat-7B-GGUF"] }, ana)).status, 200, "a hide list lives on the account");
+  assert.deepEqual((await json("/api/state", ana)).hidden, ["polite/Polite-Chat-7B-GGUF"]);
   const b = await json("/api/state", ben);
   assert.equal(b.runpodKey, "", "Ben sees nothing of Ana's");
+  assert.deepEqual(b.hidden, [], "nor her hide list");
   assert.equal((await json("/api/rent/options", ben)).configured, false);
   assert.equal((await json("/api/rent/options", ana)).configured, true);
 });

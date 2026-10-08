@@ -165,7 +165,7 @@ npm start</code>
           <h2 id="modal-title"></h2>
           <p class="muted small" id="modal-sub"></p>
         </div>
-        <button class="ghost" id="close-modal" aria-label="Close">Close</button>
+        <span class="modal-buttons"><button class="ghost" id="hide-model">Hide this model</button><button class="ghost" id="close-modal" aria-label="Close">Close</button></span>
       </div>
       <div id="modal-body"></div>
     </div>
@@ -350,6 +350,13 @@ npm start</code>
         <button class="primary" id="save-reddit">Save</button>
         <button class="ghost" id="clear-reddit">Remove</button>
       </div>
+      </div>
+      <div class="hidden-models">
+        <h3>Hidden models</h3>
+        <p class="muted small" id="hidden-note"></p>
+        <ul id="hidden-list"></ul>
+      </div>
+      <div class="local-only">
       <div class="runners">
         <h3>What is installed</h3>
         <ul id="runner-list"></ul>

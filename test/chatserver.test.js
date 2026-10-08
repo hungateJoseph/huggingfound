@@ -95,6 +95,16 @@ test("without a chat server everything is as before", async () => {
   assert.equal(plan.remote, undefined);
 });
 
+test("hidden models are kept with the settings and checked", async () => {
+  assert.equal((await post("/api/settings", { HIDDEN_MODELS: ["bad id"] })).status, 400);
+  assert.equal((await post("/api/settings", { HIDDEN_MODELS: ["a/b", "c/d", "a/b"] })).status, 200);
+  assert.deepEqual((await json("/api/state")).hidden, ["a/b", "c/d"]);
+  assert.equal((await post("/api/settings", { HIDDEN_MODELS: "c/d" })).status, 200, "a comma-separated string works too");
+  assert.deepEqual((await json("/api/state")).hidden, ["c/d"]);
+  assert.equal((await post("/api/settings", { HIDDEN_MODELS: [] })).status, 200);
+  assert.deepEqual((await json("/api/state")).hidden, []);
+});
+
 test("the setting wants an address and the GPU's memory", async () => {
   assert.equal((await post("/api/settings", { OLLAMA_SERVER: "ssh://box", OLLAMA_SERVER_GB: "48" })).status, 400);
   const noSize = await post("/api/settings", { OLLAMA_SERVER: ollama.url });

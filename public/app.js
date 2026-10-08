@@ -1,6 +1,8 @@
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
+  hidden: new Set(),
+  showHidden: false,
   machine: null,
   categories: [],
   runners: null,
@@ -51,6 +53,9 @@ async function load() {
   $("#chat-server").value = s.chatServer?.url ?? "";
   $("#chat-server-gb").value = s.chatServer?.gpuGb ?? "";
   renderChatServerStatus();
+  // Models hidden by this person: the saved list plus this browser's own.
+  state.hidden = new Set([...(s.hidden ?? []), ...localHidden()]);
+  renderHiddenList();
   state.rental = s.rental;
   state.rentTiers = s.rentTiers ?? [];
   state.runpodKey = s.runpodKey;
@@ -286,23 +291,35 @@ function render() {
   }
   blurb.textContent = cat?.blurb ?? "";
 
-  const keep = (m) => (!onlyRunnable || m.runner?.easy) && (!q || m.id.toLowerCase().includes(q) || (m.voice?.text ?? "").toLowerCase().includes(q));
+  const shown = (m) => state.showHidden || !state.hidden.has(m.id);
+  const keep = (m) => shown(m) && (!onlyRunnable || m.runner?.easy) && (!q || m.id.toLowerCase().includes(q) || (m.voice?.text ?? "").toLowerCase().includes(q));
 
   // Search results keep the server's relevance order; only the runnable
-  // filter applies to them.
-  const found = state.found ? state.found.models.filter((m) => !onlyRunnable || m.runner?.easy) : [];
-  $("#found").innerHTML = found.map(modelCard).join("");
+  // filter and the person's own hide list apply to them.
+  const found = state.found ? state.found.models.filter((m) => shown(m) && (!onlyRunnable || m.runner?.easy)) : [];
+  const foundHidden = state.found ? state.found.models.filter((m) => state.hidden.has(m.id)).length : 0;
+  const wants = state.found ? wantsFrom(state.found.q) : null;
+  $("#found").innerHTML = found.map((m) => modelCard(m, wants)).join("");
   $("#results").hidden = !(state.found && (state.mode === "results" || state.mode === "browse"));
   if (state.found) {
     const f = state.found;
     $("#found-title").textContent = `${found.length} model${found.length === 1 ? "" : "s"} for "${f.q}"`;
     const bySay = f.models.filter((m) => m.why?.includes("what people say") || m.why?.includes("discussions")).length;
     const hidden = f.hiddenRefusing ? ` <a href="#" id="toggle-refusing">${f.hideRefusing ? `${f.hiddenRefusing} hidden because users report the model refuses requests; show them` : "Hide models users report as refusing"}</a>.` : "";
-    $("#found-hint").innerHTML = `Ranked by name, category and what people say; ${bySay} matched on what people say. ${f.gathered ? "" : "Nothing gathered yet: open Browse, scan and gather to rank by reviews. "}${f.took != null ? `${(f.took / 1000).toFixed(1)} s.` : ""}${hidden}`;
+    const mine = foundHidden ? ` <a href="#" id="toggle-hidden">${state.showHidden ? `Hide the ${foundHidden} you hid again` : `${foundHidden} hidden by you; show ${foundHidden === 1 ? "it" : "them"}`}</a>.` : "";
+    // A search that wants pictures or video gets text models too; say so.
+    const cannot = wants ? found.filter((m) => !makesOf(m).fits(wants)).length : 0;
+    const warn = cannot ? ` ${cannot} of these are text models that cannot make ${wants}; they are marked, and can write about ${wants} at most.` : "";
+    $("#found-hint").innerHTML = `Ranked by name, category and what people say; ${bySay} matched on what people say. ${f.gathered ? "" : "Nothing gathered yet: open Browse, scan and gather to rank by reviews. "}${f.took != null ? `${(f.took / 1000).toFixed(1)} s.` : ""}${hidden}${mine}${esc(warn)}`;
     $("#toggle-refusing")?.addEventListener("click", (e) => {
       e.preventDefault();
       state.showRefusing = !state.showRefusing;
       $("#trait-form").requestSubmit();
+    });
+    $("#toggle-hidden")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.showHidden = !state.showHidden;
+      render();
     });
     $("#found-empty").hidden = found.length > 0;
     $("#found-empty").textContent = f.models.length ? "Every match needs a Python setup; untick the runnable filter in Browse to see them." : `Nothing matches "${f.q}". Try other words, or Browse the categories.`;
@@ -310,13 +327,27 @@ function render() {
   renderWebFound(state.found?.web ?? null);
   renderHomeHint();
 
-  const picks = onlyNew || Number($("#since").value) ? [] : state.picks.filter((p) => p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
+  const picks = onlyNew || Number($("#since").value) ? [] : state.picks.filter((p) => shown(p) && p.categories.includes(state.tab) && (!q || p.id.toLowerCase().includes(q)));
   $("#picks").innerHTML = picks.map(pickCard).join("");
   $("#picks-title").hidden = picks.length === 0;
 
   const models = sortModels(state.models.filter((m) => m.categories.includes(state.tab) && keep(m) && (!onlyNew || m.isNew)));
-  $("#models").innerHTML = models.map(modelCard).join("");
+  $("#models").innerHTML = models.map((m) => modelCard(m)).join("");
   $("#scan-title").hidden = models.length === 0;
+  // How many of this tab the person has hidden, with a way to see them.
+  const tabHidden = [...state.models, ...state.picks].filter((m) => m.categories.includes(state.tab) && state.hidden.has(m.id)).length;
+  if (tabHidden) {
+    const link = document.createElement("a");
+    link.href = "#";
+    link.id = "toggle-hidden-browse";
+    link.textContent = state.showHidden ? ` Hide the ${tabHidden} you hid again.` : ` ${tabHidden} hidden by you; show ${tabHidden === 1 ? "it" : "them"}.`;
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.showHidden = !state.showHidden;
+      render();
+    });
+    blurb.appendChild(link);
+  }
 
   const empty = $("#empty");
   if (!picks.length && !models.length) {
@@ -405,17 +436,47 @@ function fit(gb, runner) {
 function pickCard(p) {
   const f = fit(p.gb, p.runner);
   const runner = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[p.runner];
+  const makes = makesOf(p);
   return `<div class="model" role="button" tabindex="0" data-id="${esc(p.id)}">
     <div class="name">${esc(p.id.split("/").pop())}</div>
     <div class="author">${esc(p.id.split("/")[0])}</div>
     <div class="summary">${esc(p.why)}</div>
     ${p.speed ? `<div class="speed">${esc(p.speed)}</div>` : ""}
-    <div class="meta"><span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}<span class="pill runner">${runner}</span></div>
+    <div class="meta"><span class="pill makes">${esc(makes.text)}</span><span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}<span class="pill runner">${runner}</span>${state.hidden.has(p.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}</div>
   </div>`;
 }
 
-function modelCard(m) {
+// ---- what a model makes --------------------------------------------------------
+// Every card says what comes out of the model, so a search for pictures is
+// not answered by a chat model that can only describe them. `fits(want)`
+// says whether the model can make what a search asked for.
+function makesOf(m) {
+  const pipeline = String(m.pipeline ?? "");
+  const cats = m.categories ?? [];
+  const runner = m.runner?.id ?? m.runner ?? "";
+  let kind;
+  if (/video/.test(pipeline)) kind = "video";
+  else if (cats.includes("images") || cats.includes("nsfw-images") || runner === "sd" || /^(text-to-image|image-to-image|image-editing|inpainting|unconditional-image-generation)$/.test(pipeline)) kind = "images";
+  else if (cats.includes("speech") || runner === "whisper" || pipeline === "automatic-speech-recognition") kind = "speech";
+  else if (pipeline === "text-to-speech" || pipeline === "text-to-audio") kind = "audio";
+  else if (cats.includes("vision") || pipeline === "image-text-to-text") kind = "vision";
+  else if (runner === "ollama" || pipeline === "text-generation" || cats.some((c) => ["chat", "coding", "math", "nsfw-writing"].includes(c))) kind = "text";
+  else kind = "other";
+  const text = { video: "Makes video", images: "Makes images", speech: "Transcribes speech", audio: "Makes sound", vision: "Text, understands images", text: "Text only", other: pipeline ? pipeline.replace(/-/g, " ") : "Other" }[kind];
+  return { kind, text, fits: (want) => (want === "images" ? kind === "images" : want === "video" ? kind === "video" : true) };
+}
+
+// What a search is after, when its words say so.
+function wantsFrom(q) {
+  if (/\b(videos?|animations?|animate|clips?|film|movie)\b/i.test(q)) return "video";
+  if (/\b(images?|pictures?|photos?|photographs?|art|artwork|draw|drawing|illustrations?|anime|wallpapers?|renders?|paintings?|portraits?|logos?|sketch)\b/i.test(q)) return "images";
+  return null;
+}
+
+function modelCard(m, wants = null) {
   const runner = m.runner ? `<span class="pill ${m.runner.easy ? "runner" : ""}">${esc(m.runner.name)}</span>` : "";
+  const makes = makesOf(m);
+  const cannot = wants && !makes.fits(wants) ? `<span class="pill cannot">Does not make ${wants}</span>` : "";
   return `<div class="model" role="button" tabindex="0" data-id="${esc(m.id)}">
     <div class="name">${esc(m.name)}</div>
     <div class="author">${esc(m.author)}</div>
@@ -424,6 +485,8 @@ function modelCard(m) {
     ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : w === "mixed reviews" || w === "users report refusals" ? "mixed" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
+      <span class="pill makes">${esc(makes.text)}</span>${cannot}
+      ${state.hidden.has(m.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
       ${m.adult ? '<span class="pill adult">18+</span>' : ""}
       ${m.refusals?.refuses ? `<span class="pill no" title="${esc(m.refusals.example ?? "")}">Users report refusals</span>` : ""}
@@ -502,6 +565,7 @@ async function openModel(id) {
   $("#modal-sub").textContent = "Looking up files and sizes";
   $("#modal-body").innerHTML = "";
   state.open = id;
+  renderHideButton(id);
   try {
     const { model, plan, choice } = await api.get(modelUrl(id));
     if (state.open !== id) return;
@@ -519,6 +583,7 @@ function renderModel(model, plan, choice = null) {
   if (choice) whereFor.set(model.id, choice.where);
   const sub = [model.author, model.summary, model.gated ? "gated" : ""].filter(Boolean).join(" · ");
   $("#modal-sub").innerHTML = `${esc(sub)} · <a href="${esc(model.url)}" target="_blank" rel="noopener">Open on Hugging Face</a>`;
+  renderHideButton(model.id);
   const body = $("#modal-body");
   const parts = [];
 
@@ -539,6 +604,7 @@ function renderModel(model, plan, choice = null) {
   }
   if (plan.remote && plan.runner === "ollama") parts.push(`<div class="notice info">${choice?.rented && state.chatServer?.rented ? "This model is downloaded to your rented GPU and runs there" : `This model is downloaded and run on the chat server at ${esc(plan.remote)}`}; nothing large comes to ${state.hosted ? "your" : "this"} computer.${state.hosted ? " Your browser talks to the machine directly; what you say to the model does not pass through this site." : " Change this in Settings."}</div>`);
   parts.push(`<div class="spec">
+    <div><b>Makes</b>${esc(makesOf(model).text)}</div>
     <div><b>File</b>${plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : esc(plan.file.name)}</div>
     <div><b>Size</b>${plan.file.gb ? plan.file.gb.toFixed(2) + " GB" : "unknown"}</div>
     <div><b>${state.hosted ? "Memory" : plan.remote && plan.runner === "ollama" ? "On the chat server" : "On this computer"}</b><span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span></div>
@@ -1840,6 +1906,71 @@ function renderTranscribe(box, t) {
       $("#audio-go").disabled = false;
     }
   });
+}
+
+// ---- hiding models ------------------------------------------------------------
+// A model that turned out no good can be hidden from search and Browse.
+// The list is kept with the settings (the file on a computer, the account
+// on the site) and in this browser, so a visitor who never signs in keeps it too.
+
+function localHidden() {
+  try {
+    const list = JSON.parse(localStorage.getItem("hidden:models") || "[]");
+    return Array.isArray(list) ? list.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveHidden() {
+  const list = [...state.hidden];
+  try {
+    localStorage.setItem("hidden:models", JSON.stringify(list));
+  } catch {
+    // no storage
+  }
+  if (!state.hosted || state.user) await api.post("/api/settings", { HIDDEN_MODELS: list }).catch(() => {});
+  renderHiddenList();
+  render();
+}
+
+async function hideModel(id) {
+  state.hidden.add(id);
+  await saveHidden();
+}
+
+async function unhideModel(id) {
+  state.hidden.delete(id);
+  await saveHidden();
+}
+
+function renderHideButton(id) {
+  const btn = $("#hide-model");
+  btn.hidden = !id;
+  btn.textContent = state.hidden.has(id) ? "Show this model again" : "Hide this model";
+}
+
+$("#hide-model").addEventListener("click", async () => {
+  const id = state.open;
+  if (!id) return;
+  if (state.hidden.has(id)) {
+    await unhideModel(id);
+    renderHideButton(id);
+    notice(`${id.split("/").pop()} is back in search and Browse.`, "ok");
+    return;
+  }
+  await hideModel(id);
+  $("#modal").hidden = true;
+  state.open = null;
+  notice(`${id.split("/").pop()} is hidden from search and Browse. Settings lists hidden models, with a way to bring one back.`, "ok");
+});
+
+function renderHiddenList() {
+  const list = $("#hidden-list");
+  const ids = [...state.hidden].sort();
+  $("#hidden-note").textContent = ids.length ? `${ids.length} model${ids.length === 1 ? "" : "s"} you hid from search and Browse${state.hosted && !state.user ? ", kept in this browser" : ""}.` : "Nothing hidden. A model's window has a Hide button for the ones that are no good.";
+  list.innerHTML = ids.map((id) => `<li><span>${esc(id)}</span><button class="ghost" data-unhide="${esc(id)}">Show again</button></li>`).join("");
+  for (const btn of list.querySelectorAll("[data-unhide]")) btn.addEventListener("click", () => unhideModel(btn.dataset.unhide));
 }
 
 // ---- settings --------------------------------------------------------------

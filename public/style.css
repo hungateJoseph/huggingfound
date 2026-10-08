@@ -372,3 +372,12 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .effort label.on { border-color: var(--accent); background: var(--accent-soft); }
 .effort label input { margin: 0; }
 .effort small { flex-basis: 100%; }
+/* What a model makes, and models a person has hidden. */
+.pill.makes { background: #e0e7ff; color: #3730a3; }
+.pill.cannot { background: var(--warn-soft); color: var(--warn); }
+.pill.hidden-by { background: #efece5; color: var(--muted); }
+.modal-buttons { display: flex; gap: 6px; flex-shrink: 0; }
+.hidden-models { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.hidden-models ul { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
+.hidden-models li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+.hidden-models li button { font-size: 13px; padding: 4px 10px; }

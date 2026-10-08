@@ -665,6 +665,70 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click("#close-settings");
 });
 
+await step("every card says what the model makes, and a search for pictures marks the text models that cannot", async () => {
+  await page.click("#nav-browse");
+  await page.click(".tab[data-tab=chat]");
+  assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.makes").innerText(), /Text only/);
+  await page.click(".tab[data-tab=images]");
+  assert.match(await page.locator("#models .model", { hasText: "pony-realism-v23-sdxl" }).locator(".pill.makes").innerText(), /Makes images/);
+  await page.click(".tab[data-tab=speech]");
+  assert.match(await page.locator("#models .model", { hasText: "whisper.cpp" }).locator(".pill.makes").innerText(), /Transcribes speech/);
+  await page.click(".tab[data-tab=vision]");
+  assert.match(await page.locator("#models .model").first().locator(".pill.makes").innerText(), /understands images/);
+  await page.fill("#trait", "pictures of a chat");
+  await page.click("#trait-go");
+  await page.waitForSelector("#found .model");
+  const textCards = page.locator("#found .model", { has: page.locator(".pill.makes", { hasText: "Text only" }) });
+  assert.ok((await textCards.count()) > 0, "a picture search still turns up chat models");
+  assert.equal(await textCards.first().locator(".pill.cannot").innerText(), "Does not make images");
+  assert.match(await page.locator("#found-hint").innerText(), /text models that cannot make images/);
+  const imageCards = page.locator("#found .model", { has: page.locator(".pill.makes", { hasText: "Makes images" }) });
+  if (await imageCards.count()) assert.equal(await imageCards.first().locator(".pill.cannot").count(), 0);
+  await page.fill("#trait", "");
+  await page.click("#trait-go");
+  await page.waitForFunction(() => document.querySelector("#results").hidden);
+});
+
+await step("a model can be hidden from search and Browse, listed in Settings, and brought back", async () => {
+  await page.click("#nav-browse");
+  await page.click(".tab[data-tab=chat]");
+  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await page.waitForSelector("#steps .step");
+  assert.equal(await page.locator("#hide-model").innerText(), "Hide this model");
+  await page.click("#hide-model");
+  await page.waitForFunction(() => document.querySelector("#modal").hidden);
+  assert.match(await page.locator("#notice").innerText(), /hidden from search and Browse/);
+  await page.waitForFunction(() => !document.querySelector('#models .model[data-id="TheDrummer/Cydonia-24B-v2-GGUF"]'));
+  assert.match(await page.locator(".tab-blurb").innerText(), /1 hidden by you; show it/);
+  assert.match(fs.readFileSync(envFile, "utf8"), /HIDDEN_MODELS=TheDrummer\/Cydonia-24B-v2-GGUF/);
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem("hidden:models"))), ["TheDrummer/Cydonia-24B-v2-GGUF"]);
+  // A search skips it too, and says so.
+  await page.fill("#trait", "cydonia");
+  await page.click("#trait-go");
+  await page.waitForSelector("#found-hint");
+  await page.waitForFunction(() => /hidden by you/.test(document.querySelector("#found-hint").textContent));
+  assert.equal(await page.locator('#found .model[data-id="TheDrummer/Cydonia-24B-v2-GGUF"]').count(), 0);
+  await page.click("#toggle-hidden");
+  await page.waitForSelector('#found .model[data-id="TheDrummer/Cydonia-24B-v2-GGUF"]');
+  assert.match(await page.locator('#found .model[data-id="TheDrummer/Cydonia-24B-v2-GGUF"] .pill.hidden-by').innerText(), /Hidden by you/);
+  await page.click("#toggle-hidden");
+  await page.fill("#trait", "");
+  await page.click("#trait-go");
+  await page.waitForFunction(() => document.querySelector("#results").hidden);
+  // Settings lists it, and Show again brings it back everywhere.
+  await page.click("#open-settings");
+  await page.waitForSelector("#hidden-list li");
+  assert.match(await page.locator("#hidden-list").innerText(), /Cydonia-24B-v2-GGUF/);
+  await page.click('#hidden-list [data-unhide="TheDrummer/Cydonia-24B-v2-GGUF"]');
+  await page.waitForFunction(() => document.querySelectorAll("#hidden-list li").length === 0);
+  assert.match(await page.locator("#hidden-note").innerText(), /Nothing hidden/);
+  await page.click("#close-settings");
+  await page.click("#nav-browse");
+  await page.click(".tab[data-tab=chat]");
+  await page.waitForSelector('#models .model[data-id="TheDrummer/Cydonia-24B-v2-GGUF"]');
+  assert.doesNotMatch(fs.readFileSync(envFile, "utf8"), /HIDDEN_MODELS=\S/);
+});
+
 // ---- the hosted site, signed in ----------------------------------------------
 // A second server in hosted mode with accounts. The session cookie is
 // issued directly, standing in for Google's button; the rented machine is
