@@ -219,10 +219,8 @@ function renderHomeHint() {
   const v = state.voices;
   const parts = [];
   if (!state.scanAt) parts.push("No scan yet, so results come from Hugging Face's own search and the curated picks.");
-  else parts.push(`${state.models.length} models scanned ${relative(state.scanAt)}.`);
-  if (v?.count) parts.push(`What people say is gathered for ${v.count} of them${state.summarizer ? ", summed up by " + state.summarizer.split("/").pop() : ", lines lifted from the comments"}.`);
-  else if (state.hosted) parts.push("What people say is gathered after each scan.");
-  else parts.push("Gather what people say (in Browse) to rank by reviews and show a summary on every card.");
+  else parts.push(`${state.models.length} models, scanned ${relative(state.scanAt)}.`);
+  if (!v?.count && !state.hosted) parts.push("Gather what people say (in Browse) to rank by reviews.");
   $("#home-hint").textContent = parts.join(" ");
 }
 
@@ -305,13 +303,13 @@ function render() {
   if (state.found) {
     const f = state.found;
     $("#found-title").textContent = `${found.length} model${found.length === 1 ? "" : "s"} for "${f.q}"`;
-    const bySay = f.models.filter((m) => m.why?.includes("what people say") || m.why?.includes("discussions")).length;
-    const hidden = f.hiddenRefusing ? ` <a href="#" id="toggle-refusing">${f.hideRefusing ? `${f.hiddenRefusing} hidden because users report the model refuses requests; show them` : "Hide models users report as refusing"}</a>.` : "";
-    const mine = foundHidden ? ` <a href="#" id="toggle-hidden">${state.showHidden ? `Hide the ${foundHidden} you hid again` : `${foundHidden} hidden by you; show ${foundHidden === 1 ? "it" : "them"}`}</a>.` : "";
-    // A search that wants pictures or video gets text models too; say so.
-    const cannot = wants ? found.filter((m) => !makesOf(m).fits(wants)).length : 0;
-    const warn = cannot ? ` ${cannot} of these are text models that cannot make ${wants}; they are marked, and can write about ${wants} at most.` : "";
-    $("#found-hint").innerHTML = `Ranked by name, category and what people say; ${bySay} matched on what people say. ${f.gathered ? "" : "Nothing gathered yet: open Browse, scan and gather to rank by reviews. "}${f.took != null ? `${(f.took / 1000).toFixed(1)} s.` : ""}${hidden}${mine}${esc(warn)}`;
+    // Only what can be acted on: hidden models and the way to see them.
+    const bits = [];
+    if (f.hiddenRefusing) bits.push(`<a href="#" id="toggle-refusing">${f.hideRefusing ? `${f.hiddenRefusing} hidden: users report refusals` : "hide models users report as refusing"}</a>`);
+    if (foundHidden) bits.push(`<a href="#" id="toggle-hidden">${state.showHidden ? `hide the ${foundHidden} you hid` : `${foundHidden} hidden by you`}</a>`);
+    if (!f.gathered && !state.hosted) bits.push("gather what people say in Browse to rank by reviews");
+    $("#found-hint").innerHTML = bits.join(" · ");
+    $("#found-hint").hidden = !bits.length;
     $("#toggle-refusing")?.addEventListener("click", (e) => {
       e.preventDefault();
       state.showRefusing = !state.showRefusing;
@@ -437,14 +435,12 @@ function fit(gb, runner) {
 
 function pickCard(p) {
   const f = fit(p.gb, p.runner);
-  const runner = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[p.runner];
   const makes = makesOf(p);
   return `<div class="model" role="button" tabindex="0" data-id="${esc(p.id)}">
     <div class="name">${esc(p.id.split("/").pop())}</div>
-    <div class="author">${esc(p.id.split("/")[0])}</div>
     <div class="summary">${esc(p.why)}</div>
     ${p.speed ? `<div class="speed">${esc(p.speed)}</div>` : ""}
-    <div class="meta"><span class="pill makes">${esc(makes.text)}</span><span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}<span class="pill runner">${runner}</span>${state.hidden.has(p.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}</div>
+    <div class="meta"><span class="pill makes">${esc(makes.text)}</span><span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}${state.hidden.has(p.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}</div>
   </div>`;
 }
 
@@ -476,25 +472,25 @@ function wantsFrom(q) {
 }
 
 function modelCard(m, wants = null) {
-  const runner = m.runner ? `<span class="pill ${m.runner.easy ? "runner" : ""}">${esc(m.runner.name)}</span>` : "";
   const makes = makesOf(m);
-  const cannot = wants && !makes.fits(wants) ? `<span class="pill cannot">Does not make ${wants}</span>` : "";
+  // One tag for what it makes; when the search wanted something else, the tag says so instead.
+  const makesTag = wants && !makes.fits(wants) ? `<span class="pill cannot">Does not make ${wants}</span>` : `<span class="pill makes">${esc(makes.text)}</span>`;
+  // A model that needs a Python setup says so; the runnable ones need no tag.
+  const python = m.runner && !m.runner.easy ? `<span class="pill">${esc(m.runner.name)}</span>` : "";
   return `<div class="model" role="button" tabindex="0" data-id="${esc(m.id)}">
     <div class="name">${esc(m.name)}</div>
-    <div class="author">${esc(m.author)}</div>
-    <div class="summary">${esc(m.blurb ?? (typeof m.summary === "string" ? m.summary : ""))}</div>
     ${saidHtml(m)}
     ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : w === "mixed reviews" || w === "users report refusals" ? "mixed" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
-      <span class="pill makes">${esc(makes.text)}</span>${cannot}
+      ${makesTag}
       ${state.hidden.has(m.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
       ${m.adult ? '<span class="pill adult">18+</span>' : ""}
       ${m.refusals?.refuses ? `<span class="pill no" title="${esc(m.refusals.example ?? "")}">Users report refusals</span>` : ""}
       ${m.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}
       ${m.gated ? '<span class="pill gated">Gated</span>' : ""}
-      ${runner}
+      ${python}
       <span>${fmt(m.downloads)} downloads</span>
       <span>${fmt(m.likes)} likes</span>
     </div>
@@ -503,11 +499,14 @@ function modelCard(m, wants = null) {
 
 // The one or two summary lines on a card, with a More button that opens the
 // rest in place.
+// What users say about a model, in a line or two; the author's own card
+// text stays in the model window, where it belongs.
+const userLines = (lines) => (lines ?? []).filter((l) => !/^Author:/.test(l));
 function saidHtml(m) {
-  const lines = m.summary?.short ?? [];
-  if (!lines.length) return m.voiceMatch ? `<div class="voice match">${m.voiceMatch.from === "discussion" ? "A discussion titled: " : "The card says: "}${esc(m.voiceMatch.text)}</div>` : "";
-  const more = (m.summary?.long?.length ?? 0) > lines.length || m.talked;
-  return `<div class="said">${lines.map(lineHtml).join("")}${more ? `<button class="ghost more" data-more="${esc(m.id)}">More</button>` : ""}<div class="expanded" hidden></div></div>`;
+  const lines = userLines(m.summary?.short).slice(0, 2);
+  if (!lines.length) return m.voiceMatch && m.voiceMatch.from === "discussion" ? `<div class="voice match">A discussion titled: ${esc(m.voiceMatch.text)}</div>` : "";
+  const rest = userLines(m.summary?.long).filter((l) => !lines.includes(l));
+  return `<div class="said">${lines.map(lineHtml).join("")}${rest.length || m.talked ? `<button class="ghost more" data-more="${esc(m.id)}">More</button>` : ""}<div class="expanded" hidden></div></div>`;
 }
 
 function lineHtml(line) {
@@ -528,8 +527,10 @@ function wireMore(root) {
         btn.textContent = "More";
         return;
       }
-      const long = m?.summary?.long ?? [];
-      box.innerHTML = `${long.map(lineHtml).join("") || "<span class=\"muted small\">Nothing more gathered.</span>"}<div class="by">${m?.summary?.by && m.summary.by !== "extract" ? `Summed up by ${esc(m.summary.by)} on this computer` : "Lines lifted from the comments; a chat model in Ollama would write them"}${m?.talked ? `, from ${m.talked} discussion${m.talked === 1 ? "" : "s"} and the model card` : ""}. <a href="#" data-open-model="${esc(m?.id ?? "")}">Open the model for every source</a></div>`;
+      // Only the lines not already on the card.
+      const shown = userLines(m?.summary?.short).slice(0, 2);
+      const rest = userLines(m?.summary?.long).filter((l) => !shown.includes(l));
+      box.innerHTML = `${rest.map(lineHtml).join("") || "<span class=\"muted small\">Nothing more gathered.</span>"}<div class="by">${m?.talked ? `From ${m.talked} discussion${m.talked === 1 ? "" : "s"}. ` : ""}<a href="#" data-open-model="${esc(m?.id ?? "")}">Open the model for every source</a></div>`;
       box.hidden = false;
       btn.textContent = "Less";
       box.querySelector("[data-open-model]")?.addEventListener("click", (ev) => {
@@ -604,15 +605,15 @@ function renderModel(model, plan, choice = null) {
   if (choice && state.rentAsk === model.id && choice.where === "local") {
     parts.push(rentAskHtml(choice, plan));
   }
-  parts.push(`<div class="spec">
-    <div><b>Makes</b>${esc(makesOf(model).text)}</div>
-    <div><b>File</b>${plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : esc(plan.file.name)}</div>
-    <div><b>Size</b>${plan.file.gb ? plan.file.gb.toFixed(2) + " GB" : "unknown"}</div>
-    <div><b>${state.hosted ? "Memory" : plan.remote && plan.runner === "ollama" ? "On the chat server" : "On this computer"}</b><span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span></div>
-    <div><b>Runs with</b>${{ ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" }[plan.runner]}</div>
-    <div><b>${state.hosted ? "Speed" : plan.remote && plan.runner === "ollama" ? "Speed there" : "Speed here"}</b>${esc(plan.speed?.text ?? "")}${plan.measured ? `<span class="measured">${esc(plan.measured)}</span>` : ""}</div>
+  // The facts in one row: what it makes, the file, the fit, the speed.
+  const onMachine = plan.remote && (plan.runner === "ollama" || plan.tryWith?.agent);
+  parts.push(`<div class="facts">
+    <span class="pill makes">${esc(makesOf(model).text)}</span>
+    <span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span>
+    <span class="fact" title="${esc(plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : plan.file.name)}">${plan.file.folder ? `${plan.file.parts.length} files` : esc(plan.file.name)}${plan.file.gb ? `, ${plan.file.gb.toFixed(1)} GB` : ""}</span>
+    <span class="fact">${plan.measured ? esc(plan.measured) : esc(plan.speed?.text ?? "")}</span>
   </div>
-  <p class="muted small">${plan.remote && (plan.runner === "ollama" || plan.tryWith?.agent) ? `Runs on your rented GPU; your browser talks to the machine directly and nothing passes through ${state.hosted ? "this site" : "the app"}. Speed is a guess for that card.` : state.hosted ? "Speed is a guess for a typical laptop without a separate GPU." : "Speed is a guess for this computer; a measured time replaces it after a real run."}</p>`);
+  ${onMachine ? `<p class="muted small">Runs on your rented GPU; your browser talks to the machine directly and nothing passes through ${state.hosted ? "this site" : "the app"}.</p>` : plan.measured ? "" : `<p class="muted small">${state.hosted ? "Speed is a guess for a typical laptop without a separate GPU." : "Speed is a guess for this computer until a real run measures it."}</p>`}`);
   if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "Larger than a typical laptop has to spare." : "Larger than this computer has to spare; it may load slowly or not at all."}${choice && !choice.rented ? " A rented GPU holds it: pick On a rented GPU above." : choice ? " Pick On a rented GPU above." : ""}</div>`);
   const onSite = state.hosted && !plan.remote;
   if (onSite) parts.push(`<h3>How to run it</h3>`);
@@ -641,9 +642,11 @@ npm start</code></div>`);
 
 function whereHtml(choice) {
   const here = state.hosted ? "your computer" : "this computer";
+  // While the questions that lead to a machine are showing, the GPU button is the chosen one.
+  const rented = choice.where === "rented" || state.rentAsk === state.open;
   return `<div class="where" role="group" aria-label="Where to run it">
-    <button class="where-opt ${choice.where === "local" ? "on" : ""}" data-where="local">On ${here}</button>
-    <button class="where-opt ${choice.where === "rented" ? "on" : ""}" data-where="rented">On a rented GPU${choice.rented ? "" : ", by the hour"}</button>
+    <button class="where-opt ${rented ? "" : "on"}" data-where="local">On ${here}</button>
+    <button class="where-opt ${rented ? "on" : ""}" data-where="rented">On a rented GPU${choice.rented ? "" : ", by the hour"}</button>
   </div>`;
 }
 
@@ -754,7 +757,10 @@ async function loadVoices(model) {
   const threads = v.discussions.length
     ? `<ul>${v.discussions.slice(0, 12).map((d) => `<li><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a> <span class="who">${d.comments} comment${d.comments === 1 ? "" : "s"}${d.status === "closed" ? ", closed" : ""}</span>${(d.comments_text ?? []).map((c) => `<p>${esc(c.author ? c.author + ": " : "")}${esc(c.text)}</p>`).join("")}</li>`).join("")}</ul>`
     : `<p class="muted small">No community discussions on this repository yet.</p>`;
-  const summary = v.summary?.long?.length ? `<div class="said">${v.summary.long.map(lineHtml).join("")}</div><p class="muted small">${v.summary.by !== "extract" ? `Summed up by ${esc(v.summary.by)} on this computer` : "Lines lifted from the comments; a chat model in Ollama would write them"}.</p>` : `<p class="muted small">Nothing said about this model yet.</p>`;
+  const lines = v.summary?.long ?? [];
+  const first = lines.slice(0, 3);
+  const rest = lines.slice(3);
+  const summary = lines.length ? `<div class="said">${first.map(lineHtml).join("")}${rest.length ? `<details class="more-said"><summary>${rest.length} more</summary>${rest.map(lineHtml).join("")}</details>` : ""}</div>` : `<p class="muted small">Nothing said about this model yet.</p>`;
   box.innerHTML = `<h3>What people say</h3>${summary}<details><summary>Sources on Hugging Face</summary>${card}${threads}<p class="muted small">From the community tab on Hugging Face; these are other users' words, not a review.</p></details><details open><summary>Elsewhere</summary><div class="web" id="voices-web"><p class="muted small">Looking on Civitai, GitHub, Hacker News, Lemmy, YouTube and Reddit</p></div></details>`;
   const isImage = state.plan?.runner === "sd" || (model.categories ?? []).includes("images");
   const web = await api.get(`/api/voices/web?id=${encodeURIComponent(model.id)}${isImage ? "&images=1" : ""}`);

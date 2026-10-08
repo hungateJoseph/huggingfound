@@ -394,3 +394,12 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .gpu-list .buttons button { font-size: 13px; padding: 4px 10px; }
 .pill.live { background: var(--ok-soft); color: var(--ok); }
 #gpu-models h3 { margin: 12px 0 4px; font-size: 15px; }
+/* The model window's facts, one row; what people say, a few lines at a time. */
+.facts { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 4px 0 10px; font-size: 13px; }
+.facts .fact { color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.said .line { display: flex; gap: 6px; }
+.said .line b { color: var(--muted); font-weight: 600; flex: none; }
+.said .line.author b { color: var(--accent-ink); }
+.more-said { margin-top: 4px; }
+.more-said summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.model .author { display: none; }

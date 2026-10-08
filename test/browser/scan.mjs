@@ -205,7 +205,7 @@ await step("gathering what people say puts summary lines on cards, with More to 
   assert.match(await card.locator(".said .line").first().innerText(), /^Users/);
   await card.locator("button[data-more]").click();
   await card.locator(".expanded:not([hidden])").waitFor();
-  assert.match(await card.locator(".expanded").innerText(), /lifted from the comments/);
+  assert.match(await card.locator(".expanded").innerText(), /Open the model for every source/);
   assert.equal(await page.locator("#modal").isVisible(), false, "More does not open the model window");
   await card.locator("button[data-more]").click();
   assert.equal(await card.locator(".expanded").isVisible(), false);
@@ -217,12 +217,12 @@ await step("one search box finds models by name and by what people say", async (
   await page.waitForSelector("#found .model");
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.equal(names[0], "Qwen2.5-Coder-7B-Instruct-GGUF", "the model whose users mention Rust ranks first");
-  assert.match(await page.locator("#found-hint").innerText(), /matched on what people say/i);
+  assert.ok((await page.locator("#found .model .why .say").count()) > 0, "cards say when what people say matched");
   assert.match(await page.locator("#found .model").first().locator(".said").innerText(), /rust/i);
   await page.fill("#trait", "chat");
   await page.click("#trait-go");
   await page.waitForSelector("#toggle-refusing");
-  assert.match(await page.locator("#found-hint").innerText(), /hidden because users report the model refuses/);
+  assert.match(await page.locator("#found-hint").innerText(), /hidden: users report refusals/);
   assert.equal(await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).count(), 0, "hidden by default");
   await page.click("#toggle-refusing");
   await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).waitFor();
@@ -246,12 +246,12 @@ await step("one search box finds models by name and by what people say", async (
 
 await step("opening a model shows its plan with the install, start and pull steps", async () => {
   await page.click(".tab[data-tab=easy]");
-  await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).click();
+  await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
   await page.waitForSelector("#steps .step");
   const titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
   assert.deepEqual(titles, ["Install Ollama", "Start Ollama", "Download the model (2.0 GB)"]);
-  assert.match(await page.locator("#modal-body .spec").innerText(), /Q4_K_M\.gguf/);
-  assert.match(await page.locator("#modal-body .spec").innerText(), /Speed here[\s\S]*words a second/i);
+  assert.match(await page.locator("#modal-body .facts").innerText(), /Q4_K_M\.gguf/);
+  assert.match(await page.locator("#modal-body .facts").innerText(), /words a second/i);
   assert.match(await page.locator("#steps .step code").first().innerText(), /ollama/);
   assert.match(await page.locator("#try").innerText(), /Run the steps above/);
   await page.waitForFunction(() => /roleplay and story writing/.test(document.querySelector("#voices")?.textContent ?? ""));
@@ -270,7 +270,7 @@ await step("running a step asks first, and a dismissed prompt runs nothing", asy
 await step("a gated model explains the token and links to the model page", async () => {
   await page.uncheck("#only-runnable");
   await page.click(".tab[data-tab=chat]");
-  await page.locator("#models .model", { hasText: "Llama-3.1-8B-Instruct" }).click();
+  await page.locator("#models .model", { hasText: "Llama-3.1-8B-Instruct" }).locator(".name").click();
   await page.waitForSelector("#modal-body .notice");
   assert.match(await page.locator("#modal-body .notice").innerText(), /gated/i);
   assert.equal(await page.locator("#open-settings-from-model").isVisible(), true);
@@ -295,7 +295,7 @@ await step("saving a token masks it and it lands in the env file", async () => {
 await step("with a token the gated model gets a real answer instead of the lock", async () => {
   await page.uncheck("#only-runnable");
   await page.click(".tab[data-tab=chat]");
-  await page.locator("#models .model", { hasText: "Llama-3.1-8B-Instruct" }).click();
+  await page.locator("#models .model", { hasText: "Llama-3.1-8B-Instruct" }).locator(".name").click();
   await page.waitForSelector("#modal-body .notice");
   assert.match(await page.locator("#modal-body .notice").innerText(), /Python/);
   await page.keyboard.press("Escape");
@@ -356,7 +356,7 @@ await step("a set-up model offers to remove itself from the model window", async
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "ggml-base.en.bin"), Buffer.alloc(1024));
   await page.click(".tab[data-tab=speech]");
-  await page.locator("#models .model", { hasText: "whisper.cpp" }).click();
+  await page.locator("#models .model", { hasText: "whisper.cpp" }).locator(".name").click();
   await page.waitForSelector("#steps .step");
   const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
   assert.equal(done[1], true, "the download step is marked done because the file is on disk");
@@ -376,7 +376,7 @@ await step("a set-up model offers to remove itself from the model window", async
 
 await step("a chat model's try box has an instructions field", async () => {
   await page.click(".tab[data-tab=easy]");
-  await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).click();
+  await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
   await page.waitForSelector("#steps .step");
   const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
   if (done.every(Boolean)) {
@@ -394,7 +394,7 @@ await step("an image model offers Fast, Default and Max with Default chosen", as
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf"), Buffer.alloc(1024));
   await page.click(".tab[data-tab=images]");
-  await page.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).click();
+  await page.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
   await page.waitForSelector("#steps .step");
   const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
   assert.equal(done[1], true, "the planted file counts as downloaded");
@@ -429,10 +429,10 @@ await step("settings has the image server field and rejects a bad address", asyn
 await step("a reload keeps the scan and reports when it was made", async () => {
   await page.reload();
   await page.waitForSelector("#home-hint");
-  assert.match(await page.locator("#home-hint").innerText(), /models scanned/);
+  assert.match(await page.locator("#home-hint").innerText(), /models, scanned/);
   await page.click("#nav-browse");
   await page.waitForSelector("#scan-title:not([hidden])");
-  assert.match(await page.locator("#scan-status").innerText(), /Last scan just now/);
+  assert.match(await page.locator("#scan-status").innerText(), /Last scan (just now|\d+ minutes ago)/);
 });
 
 await step("a conversation survives re-renders, an outside click and closing the window, and scrolling up is not undone while a reply streams", async () => {
@@ -453,7 +453,7 @@ await step("a conversation survives re-renders, an outside click and closing the
   });
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
-  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().click();
+  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#chat-send");
   assert.equal(await page.locator("#messages .msg").count(), 24, "the earlier conversation is back");
   assert.match(await page.locator("#messages .msg").last().innerText(), /earlier answer 11/);
@@ -528,7 +528,7 @@ await step("a conversation survives re-renders, an outside click and closing the
   // Closing and reopening the model brings the conversation back, reply included.
   await page.click("#close-modal");
   assert.equal(await page.locator("#modal").isVisible(), false);
-  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().click();
+  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#chat-send");
   assert.equal(await page.locator("#messages .msg").count(), 27);
   assert.match(await page.locator("#messages .msg").last().innerText(), /word7 is not a word/);
@@ -556,19 +556,35 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.unroute((u) => u.pathname === "/api/model" && u.searchParams.get("id") === id);
 });
 
-await step("cards keep the Hub's one-line description once what people say is gathered", async () => {
+await step("cards carry what users say and one tag for what the model makes; the author's text and the runner stay in the window", async () => {
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
-  const blurbs = await page.$$eval("#models .model .summary", (els) => els.map((e) => e.textContent));
-  assert.ok(blurbs.length > 0);
-  assert.ok(blurbs.every((b) => !/object Object/.test(b)), blurbs.join(" | "));
-  assert.ok(blurbs.some((b) => b.trim().length > 0), "the description is still there");
+  assert.equal(await page.locator("#models .model .summary").count(), 0, "no Hub blurb on cards");
+  assert.equal(await page.locator("#models .model .said .line.author").count(), 0, "no author lines on cards");
+  const card = page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" });
+  assert.equal(await card.locator(".pill.makes").count(), 1);
+  assert.equal(await card.locator(".pill.runner").count(), 0, "the runner is not a card tag");
+  assert.ok((await card.locator(".said .line").count()) <= 2, "at most two lines before More");
+  await card.locator("button[data-more]").click();
+  await card.locator(".expanded:not([hidden])").waitFor();
+  const shown = await card.locator(".said > .line span").allTextContents();
+  const more = await card.locator(".expanded .line span").allTextContents();
+  assert.ok(more.every((t) => !shown.includes(t)), "More shows only what the card did not");
+  assert.doesNotMatch(await card.locator(".expanded .by").innerText(), /lifted from the comments/);
+  await card.locator("button[data-more]").click();
+  // The window still names the author and the runner, and keeps the facts to one row.
+  await card.locator(".name").click();
+  await page.waitForSelector("#modal-body .facts");
+  assert.match(await page.locator("#modal-sub").innerText(), /bartowski/);
+  assert.equal(await page.locator("#modal-body .spec").count(), 0, "no grid of boxes");
+  assert.match(await page.locator("#modal-body .facts").innerText(), /Text only[\s\S]*GB/);
+  await page.keyboard.press("Escape");
 });
 
 await step("every chat model asks where to run it; picking a GPU without a key asks for the key", async () => {
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
-  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#steps .step");
   const options = await page.$$eval(".where .where-opt", (els) => els.map((e) => [e.textContent, e.classList.contains("on")]));
   assert.deepEqual(options, [["On this computer", true], ["On a rented GPU, by the hour", false]]);
@@ -578,7 +594,8 @@ await step("every chat model asks where to run it; picking a GPU without a key a
   await page.click('.where-opt[data-where="rented"]');
   await page.waitForSelector(".rent-ask");
   assert.match(await page.locator(".rent-ask").innerText(), /Do you have a RunPod API key\?[\s\S]*wants a 48 GB card/);
-  assert.equal(await page.locator(".where-opt.on").innerText(), "On this computer", "nothing rented, so the plan stays local");
+  assert.equal(await page.locator(".where-opt.on").innerText(), "On a rented GPU, by the hour", "the chosen button shows as chosen while the questions are up");
+  assert.ok((await page.locator("#steps .step").count()) >= 3, "the plan underneath is still the local one until a machine exists");
   await page.click("#ask-no");
   assert.match(await page.locator("#ask-no-box").innerText(), /runpod\.io/);
   await page.click("#ask-yes");
@@ -624,7 +641,7 @@ await step("renting from the model window preselects its size, and the bar shows
   let titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
   assert.deepEqual(titles, ["Download the model on the chat server (25.6 GB)"]);
   assert.match(await page.locator("#steps .step .text").innerText(), /rented GPU is still starting/);
-  assert.match(await page.locator("#modal-body .spec").innerText(), /Fits the server's 48 GB GPU/);
+  assert.match(await page.locator("#modal-body .facts").innerText(), /Fits the server's 48 GB GPU/);
   // The other button plans it for this computer again, machine or no machine.
   await page.click('.where-opt[data-where="local"]');
   await page.waitForFunction(() => document.querySelectorAll("#steps .step").length >= 3);
@@ -651,7 +668,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.waitForFunction(() => /after 45 minutes/.test(document.querySelector("#rent-panel").textContent));
   await page.click("#close-settings");
   // A stopped machine is started from the model window, not replaced by a new rental.
-  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await page.waitForSelector(".where");
   await page.click('.where-opt[data-where="rented"]');
   await page.waitForSelector("#ask-start");
@@ -690,10 +707,10 @@ await step("every card says what the model makes, and a search for pictures mark
   await page.fill("#trait", "pictures of a chat");
   await page.click("#trait-go");
   await page.waitForSelector("#found .model");
-  const textCards = page.locator("#found .model", { has: page.locator(".pill.makes", { hasText: "Text only" }) });
-  assert.ok((await textCards.count()) > 0, "a picture search still turns up chat models");
-  assert.equal(await textCards.first().locator(".pill.cannot").innerText(), "Does not make images");
-  assert.match(await page.locator("#found-hint").innerText(), /text models that cannot make images/);
+  const cannotCards = page.locator("#found .model", { has: page.locator(".pill.cannot") });
+  assert.ok((await cannotCards.count()) > 0, "a picture search still turns up chat models, marked");
+  assert.equal(await cannotCards.first().locator(".pill.cannot").innerText(), "Does not make images");
+  assert.equal(await cannotCards.first().locator(".pill.makes").count(), 0, "one tag, not two");
   const imageCards = page.locator("#found .model", { has: page.locator(".pill.makes", { hasText: "Makes images" }) });
   if (await imageCards.count()) assert.equal(await imageCards.first().locator(".pill.cannot").count(), 0);
   await page.fill("#trait", "");
@@ -704,7 +721,7 @@ await step("every card says what the model makes, and a search for pictures mark
 await step("a model can be hidden from search and Browse, listed in Settings, and brought back", async () => {
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
-  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#steps .step");
   assert.equal(await page.locator("#hide-model").innerText(), "Hide this model");
   await page.click("#hide-model");
@@ -763,7 +780,7 @@ await step("hosted: a visitor who is not signed in is offered sign-in before a G
   assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
   await visitor.click("#nav-browse");
   await visitor.click(".tab[data-tab=chat]");
-  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector(".rent-ask");
@@ -774,7 +791,7 @@ await step("hosted: a visitor who is not signed in is offered sign-in before a G
 });
 
 await step("hosted: a guest enters a key in the model window, rents, and sees when the keys expire", async () => {
-  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector("#ask-yes");
@@ -831,7 +848,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
 await step("hosted: the model window rents the GPU, the download runs on it, and the chat goes straight from the browser to the machine", async () => {
   await visitor.click("#nav-browse");
   await visitor.click(".tab[data-tab=chat]");
-  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().click();
+  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector("#ask-rent");
@@ -882,7 +899,7 @@ await step("hosted: an image model is downloaded onto the rented GPU and picture
   await visitor.keyboard.press("Escape");
   await visitor.click("#nav-browse");
   await visitor.click(".tab[data-tab=images]");
-  await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).click();
+  await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
   await visitor.waitForSelector(".where");
   assert.equal(await visitor.locator(".where-opt.on").innerText(), "On a rented GPU", "the machine is there, so it is the default");
   assert.match(await visitor.locator("#modal-body").innerText(), /Runs on your rented GPU; your browser talks to the machine directly/);
