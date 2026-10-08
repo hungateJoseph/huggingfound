@@ -95,7 +95,7 @@ async function step(name, fn) {
 }
 
 await page.goto(base);
-await page.waitForSelector("#home-hint");
+await page.waitForSelector("#trait");
 
 await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#trait").isVisible(), true);
@@ -108,7 +108,6 @@ await step("the page opens on a single search box", async () => {
   assert.match(await page.locator("#found-title").innerText(), /coding help/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");
-  assert.match(await page.locator("#found .model .why").first().innerText(), /category|name/);
   await page.fill("#trait", "");
   await page.click("#trait-go");
   await page.waitForFunction(() => document.querySelector("#results").hidden);
@@ -217,7 +216,6 @@ await step("one search box finds models by name and by what people say", async (
   await page.waitForSelector("#found .model");
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.equal(names[0], "Qwen2.5-Coder-7B-Instruct-GGUF", "the model whose users mention Rust ranks first");
-  assert.ok((await page.locator("#found .model .why .say").count()) > 0, "cards say when what people say matched");
   assert.match(await page.locator("#found .model").first().locator(".said").innerText(), /rust/i);
   await page.fill("#trait", "chat");
   await page.click("#trait-go");
@@ -428,8 +426,8 @@ await step("settings has the image server field and rejects a bad address", asyn
 
 await step("a reload keeps the scan and reports when it was made", async () => {
   await page.reload();
-  await page.waitForSelector("#home-hint");
-  assert.match(await page.locator("#home-hint").innerText(), /models, scanned/);
+  await page.waitForSelector("#trait");
+  assert.equal(await page.locator("#home-hint").isVisible(), false, "nothing to say once there is a scan");
   await page.click("#nav-browse");
   await page.waitForSelector("#scan-title:not([hidden])");
   assert.match(await page.locator("#scan-status").innerText(), /Last scan (just now|\d+ minutes ago)/);
@@ -774,7 +772,7 @@ visitor.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));
 
 await step("hosted: a visitor who is not signed in is offered sign-in before a GPU, and Settings stay hidden", async () => {
   await visitor.goto(hostedBase);
-  await visitor.waitForSelector("#home-hint");
+  await visitor.waitForSelector("#trait");
   assert.equal(await visitor.locator("#open-settings").isVisible(), false);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false, "no Sign in button until Google is set up; guests need none");
   assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);

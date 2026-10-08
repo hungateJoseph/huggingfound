@@ -218,10 +218,10 @@ $("#nav-browse").addEventListener("click", () => {
 function renderHomeHint() {
   const v = state.voices;
   const parts = [];
-  if (!state.scanAt) parts.push("No scan yet, so results come from Hugging Face's own search and the curated picks.");
-  else parts.push(`${state.models.length} models, scanned ${relative(state.scanAt)}.`);
+  if (!state.scanAt && !state.hosted) parts.push("No scan yet, so results come from Hugging Face's own search and the curated picks.");
   if (!v?.count && !state.hosted) parts.push("Gather what people say (in Browse) to rank by reviews.");
   $("#home-hint").textContent = parts.join(" ");
+  $("#home-hint").hidden = !parts.length;
 }
 
 function renderVoicesStatus() {
@@ -437,7 +437,7 @@ function pickCard(p) {
   const f = fit(p.gb, p.runner);
   const makes = makesOf(p);
   return `<div class="model" role="button" tabindex="0" data-id="${esc(p.id)}">
-    <div class="name">${esc(p.id.split("/").pop())}</div>
+    <div class="name" title="${esc(p.id.split("/").pop())}">${esc(p.id.split("/").pop())}</div>
     <div class="summary">${esc(p.why)}</div>
     ${p.speed ? `<div class="speed">${esc(p.speed)}</div>` : ""}
     <div class="meta"><span class="pill makes">${esc(makes.text)}</span><span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}${state.hidden.has(p.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}</div>
@@ -478,9 +478,8 @@ function modelCard(m, wants = null) {
   // A model that needs a Python setup says so; the runnable ones need no tag.
   const python = m.runner && !m.runner.easy ? `<span class="pill">${esc(m.runner.name)}</span>` : "";
   return `<div class="model" role="button" tabindex="0" data-id="${esc(m.id)}">
-    <div class="name">${esc(m.name)}</div>
+    <div class="name" title="${esc(m.name)}">${esc(m.name)}</div>
     ${saidHtml(m)}
-    ${m.why?.length ? `<div class="why">${m.why.map((w) => `<span class="${w === "what people say" ? "say" : w === "mixed reviews" || w === "users report refusals" ? "mixed" : ""}">${esc(w)}</span>`).join("")}</div>` : ""}
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
       ${makesTag}
@@ -1001,7 +1000,7 @@ function renderDiskLine() {
   const st = state.storage;
   const m = state.machine;
   if (state.hosted) {
-    $("#machine-line").textContent = state.chatServer ? `Chat models run on your rented GPU (${state.chatServer.gpuGb} GB); other kinds are shown for a typical 16 GB laptop.` : "Fit and speed shown for a typical 16 GB laptop. Run HuggingFound on your computer to see them for your machine, or sign in and rent a GPU.";
+    $("#machine-line").textContent = state.chatServer ? `Fit and speed are for your rented GPU (${state.chatServer.gpuGb} GB); speech models for a typical 16 GB laptop.` : "Fit and speed are for a typical 16 GB laptop.";
     return;
   }
   const free = st?.disk?.freeGb != null ? ` ${st.disk.freeGb.toFixed(0)} GB free on disk.` : "";

@@ -6,7 +6,15 @@ import { ollamaUrl } from "./runners.js";
 // them when one is running; otherwise the lines are lifted from the most
 // opinionated sentences in the text. Either way nothing is quoted at length.
 
-const OPINION = /\b(good|great|best|excellent|amazing|love|recommend|impressive|solid|fast|quick|slow|bad|worse|worst|terrible|garbage|broken|fails?|failed|crash|refuse[sd]?|censored|uncensored|works?|worked|better|quality|accurate|hallucinat|coherent|creative|boring|repetitive|blurry|detailed|realistic|anime|roleplay|coding|math|prefer|beats|outperform|disappoint|struggle|useless|perfect|surprisingly|smart|dumb|nsfw|hands|fingers|context|memory|ram|vram)\b/i;
+// Words that make a sentence a judgement of the model; topical words alone
+// (coding, anime, vram) are not enough, or titles and requests slip through.
+const OPINION = /\b(good|great|best|excellent|amazing|love|recommend|impressive|solid|fast|quick|slow|bad|worse|worst|terrible|garbage|broken|fails|failed|crash|crashes|refuse[sd]?|censored|uncensored|works|worked|better|quality|accurate|hallucinat\w*|coherent|creative|boring|repetitive|blurry|detailed|realistic|prefer|outperform\w*|disappoint\w*|struggle[sd]?|useless|perfect|surprisingly|smart|dumb|nice|well|decent|mediocre|poor|wrong|mistakes?|buggy|stable|unstable|capable|weak|strong|consistent|reliable|keeps? (characters|track)|follows instructions|handles)\b/i;
+const TOPIC = /\b(anime|roleplay|coding|math|nsfw|hands|fingers|context|memory|ram|vram)\b/i;
+// Asking for something, talking to the community, or pasting an error is
+// not a verdict on the model; none of it goes on a card.
+const REQUEST = /\b(please|can you|could you|will you|would you|any plans?|plans to|release|add support|support for|requesting|when (will|is|can)|eta\b|wen\b)\b/i;
+const META = /\b(creators?|clout|upvotes?|downvotes?|thanks?|thank you|congrat\w*|shout ?out|follow me|subscribe|discord|patreon|donat\w*|leaderboard|runtime \d+ ?ms|beats \d+(\.\d+)?%)\b/i;
+const ERRORISH = /^(error|exception|traceback)\b|\berrno\b|stack trace|was loaded with a context length/i;
 const NOISE = /https?:\/\/|```|\bREADME\b|license|licence|\bsha256\b|quantiz|imatrix|\bQ[2-8]_|\bgguf\b|download|repo(sitory)?\b|changelog|how to run|^\s*(usage|install)/i;
 const AUTOMATED = /^demo for this model on spaces|^add .* to .*collection|^update readme|^adding .*model card/i;
 
@@ -55,12 +63,13 @@ export function extractiveSummary(entry, web = null) {
   const scored = [];
   for (const u of users) {
     for (const s of sentences(u.text)) {
-      if (NOISE.test(s)) continue;
+      if (NOISE.test(s) || REQUEST.test(s) || META.test(s) || ERRORISH.test(s)) continue;
       const hits = (s.match(new RegExp(OPINION.source, "gi")) ?? []).length;
       if (!hits && !/^People make:|thumbs up/.test(s)) continue;
+      const topical = (s.match(new RegExp(TOPIC.source, "gi")) ?? []).length;
       // A question ("how much VRAM?") is not an opinion; it only counts when nothing else does.
       const question = /\?\s*$/.test(s) || /^(how|what|which|can|does|is there|any(one)?|why|where)\b/i.test(s);
-      scored.push({ s, score: (hits + 0.5) * u.weight * (u.author ? 0.5 : 1) * (question ? 0.15 : 1), author: Boolean(u.author) });
+      scored.push({ s, score: (hits + topical * 0.5 + 0.5) * u.weight * (u.author ? 0.5 : 1) * (question ? 0.15 : 1), author: Boolean(u.author) });
     }
   }
   scored.sort((a, b) => b.score - a.score);
