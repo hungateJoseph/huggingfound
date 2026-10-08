@@ -1,5 +1,6 @@
 import { chooseFile, quantTag } from "./hf.js";
 import { fitFor, platformName } from "./machine.js";
+import { imageSettings } from "./runners.js";
 import { estimate, measuredText } from "./speed.js";
 
 // Turns "I want to try this model" into the ordered steps this computer
@@ -146,10 +147,34 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   if (runner.id === "sd") {
     const fast = /turbo|lightning|lcm|hyper/i.test(`${model.id}/${file.name}`);
     const style = imageStyle(model);
+    // Each preset carries the settings a picture is made with, so a machine
+    // elsewhere (the rented GPU's agent) can be asked for exactly the same.
     const qualities = Object.fromEntries(["fast", "default", "max"].map((q) => {
       const n = fast ? (q === "max" ? 8 : 4) : { fast: 12, default: 20, max: 40 }[q];
-      return [q, { steps: n, ...estimate({ runnerId: "sd", sizeGb: file.gb, fileName: file.name, machine, xl: file.xl, steps: n }) }];
+      const s = imageSettings(q, { fast, xl: Boolean(file.xl || /xl/i.test(file.name)) });
+      return [q, { steps: n, size: s.size, cfg: s.cfg, sampler: s.samplerName, scheduler: s.schedulerName, ...estimate({ runnerId: "sd", sizeGb: file.gb, fileName: file.name, machine, xl: file.xl, steps: n }) }];
     }));
+    // On the rented GPU the only step is the download, done by the machine;
+    // pictures are then made there, asked for by the browser itself.
+    if (detected.gpu?.url) {
+      if (model.gated) {
+        return { runnable: false, gated: true, reason: `${model.name} is gated, and the rented GPU fetches files without your Hugging Face token. Run it on this computer instead, or pick an open model.`, steps: [], link: model.url };
+      }
+      if (file.folder) {
+        return { runnable: false, reason: `${model.name} is published as several files that HuggingFound merges on this computer; the rented GPU runs image models that come as one file. Run it on this computer, or pick a single-file version.`, steps: [], link: model.url };
+      }
+      const key = `${model.id}/${file.name}`;
+      const done = detected.gpu.files.includes(key);
+      steps.push({
+        kind: "pull-image-model",
+        args: { repo: model.id, file: file.name },
+        title: `Download the model on the rented GPU (${file.gb ? file.gb.toFixed(1) + " GB" : "size unknown"})`,
+        text: `The machine fetches ${file.name} straight from Hugging Face onto its own disk; nothing comes to this computer. ${fit.text}.${detected.gpu.running ? "" : ` ${serverDownNote(detected.gpu.rented)}`}`,
+        done,
+        command: `download ${file.name} onto the rented GPU`,
+      });
+      return { runnable: true, runner: runner.id, file, fit, speed, measured: "", steps, qualities, fast, style, remote: detected.gpu.url, tryWith: { kind: "image", repo: model.id, file: file.name, agent: detected.gpu.url }, remove: [{ kind: "gpu-file", repo: model.id, file: file.name }] };
+    }
     // With a remote image server nothing is downloaded here; the server
     // makes the picture with whatever model it has loaded.
     if (imageServer) {

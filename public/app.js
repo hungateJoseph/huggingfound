@@ -415,8 +415,9 @@ function renderWebFound(web) {
 
 function fit(gb, runner) {
   if (!gb) return { level: "unknown", text: "Size after scan" };
-  // Chat models are judged against the chat server's GPU when one is set.
-  if (runner === "ollama" && state.chatServer) {
+  // Chat models are judged against the rented GPU when one is set, and
+  // image models too once the machine has its image agent.
+  if ((runner === "ollama" && state.chatServer) || (runner === "sd" && state.chatServer?.agent)) {
     const room = state.chatServer.comfortableGb;
     if (gb <= room * 0.8) return { level: "good", text: `Fits the server's GPU, ${gb.toFixed(1)} GB` };
     if (gb <= room) return { level: "tight", text: `Tight on the server's GPU, ${gb.toFixed(1)} GB` };
@@ -603,6 +604,7 @@ function renderModel(model, plan, choice = null) {
     parts.push(rentAskHtml(choice, plan));
   }
   if (plan.remote && plan.runner === "ollama") parts.push(`<div class="notice info">${choice?.rented && state.chatServer?.rented ? "This model is downloaded to your rented GPU and runs there" : `This model is downloaded and run on the chat server at ${esc(plan.remote)}`}; nothing large comes to ${state.hosted ? "your" : "this"} computer.${state.hosted ? " Your browser talks to the machine directly; what you say to the model does not pass through this site." : " Change this in Settings."}</div>`);
+  if (plan.remote && plan.runner === "sd" && plan.tryWith?.agent) parts.push(`<div class="notice info">This model is downloaded to your rented GPU and pictures are made there, in seconds; nothing large comes to ${state.hosted ? "your" : "this"} computer. Your browser asks the machine directly, so what you ask for does not pass through ${state.hosted ? "this site" : "the app"}, and each picture is saved only when you download it.</div>`);
   parts.push(`<div class="spec">
     <div><b>Makes</b>${esc(makesOf(model).text)}</div>
     <div><b>File</b>${plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : esc(plan.file.name)}</div>
@@ -1535,10 +1537,11 @@ function downloadedImageModels() {
     .filter((f) => sd.has(f.repo) && /\.(safetensors|gguf|ckpt)$/i.test(f.file) && !f.file.includes("/"));
 }
 
-function imageHelpers() {
+function imageHelpers(context = {}) {
   const out = [];
   if (claudeAvailable()) out.push({ id: "claude", label: "Claude (looks at it and writes the edit for an image model)" });
-  for (const f of downloadedImageModels()) out.push({ id: `image:${f.repo}|${f.file}`, label: `${f.file} (paints over it)` });
+  if (context.agent) out.push({ id: `agent:${context.repo}|${context.modelFile}`, label: `${context.modelFile} on the rented GPU (paints over it)` });
+  else for (const f of downloadedImageModels()) out.push({ id: `image:${f.repo}|${f.file}`, label: `${f.file} (paints over it)` });
   return out;
 }
 
@@ -1546,7 +1549,7 @@ function imageHelpers() {
 // needs; `onUse(text, by, request)` takes a revised answer; `onImage(file,
 // by, request)` takes an edited picture.
 function addImprove(anchor, { kind, current, context, onUse = null, onImage = null }) {
-  const helpers = kind === "text" ? textHelpers(current) : imageHelpers();
+  const helpers = kind === "text" ? textHelpers(current) : imageHelpers(context());
   const wrap = document.createElement("div");
   wrap.className = "improve-wrap";
   const choices = helpers.length ? helpers.map((h) => `<option value="${esc(h.id)}">${esc(h.label)}</option>`).join("") : `<option value="">${state.hosted ? "Sign in and save an Anthropic key, or download another model, to have someone improve this" : kind === "text" ? "Add an Anthropic key in Settings, or download a second chat model, to have someone improve this" : "Add an Anthropic key in Settings, or download an image model, to have someone improve this"}</option>`;
@@ -1579,7 +1582,7 @@ function addImprove(anchor, { kind, current, context, onUse = null, onImage = nu
     try {
       if (by === "claude") await improveWithClaude({ kind, request, context: context(), head, body, foot, onUse, onImage });
       else if (by.startsWith("model:")) await improveWithModel({ model: by.slice(6), request, context: context(), head, body, foot, onUse });
-      else if (by.startsWith("image:")) {
+      else if (by.startsWith("image:") || by.startsWith("agent:")) {
         const [repo, file] = by.slice(6).split("|");
         await repaint({ repo, file, request, context: context(), prompt: `${context().prompt}, ${request}`, negative: context().negative, strength: 0.55, head, body, foot, onImage });
       }
@@ -1648,9 +1651,9 @@ async function improveWithClaude({ kind, request, context, head, body, foot, onU
     const keep = Number(/^Keep:\s*(\d+)/m.exec(text)?.[1]);
     if (!description) return;
     const strength = Number.isFinite(keep) ? Math.min(0.9, Math.max(0.1, 1 - keep / 100)) : 0.55;
-    const models = downloadedImageModels();
+    const models = context.agent ? [{ repo: context.repo, file: context.modelFile }] : downloadedImageModels();
     for (const f of models) {
-      foot.prepend(useButton(`Edit with ${f.file}`, () => repaint({ repo: f.repo, file: f.file, request, context, prompt: description, negative: avoid, strength, head, body, foot, onImage, planned: true })));
+      foot.prepend(useButton(`Edit with ${f.file}${context.agent ? " on the rented GPU" : ""}`, () => repaint({ repo: f.repo, file: f.file, request, context, prompt: description, negative: avoid, strength, head, body, foot, onImage, planned: true })));
     }
     foot.prepend(useButton("Use this description for a new picture", () => {
       if ($("#image-prompt")) $("#image-prompt").value = description;
@@ -1691,6 +1694,15 @@ async function repaint({ repo, file, request, context, prompt, negative, strengt
   log.className = "log";
   body.appendChild(log);
   foot.textContent = planned ? `Painting over the picture from Claude's description, keeping about ${Math.round((1 - strength) * 100)}% of it.` : "Painting over the picture.";
+  if (context.agent) {
+    const image = await agentPicture(context.agent, { repo, file, prompt, negative, quality: state.plan?.qualities?.default, init: context.data, strength }, (line) => {
+      log.textContent += line + "\n";
+      log.scrollTop = log.scrollHeight;
+    });
+    foot.textContent = `By ${file}, on the rented GPU.`;
+    onImage?.(null, file, request, { prompt, negative, planned, data: image });
+    return;
+  }
   const { id } = await api.post("/api/run", { kind: "edit-image", args: { repo, file, init: context.file, prompt, negative, strength, quality: "default" } });
   const result = await follow(id, (line) => {
     log.textContent += line + "\n";
@@ -1789,7 +1801,7 @@ function renderImage(box, t) {
   const qualities = plan?.qualities ?? {};
   const options = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === saved ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
   const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
-  const loaded = plan?.keepsLoaded && !t.remote ? `<p class="muted small loaded-note"><span>After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.</span><button class="ghost" id="unload-model">Unload now</button></p>` : "";
+  const loaded = plan?.keepsLoaded && !t.remote && !t.agent ? `<p class="muted small loaded-note"><span>After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.</span><button class="ghost" id="unload-model">Unload now</button></p>` : "";
   const style = plan?.style ? `<p class="muted small style-note"><b>${plan.style.kind === "anime" ? "Anime model." : "Realistic model."}</b> ${esc(plan.style.text)}</p>` : "";
   box.innerHTML = `<h3>Try it</h3>
     ${remote}
@@ -1827,6 +1839,17 @@ function renderImage(box, t) {
         // no storage
       }
       const negative = $("#image-negative").value.trim();
+      if (t.agent) {
+        // The rented GPU makes the picture; the browser asks it directly and
+        // keeps the result, which is saved only when downloaded.
+        const image = await agentPicture(t.agent, { repo: t.repo, file: t.file, prompt, negative, quality: plan?.qualities?.[quality] }, (line) => {
+          log.textContent += line + "\n";
+          log.scrollTop = log.scrollHeight;
+        });
+        $("#image-out").innerHTML = "";
+        showPicture($("#image-out"), { data: image, prompt, negative, model: t.repo, madeBy: t.file, agent: t.agent, repo: t.repo, modelFile: t.file, chain: [] });
+        return;
+      }
       const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt, negative, quality } });
       const result = await follow(id, (line) => {
         log.textContent += line + "\n";
@@ -1847,18 +1870,22 @@ function renderImage(box, t) {
 // A picture with its tools: download, Claude's check, and Improve, which
 // hands it to Claude or to an image model that paints over it. An edited
 // picture appears underneath with the chain of hands that made it.
-function showPicture(into, { file, prompt, negative, model, madeBy, chain }) {
+// A picture is either a file the app made (on this computer) or bytes the
+// rented GPU sent to the browser, kept here and saved only when downloaded.
+function showPicture(into, { file = null, data = null, prompt, negative, model, madeBy, chain, agent = null, repo = null, modelFile = null }) {
   const card = document.createElement("div");
   card.className = "image-card";
-  card.innerHTML = `<img class="result-image" src="/output/${esc(file)}" alt="${esc(prompt)}">
+  const src = file ? `/output/${file}` : `data:image/png;base64,${data}`;
+  const name = file ?? `image-${Date.now()}.png`;
+  card.innerHTML = `<img class="result-image" src="${esc(src)}" alt="${esc(prompt)}">
     ${chain.length ? `<div class="chain">${esc(chainText(madeBy, chain))}</div>` : ""}
-    <p class="muted small tools-row"><span>Saved to ~/HuggingFound/output/${esc(file)}.</span><a class="button" href="/output/${esc(file)}" download="${esc(file)}">Download</a></p>`;
+    <p class="muted small tools-row"><span>${file ? `Saved to ~/HuggingFound/output/${esc(file)}.` : "Made on the rented GPU; it lives in this page until you download it."}</span><a class="button" href="${esc(src)}" download="${esc(name)}">Download</a></p>`;
   into.appendChild(card);
   const anchor = card.lastElementChild;
   const checked = addCheck(anchor, {
     label: "Ask Claude to check this picture",
     sent: "this picture and your description",
-    payload: () => ({ kind: "image", model, file, prompt, negative }),
+    payload: () => (file ? { kind: "image", model, file, prompt, negative } : { kind: "image", model, image: { media_type: "image/png", data }, prompt, negative }),
     // Claude ends with a better description and avoid list; one click tries them.
     after: (text, foot) => {
       const better = /^Description:\s*(.+)$/m.exec(text)?.[1]?.trim();
@@ -1873,13 +1900,49 @@ function showPicture(into, { file, prompt, negative, model, madeBy, chain }) {
   });
   addImprove(checked, {
     kind: "image",
-    context: () => ({ file, prompt, negative, model }),
+    context: () => ({ file, data, prompt, negative, model, agent, repo, modelFile }),
     onImage: (edited, by, request, details) => {
       const next = [...chain, { by, request, verb: "edited" }];
       if (details.planned) next.splice(-1, 0, { by: "Claude", request, verb: "planned" });
-      showPicture(into, { file: edited, prompt: details.prompt, negative: details.negative, model, madeBy, chain: next });
+      showPicture(into, { ...(details.data ? { data: details.data } : { file: edited }), prompt: details.prompt, negative: details.negative, model, madeBy, chain: next, agent, repo, modelFile });
     },
   });
+}
+
+// Asks the rented GPU's agent for a picture and waits for it: a job is
+// submitted, then polled, so RunPod's proxy never holds a long request.
+// `quality` is a preset from the plan, with the exact settings to use.
+async function agentPicture(agent, { repo, file, prompt, negative, quality, init = null, strength = null }, onLine = () => {}) {
+  api.post("/api/rent/touch", {}).catch(() => {});
+  const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
+  const body = { repo, file, prompt, negative, steps: q.steps, width: q.size, height: q.size, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler };
+  if (init) {
+    body.init = init;
+    body.strength = strength ?? 0.55;
+  }
+  onLine(`Asking the rented GPU for a ${q.size} by ${q.size} picture, ${q.steps} steps${init ? ", painting over the picture" : ""}`);
+  const res = await fetch(`${agent}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `the machine answered HTTP ${res.status}`);
+  const { id } = await res.json();
+  let last = "";
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const poll = await fetch(`${agent}/jobs/${id}`);
+    if (!poll.ok) throw new Error(`lost the machine while waiting (HTTP ${poll.status})`);
+    const job = await poll.json();
+    const word = { loading: "Loading the model into the GPU (the first picture with a model takes longer)", queued: "Waiting for the GPU", generating: "Generating" }[job.status];
+    if (word && word !== last) {
+      onLine(word);
+      last = word;
+    }
+    if (job.status === "completed") {
+      onLine(`Done in ${Math.round((Date.now() - started) / 1000)} s.`);
+      return job.image;
+    }
+    if (job.status === "failed") throw new Error(job.error || "the machine could not make the picture");
+    if (Date.now() - started > 30 * 60e3) throw new Error("no picture after 30 minutes");
+  }
 }
 
 function renderTranscribe(box, t) {
@@ -2223,7 +2286,7 @@ function renderRental() {
     panel.innerHTML = `<div class="rent-card">
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
-      <p class="muted small">${esc(idle)} Chat models above are downloaded to it and run there.</p>
+      <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}</p>
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
         ${r.status === "EXITED" || r.status === "ERROR" ? `<button class="primary" id="rent-start">Start</button>` : ""}

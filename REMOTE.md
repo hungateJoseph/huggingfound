@@ -42,6 +42,10 @@ done. You pay RunPod; HuggingFound charges nothing and never sees your card.
    rented GPU, and choosing the GPU without one asks whether you have a
    RunPod key, takes it, and opens this section with the right size chosen.
 
+The machine runs HuggingFound's own image (built from `gpu/` in this
+repository): Ollama for chat models, and stable-diffusion.cpp with a small
+agent for image models. Speech models stay on your computer.
+
 The machine takes two to four minutes to start. Meanwhile:
 
 - A bar under the header shows what is rented, the price an hour, how long
@@ -52,6 +56,13 @@ The machine takes two to four minutes to start. Meanwhile:
   and loads it into the GPU so the first message is quick.
 - The chat box, the saved conversation and "Ask Claude to check this" work
   as before.
+- Every image model gets the same two buttons. On the machine its one step
+  is "Download the model on the rented GPU"; pictures are then made there in
+  seconds, asked for by your browser directly, shown in the page and saved
+  to your computer with Download. "Improve this" can have the same model on
+  the machine paint over a picture, with Claude writing the edit if asked.
+  Gated image models and ones published as several files stay on your
+  computer.
 
 ### Stopping, starting and deleting
 
@@ -82,6 +93,10 @@ The machine takes two to four minutes to start. Meanwhile:
   fetched by the machine through HuggingFound; their window says so.
 - Fit and speed go by the card's memory; speed is a rough guess for a
   modern NVIDIA card.
+- If the full machine image cannot be pulled (it is published as a GitHub
+  package that has to be public), HuggingFound rents a plain Ollama machine
+  instead: chat models work, image models stay on your computer, and the
+  Settings card says so.
 - The key and the machine's id are kept in HuggingFound's settings file on
   this computer, next to the other keys.
 

@@ -795,6 +795,80 @@ export function pullOnChatServer(name, fetchImpl = fetch, remote = "", { owner =
   }, { owner });
 }
 
+// ---- image models on the rented GPU ---------------------------------------------
+// The machine runs HuggingFound's agent (gpu/agent.js) next to Ollama. It
+// downloads image model files onto the machine's disk and makes pictures
+// for the browser; here the app only asks for downloads, lists what is
+// there and removes files, relaying progress the way it does for Ollama.
+
+export async function agentModels(agent, fetchImpl = fetch) {
+  const res = await fetchImpl(`${agent}/models`, { signal: AbortSignal.timeout(4000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return ((await res.json()).models ?? []).map((m) => `${m.repo}/${m.file}`);
+}
+
+export async function removeAgentModel(repo, file, fetchImpl = fetch, agent = "") {
+  if (!REPO_RE.test(String(repo)) || !FILE_RE.test(String(file))) throw new Error("Bad model arguments");
+  if (!agent) throw new Error("No rented GPU");
+  let res;
+  try {
+    res = await fetchImpl(`${agent}/models`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo, file }) });
+  } catch {
+    throw new Error("The rented GPU is not answering, so its models cannot be removed right now");
+  }
+  if (res.status === 404) throw new Error("The rented GPU does not have that file");
+  if (!res.ok) throw new Error(`The rented GPU replied HTTP ${res.status}`);
+}
+
+export function pullImageOnAgent(repo, file, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
+  if (!REPO_RE.test(String(repo)) || !FILE_RE.test(String(file))) throw new Error("Bad model arguments");
+  if (!agent) throw new Error("No rented GPU");
+  return startCustomRun(`Downloading ${file} on the rented GPU`, async (emit, cancelled) => {
+    const started = Date.now();
+    let said = false;
+    for (;;) {
+      if (cancelled()) return;
+      try {
+        const probe = await fetchImpl(`${agent}/health`, { signal: AbortSignal.timeout(5000) });
+        if (probe.ok) break;
+      } catch {
+        // not up yet
+      }
+      if (Date.now() - started > 10 * 60e3) throw new Error("the rented GPU did not answer in ten minutes; check the machine in Settings");
+      if (!said) emit("Waiting for the machine to start (a new machine takes a few minutes)");
+      said = true;
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+    if (said) emit("The machine is up.");
+    const stop = new AbortController();
+    const res = await fetchImpl(`${agent}/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo, file, token: token || undefined }), signal: stop.signal });
+    if (!res.ok) throw new Error(`the rented GPU answered HTTP ${res.status}`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let last = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (cancelled()) {
+        stop.abort();
+        return;
+      }
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const j = JSON.parse(line);
+        if (j.error) throw new Error(j.error);
+        const text = j.total ? `${Math.floor(((j.completed ?? 0) / j.total) * 100)}% of ${(j.total / 1024 ** 3).toFixed(2)} GB` : String(j.status ?? "");
+        if (text && text !== last) emit(text);
+        last = text;
+      }
+    }
+  }, { owner });
+}
+
 export function cancelRun(id) {
   const run = runs.get(id);
   if (!run) return false;

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { startStubHub } from "./stub-hub.js";
+import { startStubAgent } from "./stub-agent.js";
 import { startStubOllama } from "./stub-ollama.js";
 import { KEY, startStubRunpod } from "./stub-runpod.js";
 
@@ -34,6 +35,7 @@ let jwks;
 let stub;
 let runpod;
 let ollama;
+let agent;
 let server;
 let base;
 const home = process.env.HUGGINGFOUND_HOME;
@@ -50,7 +52,8 @@ before(async () => {
   stub = await startStubHub();
   runpod = await startStubRunpod();
   ollama = await startStubOllama();
-  server = createServer({ envFile: path.join(home, ".env"), scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, hosted: true, refreshHours: 0, accountsDir: path.join(home, "accounts"), accountsSecret: SECRET, googleClientId: CLIENT, googleJwks: `http://127.0.0.1:${jwks.address().port}/certs`, runpodBase: runpod.base, runpodProxy: () => ollama.url, idleWatch: false, siteOrigin: "https://huggingfound.test" });
+  agent = await startStubAgent();
+  server = createServer({ envFile: path.join(home, ".env"), scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, hosted: true, refreshHours: 0, accountsDir: path.join(home, "accounts"), accountsSecret: SECRET, googleClientId: CLIENT, googleJwks: `http://127.0.0.1:${jwks.address().port}/certs`, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, idleWatch: false, siteOrigin: "https://huggingfound.test" });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -60,6 +63,7 @@ after(() => {
   stub.server.close();
   runpod.server.close();
   ollama.server.close();
+  agent.server.close();
   jwks.close();
 });
 
@@ -167,7 +171,9 @@ test("renting from the site makes a machine the browser may talk to directly, an
   const made = runpod.state.created.at(-1);
   assert.equal(made.env.OLLAMA_ORIGINS, "https://huggingfound.test", "Ollama on the machine accepts this site's pages");
   const s = await json("/api/state", ana);
-  assert.deepEqual(s.chatServer, { url: ollama.url, gpuGb: 24, comfortableGb: 21, rented: true, direct: true });
+  assert.deepEqual(s.chatServer, { url: ollama.url, agent: agent.url, gpuGb: 24, comfortableGb: 21, rented: true, direct: true });
+  assert.equal(made.env.HF_ORIGINS, "https://huggingfound.test", "the agent accepts this site's pages too");
+  assert.deepEqual(made.ports, ["11434/http", "7860/http"]);
   assert.equal(s.rental.id, r.id);
   assert.equal(s.runners.ollama.remote, ollama.url);
   const b = await json("/api/state", ben);
@@ -199,7 +205,11 @@ test("a chat model's plan can be for the rented machine or for the visitor's own
   const bens = await json(`/api/model?id=${QWEN}&where=rented`, ben);
   assert.equal(bens.choice.where, "local", "asking for a machine he has not rented gives the local plan");
   const image = await json("/api/model?id=second-state/stable-diffusion-v1-5-GGUF", ana);
-  assert.equal(image.choice, null, "only chat models have the choice");
+  assert.equal(image.choice.where, "rented", "image models have the choice too");
+  assert.equal(image.plan.steps[0].kind, "pull-image-model");
+  assert.equal(image.plan.tryWith.agent, agent.url);
+  const speech = await json("/api/model?id=ggerganov/whisper.cpp", ana);
+  assert.equal(speech.choice, null, "speech models run only on a person's own computer");
 });
 
 test("the download onto the rented machine is the one run the site does, and its log is its owner's", async () => {
@@ -220,6 +230,15 @@ test("the download onto the rented machine is the one run the site does, and its
   assert.equal((await post("/api/remove", { kind: "ollama", name: PULLED }, ana)).status, 200);
   assert.deepEqual(ollama.state.deleted, [PULLED]);
   assert.equal((await post("/api/remove", { kind: "file", repo: "a/b", file: "c" }, ana)).status, 403);
+  // An image model is downloaded onto the machine by its agent, and removed there.
+  const SD = "second-state/stable-diffusion-v1-5-GGUF";
+  const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";
+  const img = await post("/api/run", { kind: "pull-image-model", args: { repo: SD, file: FILE }, where: "rented" }, ana);
+  assert.equal(img.status, 200);
+  assert.match(await (await get(`/api/runs/${(await img.json()).id}`, ana)).text(), /Done\./);
+  assert.deepEqual(agent.state.downloads.map((d) => d.file), [FILE]);
+  assert.equal((await post("/api/remove", { kind: "gpu-file", repo: SD, file: FILE }, ana)).status, 200);
+  assert.equal((await post("/api/run", { kind: "pull-image-model", args: { repo: SD, file: FILE }, where: "rented" }, ben)).status, 403, "no machine, no download");
   assert.equal((await post("/api/chat", { model: PULLED, messages: [] }, ana)).status, 403, "the site never relays a conversation; the page talks to the machine");
 });
 

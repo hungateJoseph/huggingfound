@@ -142,6 +142,24 @@ not survive a restart.
 Image and speech models still run only in HuggingFound on a person's own
 computer: a rented machine runs Ollama, which is chat models.
 
+## Phase 6: The machine image (you, once)
+
+Rented machines run `ghcr.io/hungatejoseph/huggingfound-gpu`, built by the
+GitHub Actions workflow `.github/workflows/gpu-image.yml` from `gpu/`
+whenever that folder changes (the first build compiles stable-diffusion.cpp
+with CUDA and takes up to an hour). RunPod pulls it without credentials
+only if the package is public:
+
+1. On GitHub, open your profile's **Packages**, then `huggingfound-gpu`,
+   then **Package settings**.
+2. Under **Danger Zone**, **Change visibility** to **Public**.
+
+Until then HuggingFound rents the plain `ollama/ollama` image instead, so
+chat models work and image models stay on people's own computers; the
+switch happens by itself once the package is public (each rental checks
+whether the image can be pulled). `HUGGINGFOUND_GPU_IMAGE` in the
+environment points rentals at another build.
+
 ## The Claude check on the site
 
 The site has a "Check an answer" panel where a visitor pastes a model's answer

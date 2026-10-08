@@ -112,7 +112,7 @@ test("the setting wants an address and the GPU's memory", async () => {
   assert.match((await noSize.json()).error, /GPU memory/);
   assert.equal((await post("/api/settings", { OLLAMA_SERVER: `${ollama.url}/`, OLLAMA_SERVER_GB: "48" })).status, 200);
   const s = await json("/api/state");
-  assert.deepEqual(s.chatServer, { url: ollama.url, gpuGb: 48, comfortableGb: 43, rented: false, direct: false });
+  assert.deepEqual(s.chatServer, { url: ollama.url, agent: null, gpuGb: 48, comfortableGb: 43, rented: false, direct: false });
   assert.equal(s.runners.ollama.installed, true, "nothing to install here");
   assert.equal(s.runners.ollama.running, true);
   assert.equal(s.runners.ollama.remote, ollama.url);

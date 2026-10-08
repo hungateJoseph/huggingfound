@@ -9,8 +9,32 @@
 // port through a proxy address made from the pod's id.
 
 export const RUNPOD_BASE = "https://api.runpod.io/v2";
+// The machine image: Ollama for chat models plus stable-diffusion.cpp and
+// the agent for image models (gpu/ in this repository). HUGGINGFOUND_GPU_IMAGE
+// points at another build, such as a fork's.
+export const GPU_IMAGE = process.env.HUGGINGFOUND_GPU_IMAGE || "ghcr.io/hungatejoseph/huggingfound-gpu:latest";
+// The plain Ollama image, used when the full one cannot be pulled (not
+// published yet, or the package not public): chat models only.
 export const OLLAMA_IMAGE = "ollama/ollama";
 export const OLLAMA_PORT = 11434;
+export const AGENT_PORT = 7860;
+
+// Whether RunPod will be able to pull the full image: the registry has to
+// hand out an anonymous token and the manifest. Checked before each rental,
+// so image support appears by itself once the package is public.
+export async function imagePullable(image = GPU_IMAGE, fetchImpl = fetch) {
+  const m = /^ghcr\.io\/([^:]+):([^:]+)$/.exec(image);
+  if (!m) return true;
+  try {
+    const token = await fetchImpl(`https://ghcr.io/token?scope=repository:${m[1]}:pull`, { signal: AbortSignal.timeout(6000) });
+    if (!token.ok) return false;
+    const { token: bearer } = await token.json();
+    const res = await fetchImpl(`https://ghcr.io/v2/${m[1]}/manifests/${m[2]}`, { headers: { Authorization: `Bearer ${bearer}`, Accept: "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" }, signal: AbortSignal.timeout(6000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 // Where Ollama keeps its models inside the container; the rented disk is
 // mounted there so models survive a stop and start.
 const MODELS_PATH = "/root/.ollama";
@@ -43,7 +67,7 @@ export class RentError extends Error {
 // `env()` reads the saved settings and `save(updates)` writes them: the
 // RunPod key, the id of the pod HuggingFound made, and the chat server
 // address, which the rental owns while a pod exists.
-export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, now = Date.now }) {
+export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, imageCheck = (img) => imagePullable(img, fetchImpl), now = Date.now }) {
   let options = { at: 0, key: "", tiers: null };
   let last = null;
   let lastActivity = now();
@@ -60,6 +84,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     return Number.isFinite(n) && n >= 0 ? Math.round(n) : 30;
   };
   const urlFor = (id) => proxyUrl(id);
+  const agentFor = (id) => agentUrl(id);
 
   async function request(method, path, body) {
     if (!key()) throw new RentError("Add a RunPod API key in Settings to rent a GPU.", 400);
@@ -112,7 +137,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     return out;
   }
 
-  function summarize(pod, ready) {
+  function summarize(pod, ready, imagesReady = false) {
     const cost = typeof pod.cost === "number" ? pod.cost : null;
     const uptime = pod.runtime?.uptime ?? (pod.status === "RUNNING" && pod.startedAt ? Math.max(0, (now() - new Date(pod.startedAt).getTime()) / 1000) : 0);
     // The pod's own gpu.memory is the machine's system RAM, not the card's;
@@ -131,6 +156,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       uptimeSeconds: Math.round(uptime),
       spent: cost != null ? Math.round(cost * (uptime / 3600) * 100) / 100 : null,
       url: urlFor(pod.id),
+      agent: hasAgent() ? agentFor(pod.id) : null,
+      images: hasAgent(),
+      imagesReady: Boolean(imagesReady),
       idleMinutes: idleMinutes(),
       idleSeconds: Math.round((now() - lastActivity) / 1000),
       dataCenter: pod.dataCenterId ?? null,
@@ -138,9 +166,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     };
   }
 
-  async function probe(url) {
+  async function probe(url, path = "/api/version") {
     try {
-      const res = await fetchImpl(`${url}/api/version`, { signal: AbortSignal.timeout(4000) });
+      const res = await fetchImpl(`${url}${path}`, { signal: AbortSignal.timeout(4000) });
       return res.ok;
     } catch {
       return false;
@@ -149,31 +177,41 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
   // Clears every trace of the pod from the settings, including the chat
   // server address when it is the pod's.
+  // Whether the machine was made from the full image, with the image agent.
+  const hasAgent = () => env().RUNPOD_POD_AGENT === "1";
+
   function forget(id) {
-    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "" };
+    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "" };
     if (id && env().OLLAMA_SERVER === urlFor(id)) {
       updates.OLLAMA_SERVER = "";
       updates.OLLAMA_SERVER_GB = "";
     }
+    if (id && env().GPU_AGENT === agentFor(id)) updates.GPU_AGENT = "";
     save(updates);
     last = null;
   }
 
+  // While the machine runs, chat models go to its Ollama and image models
+  // to its agent; both settings are the rental's to set and clear.
   function point(id, gb) {
-    save({ OLLAMA_SERVER: urlFor(id), OLLAMA_SERVER_GB: String(gb) });
+    save({ OLLAMA_SERVER: urlFor(id), OLLAMA_SERVER_GB: String(gb), GPU_AGENT: hasAgent() ? agentFor(id) : "" });
   }
 
   function unpoint(id) {
-    if (env().OLLAMA_SERVER === urlFor(id)) save({ OLLAMA_SERVER: "", OLLAMA_SERVER_GB: "" });
+    const updates = {};
+    if (env().OLLAMA_SERVER === urlFor(id)) Object.assign(updates, { OLLAMA_SERVER: "", OLLAMA_SERVER_GB: "" });
+    if (env().GPU_AGENT === agentFor(id)) updates.GPU_AGENT = "";
+    if (Object.keys(updates).length) save(updates);
   }
 
   return {
     configured: () => Boolean(key()),
     rentedUrl: () => (podId() ? urlFor(podId()) : ""),
-    // Whether the chat server in use is the rented machine.
-    owns: (url) => Boolean(url) && Boolean(podId()) && url === urlFor(podId()),
+    rentedAgent: () => (podId() ? agentFor(podId()) : ""),
+    // Whether the chat server (or image agent) in use is the rented machine.
+    owns: (url) => Boolean(url) && Boolean(podId()) && (url === urlFor(podId()) || url === agentFor(podId())),
     tiers,
-    cached: () => (podId() ? last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), idleMinutes: idleMinutes() } : { rented: false }),
+    cached: () => (podId() ? last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null, idleMinutes: idleMinutes() } : { rented: false }),
     touch() {
       lastActivity = now();
     },
@@ -205,8 +243,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         forget(id);
         return { rented: false, gone: true };
       }
-      const ready = pod.status === "RUNNING" && wantProbe ? await probe(urlFor(id)) : last?.ready && pod.status === "RUNNING";
-      last = summarize(pod, ready);
+      const running = pod.status === "RUNNING";
+      const [ready, imagesReady] = running && wantProbe ? await Promise.all([probe(urlFor(id)), hasAgent() ? probe(agentFor(id), "/health") : false]) : [Boolean(last?.ready) && running, Boolean(last?.imagesReady) && running];
+      last = summarize(pod, ready, imagesReady);
       return last;
     },
 
@@ -225,22 +264,29 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       if (!offer?.gpu) throw new RentError(`RunPod lists no ${tier.gb} GB card right now.`, 503);
       if (!offer.available) throw new RentError(`Every ${tier.gb} GB card at RunPod is taken right now. Try another size or try again later.`, 503);
       // Browsers may talk to the machine directly from these origins (the
-      // hosted site's address); Ollama refuses other sites' pages.
+      // hosted site's address, or the app's own); Ollama and the agent
+      // refuse other sites' pages.
       const env = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h" };
-      const allowed = origins.filter((o) => /^https?:\/\/[\w.-]+(?::\d+)?$/.test(String(o)));
-      if (allowed.length) env.OLLAMA_ORIGINS = allowed.join(",");
+      const allowed = origins.filter((o) => /^https?:\/\/[\w.-]+(?::\d+|:\*)?$/.test(String(o)));
+      if (allowed.length) {
+        env.OLLAMA_ORIGINS = allowed.join(",");
+        env.HF_ORIGINS = allowed.join(",");
+      }
+      // The full image when it can be pulled, otherwise plain Ollama: a
+      // machine for chat models only, rather than no machine.
+      const full = await imageCheck(image);
       const pod = await request("POST", "/pods", {
         name: "huggingfound",
-        image: OLLAMA_IMAGE,
+        image: full ? image : OLLAMA_IMAGE,
         gpu: { id: offer.gpu.id, count: 1 },
         cloud: "SECURE",
         disk: CONTAINER_DISK_GB,
-        ports: [`${OLLAMA_PORT}/http`],
+        ports: full ? [`${OLLAMA_PORT}/http`, `${AGENT_PORT}/http`] : [`${OLLAMA_PORT}/http`],
         env,
         mounts: { persistent: { size: disk, path: MODELS_PATH } },
       });
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
-      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(offer.gpu.memory || tier.gb), RUNPOD_POD_DISK_GB: String(disk) });
+      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(offer.gpu.memory || tier.gb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "" });
       point(pod.id, offer.gpu.memory || tier.gb);
       lastActivity = now();
       last = summarize(pod, false);

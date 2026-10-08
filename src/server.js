@@ -10,7 +10,7 @@ import { createHub } from "./hf.js";
 import { chatServerMachine, describeMachine, hostedMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
+import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeAgentModel, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullImageOnAgent, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
@@ -45,7 +45,7 @@ const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDL
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30, runpodBase, runpodProxy, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
   // A hosted copy does not know the visitor's computer; it describes a
   // typical laptop and leaves the running to HuggingFound on their machine.
   const machine = hosted ? hostedMachine() : describeMachine();
@@ -68,7 +68,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // its machine exists and stops the machine when idle.
   const rentals = new Map();
   const rentalFor = (key, settings, save) => {
-    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, base: runpodBase, proxyUrl: runpodProxy }));
+    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}) }));
     return rentals.get(key);
   };
   const localSettings = () => readEnv(envFile);
@@ -88,8 +88,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // machine, or an address typed into Settings on a computer. Fit and
   // speed for them follow whichever machine that is.
   const chatServer = (ctx) => ctx.settings().OLLAMA_SERVER || "";
+  // Image models go to the rented machine's agent, set and cleared with the chat server.
+  const imageAgent = (ctx) => ctx.settings().GPU_AGENT || "";
   const rentedChat = (ctx) => Boolean(ctx.rental?.owns(chatServer(ctx)));
-  const machineFor = (runnerId, ctx) => (runnerId === "ollama" && chatServer(ctx) ? chatServerMachine(chatServer(ctx), ctx.settings().OLLAMA_SERVER_GB) : machine);
+  const remoteFor = (runnerId, ctx) => (runnerId === "ollama" ? chatServer(ctx) : runnerId === "sd" ? imageAgent(ctx) : "");
+  const machineFor = (runnerId, ctx) => (remoteFor(runnerId, ctx) ? chatServerMachine(remoteFor(runnerId, ctx), ctx.settings().OLLAMA_SERVER_GB) : machine);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
   const hub_ = hub;
   const civitai = createCivitai({ fetchImpl, base: civitaiBase });
@@ -301,7 +304,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         imageServer: saved.IMAGE_SERVER || "",
         // `direct` tells the page to talk to the machine itself, so what is
         // said to a model never passes through this server.
-        chatServer: remote ? { url: remote, gpuGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).comfortableGb, rented: rentedChat(ctx), direct: hosted } : null,
+        chatServer: remote ? { url: remote, agent: imageAgent(ctx) || null, gpuGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).comfortableGb, rented: rentedChat(ctx), direct: hosted } : null,
         runpodKey: saved.RUNPOD_API_KEY ? mask(saved.RUNPOD_API_KEY) : "",
         rental: ctx.rental ? ctx.rental.cached() : hosted ? null : { rented: false },
         rentTiers: TIERS,
@@ -551,20 +554,21 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       // the tag rules cannot place still gets a plan.
       const pick = PICKS.find((p) => p.id === id);
       if (pick && !model.gatedBlocked) model.runner = { id: pick.runner, name: RUNNER_NAMES[pick.runner], easy: true };
-      // A chat model runs here or on the rented GPU; `where` is the choice
-      // the page made, and the plan is built for that machine. Without a
-      // choice the rented machine wins when there is one.
-      const remote = chatServer(ctx);
-      const where = model.runner?.id === "ollama" ? (url.searchParams.get("where") || (remote ? "rented" : "local")) : "local";
+      // A chat or image model runs here or on the rented GPU; `where` is
+      // the choice the page made, and the plan is built for that machine.
+      // Without a choice the rented machine wins when there is one.
+      const kind = model.runner?.id;
+      const remote = remoteFor(kind, ctx);
+      const where = ["ollama", "sd"].includes(kind) ? (url.searchParams.get("where") || (remote ? "rented" : "local")) : "local";
       const useRemote = where === "rented" && remote;
       const planMachine = useRemote ? chatServerMachine(remote, ctx.settings().OLLAMA_SERVER_GB) : machine;
-      const detected = useRemote ? withRental(await detect(fetchImpl, remote), ctx) : hosted ? noRunners() : await detect(fetchImpl);
+      const detected = useRemote && kind === "ollama" ? withRental(await detect(fetchImpl, remote), ctx) : useRemote && kind === "sd" ? await withGpu(hosted ? noRunners() : await detect(fetchImpl), remote, ctx) : hosted ? noRunners() : await detect(fetchImpl);
       const plan = model.gatedBlocked
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
         : buildPlan({ model, files: model.files, machine: planMachine, detected, hasToken: !hosted && Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer() });
       // What the page needs to offer the other place: the size of GPU this
       // file wants, and whether a machine is rented already.
-      const choice = model.runner?.id === "ollama" ? { where: useRemote ? "rented" : "local", rented: Boolean(remote), tier: tierFor(plan.file?.gb ?? guessSizeGb({ id, runnerId: "ollama" }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY) } : null;
+      const choice = ["ollama", "sd"].includes(kind) ? { where: useRemote ? "rented" : "local", rented: Boolean(remote), tier: tierFor(plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY) } : null;
       return send(res, 200, { model, plan, choice });
     }
     if (req.method === "GET" && url.pathname === "/api/storage") {
@@ -573,13 +577,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     if (req.method === "POST" && url.pathname === "/api/remove") {
       const body = await json(req);
       // On the hosted site the only thing to remove is a model on the rented machine.
-      if (hosted && (body.kind !== "ollama" || !chatServer(ctx))) return send(res, 403, { error: "Only models on your rented GPU can be removed from here." });
+      if (hosted && !((body.kind === "ollama" && chatServer(ctx)) || (body.kind === "gpu-file" && imageAgent(ctx)))) return send(res, 403, { error: "Only models on your rented GPU can be removed from here." });
       try {
         if (body.kind === "file") removeFile(body.repo, body.file);
         else if (body.kind === "folder") removeFolder(body.repo);
         else if (body.kind === "ollama") await removeOllamaModel(body.name, fetchImpl, chatServer(ctx));
+        else if (body.kind === "gpu-file") await removeAgentModel(body.repo, body.file, fetchImpl, imageAgent(ctx));
         else if (body.kind === "outputs") clearOutputs();
-        else return send(res, 400, { error: "kind must be file, folder, ollama or outputs" });
+        else return send(res, 400, { error: "kind must be file, folder, ollama, gpu-file or outputs" });
       } catch (err) {
         return send(res, 400, { error: err.message });
       }
@@ -595,9 +600,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (req.method === "GET" && action === "") return send(res, 200, await mine.status());
         if (req.method === "POST" && action === "") {
           const body = await json(req);
-          // On the hosted site the browser talks to the machine itself, so
-          // Ollama there must accept requests from this site's address.
-          const origins = hosted ? [siteOrigin || `${String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers.host}`] : [];
+          // The browser talks to the machine itself (chat on the site, pictures
+          // everywhere), so Ollama and the agent there must accept requests
+          // from this page's address: the site's, or the app's own.
+          const here = `${String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers.host}`;
+          const origins = hosted ? [siteOrigin || here] : [...new Set([here, here.replace("127.0.0.1", "localhost"), here.replace("localhost", "127.0.0.1")])];
           return send(res, 200, await mine.rent({ gb: body.gb, diskGb: body.diskGb ?? 50, origins }));
         }
         // A message sent straight from the browser to the machine tells the
@@ -646,10 +653,18 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       try {
         const args = { ...(body.args ?? {}) };
         const remote = chatServer(ctx);
-        // The page says where a chat model's step belongs; a rented machine
-        // is the default while there is one, this computer otherwise.
-        const where = body.where || (remote ? "rented" : "local");
-        if (hosted && !(where === "rented" && remote && body.kind === "pull-model")) return send(res, 403, { error: "On this site the only step that runs is a download onto your rented GPU. Everything else runs in HuggingFound on your own computer." });
+        const agent = imageAgent(ctx);
+        // The page says where a step belongs; a rented machine is the
+        // default while there is one, this computer otherwise.
+        const where = body.where || (remote || agent ? "rented" : "local");
+        if (hosted && !(where === "rented" && ((remote && body.kind === "pull-model") || (agent && body.kind === "pull-image-model")))) return send(res, 403, { error: "On this site the only step that runs is a download onto your rented GPU. Everything else runs in HuggingFound on your own computer." });
+        if (where === "rented" && body.kind === "pull-image-model") {
+          if (!agent) return send(res, 400, { error: "No GPU is rented. Rent one in Settings, or run the model on this computer." });
+          const release = ctx.rental?.hold() ?? (() => {});
+          const run = pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner: ctx.user?.id ?? null });
+          run.finished.then(release);
+          return send(res, 200, { id: run.id });
+        }
         // The remote address comes from settings, never from the page.
         if (body.kind === "generate-image") {
           const imageRemote = env().IMAGE_SERVER;
@@ -766,6 +781,20 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       return send(res, 200, { text: file.endsWith(".txt") ? fs.readFileSync(full, "utf8") : null, url: `/output/${file}` });
     }
     send(res, 404, { error: "Not found" });
+  }
+
+  // What the rented machine's agent holds, for an image model's plan: the
+  // files on its disk and whether it answers.
+  async function withGpu(detected, agent, ctx) {
+    let files = [];
+    let running = false;
+    try {
+      files = await agentModels(agent, fetchImpl);
+      running = true;
+    } catch {
+      // not up yet, or stopped
+    }
+    return { ...detected, gpu: { url: agent, running, files, rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
   }
 
   // When the chat server is the rented machine, the plan can say whether it

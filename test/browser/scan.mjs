@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
 import { MODELS, startStubHub } from "../stub-hub.js";
+import { startStubAgent } from "../stub-agent.js";
 import { startStubOllama } from "../stub-ollama.js";
 import { KEY as RUNPOD_KEY, startStubRunpod } from "../stub-runpod.js";
 
@@ -19,6 +20,7 @@ const stub = await startStubHub();
 // Ollama by a stand-in that answers at the proxy address.
 const runpod = await startStubRunpod();
 const rentedOllama = await startStubOllama();
+const rentedAgent = await startStubAgent();
 const envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
 const scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
 const dead = "http://127.0.0.1:1";
@@ -54,7 +56,7 @@ const reviewer = {
     return { declined: false, model: "claude-opus-5", note: "" };
   },
 };
-const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, idleWatch: false });
+const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, runpodAgent: () => rentedAgent.url, runpodImageCheck: async () => true, idleWatch: false });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -746,7 +748,7 @@ await step("a model can be hidden from search and Browse, listed in Settings, an
 // issued directly, standing in for Google's button; the rented machine is
 // the same stand-in Ollama, which the page must now talk to itself.
 const hostedHome = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-browser-hosted-"));
-const hosted = createServer({ envFile: path.join(hostedHome, ".env"), scanFile: path.join(hostedHome, "scan.json"), voicesFile: path.join(hostedHome, "voices.json"), hubBase: stub.base, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, hosted: true, refreshHours: 0, accountsDir: path.join(hostedHome, "accounts"), accountsSecret: "browser-test-secret-0123456789", googleClientId: "", runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, idleWatch: false });
+const hosted = createServer({ envFile: path.join(hostedHome, ".env"), scanFile: path.join(hostedHome, "scan.json"), voicesFile: path.join(hostedHome, "voices.json"), hubBase: stub.base, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, hosted: true, refreshHours: 0, accountsDir: path.join(hostedHome, "accounts"), accountsSecret: "browser-test-secret-0123456789", googleClientId: "", runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, runpodAgent: () => rentedAgent.url, runpodImageCheck: async () => true, idleWatch: false });
 await new Promise((resolve) => hosted.listen(0, "127.0.0.1", resolve));
 const hostedBase = `http://127.0.0.1:${hosted.address().port}`;
 await hosted.refresh();
@@ -878,6 +880,54 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   await visitor.keyboard.press("Escape");
 });
 
+await step("hosted: an image model is downloaded onto the rented GPU and pictures are made there, straight from the browser", async () => {
+  await visitor.keyboard.press("Escape");
+  await visitor.click("#nav-browse");
+  await visitor.click(".tab[data-tab=images]");
+  await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).click();
+  await visitor.waitForSelector(".where");
+  assert.equal(await visitor.locator(".where-opt.on").innerText(), "On a rented GPU", "the machine is there, so it is the default");
+  assert.match(await visitor.locator("#modal-body .notice.info").first().innerText(), /pictures are made there/);
+  const titles = await visitor.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
+  assert.equal(titles.length, 1);
+  assert.match(titles[0], /Download the model on the rented GPU/);
+  acceptDialogs = true;
+  await visitor.click("#steps .step .go");
+  await visitor.waitForSelector("#steps .step.done", { timeout: 15000 });
+  acceptDialogs = false;
+  assert.ok(rentedAgent.state.downloads.some((d) => /stable-diffusion-v1-5/.test(d.file)));
+  await visitor.waitForSelector("#image-go");
+  assert.match(await visitor.locator("#try .effort-title").innerText(), /Effort/);
+  await visitor.fill("#image-prompt", "a lighthouse at dusk");
+  await visitor.fill("#image-negative", "blurry");
+  await visitor.click("#image-go");
+  await visitor.waitForSelector("#image-out .image-card", { timeout: 20000 });
+  const sent = rentedAgent.state.jobs.at(-1);
+  assert.equal(sent.prompt, "a lighthouse at dusk");
+  assert.equal(sent.negative, "blurry");
+  assert.deepEqual([sent.steps, sent.width, sent.sampler], [20, 512, "euler_a"]);
+  assert.ok(rentedAgent.state.origins.includes(hostedBase), "asked by the page itself");
+  const img = visitor.locator("#image-out .image-card img");
+  assert.match(await img.getAttribute("src"), /^data:image\/png;base64,iVBOR/);
+  assert.match(await visitor.locator("#image-out .tools-row").innerText(), /Made on the rented GPU/);
+  assert.match(await visitor.locator("#image-out a.button").getAttribute("download"), /^image-\d+\.png$/);
+  assert.match(await visitor.locator("#image-log").innerText(), /Done in \d+ s/);
+  // Improve offers the same model on the machine to paint over it, and the edit comes back as a second picture.
+  await visitor.locator("#image-out .improve-go").click();
+  const options = await visitor.locator("#image-out .improve-by option").allTextContents();
+  assert.ok(options.some((o) => /on the rented GPU \(paints over it\)/.test(o)), options.join(" | "));
+  await visitor.locator("#image-out .improve-request").fill("darker sky");
+  await visitor.locator("#image-out .improve-by").selectOption({ index: options.findIndex((o) => /rented GPU/.test(o)) });
+  await visitor.locator("#image-out .improve-run").click();
+  await visitor.waitForFunction(() => document.querySelectorAll("#image-out .image-card").length === 2, null, { timeout: 20000 });
+  const edit = rentedAgent.state.jobs.at(-1);
+  assert.equal(edit.prompt, "a lighthouse at dusk, darker sky");
+  assert.ok(edit.init.startsWith("iVBOR"), "the picture went back to the machine as the starting point");
+  assert.equal(edit.strength, 0.55);
+  assert.match(await visitor.locator("#image-out .image-card .chain").last().innerText(), /edited by stable-diffusion-v1-5-pruned-emaonly-Q8_0\.gguf \(darker sky\)/);
+  await visitor.keyboard.press("Escape");
+});
+
 await step("hosted: deleting the account deletes the machine and signs out", async () => {
   await visitor.keyboard.press("Escape");
   const podId = (await (await visitor.request.get(`${hostedBase}/api/rent`)).json()).id;
@@ -902,6 +952,7 @@ hosted.close();
 stub.server.close();
 runpod.server.close();
 rentedOllama.server.close();
+rentedAgent.server.close();
 console.log(failed ? `\n${failed} step(s) failed` : "\nall browser steps passed");
 process.exit(failed ? 1 : 0);
 
