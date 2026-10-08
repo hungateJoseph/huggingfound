@@ -135,8 +135,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     if (res.status === 401 || res.status === 403) throw new RentError("RunPod refused the API key. Check it in Settings; it needs permission to manage pods.", 401);
     if (res.status === 404) throw new RentError("RunPod has no such machine any more.", 404);
     if (res.status === 429) {
-      throttledUntil = now() + BACKOFF_MS;
-      throw new RentError("RunPod is rate limiting these requests; try again in a minute.", 429);
+      // RunPod says how long to wait; otherwise half a minute. Logged with
+      // its policy, so a server's log shows what tripped it.
+      const retryAfter = Number(res.headers.get("retry-after")) || 0;
+      const reset = Number(res.headers.get("ratelimit-reset") || res.headers.get("x-ratelimit-reset")) || 0;
+      const waitMs = (retryAfter || reset) * 1000 || BACKOFF_MS;
+      throttledUntil = now() + Math.min(waitMs, 3600e3);
+      console.error(`RunPod rate limited ${method} ${path}: retry-after=${res.headers.get("retry-after") ?? "-"} ratelimit=${res.headers.get("ratelimit") ?? res.headers.get("x-ratelimit-remaining") ?? "-"} policy=${res.headers.get("ratelimit-policy") ?? "-"}`);
+      throw new RentError(`RunPod is rate limiting these requests; try again in ${Math.ceil(Math.min(waitMs, 3600e3) / 1000)} seconds.`, 429);
     }
     if (!res.ok) throw new RentError(`RunPod answered HTTP ${res.status}${describe(data) ? `: ${describe(data)}` : ""}.`, 502);
     return data;
