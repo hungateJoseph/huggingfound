@@ -49,6 +49,10 @@ const OPTIONS_TTL = 15 * 60e3;
 // After RunPod throttles the key, nothing is asked of it for this long;
 // callers get what was last known instead of piling on.
 const BACKOFF_MS = 30e3;
+// What this app will ever ask of RunPod for one key, well under RunPod's
+// own limits (180 a minute, 7,200 an hour, 86,400 a day): a page bug can
+// make the app busy, but it cannot spend a person's key.
+const BUDGET = { minute: 30, hour: 600 };
 
 // The sizes offered, by GPU memory. `files` is the largest model file each
 // one runs comfortably: a 4-bit model wants its own size plus room for the
@@ -92,6 +96,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   let lastAt = 0;
   let inFlight = null;
   let throttledUntil = 0;
+  let throttledKey = "";
+  const spent = [];
   let lastActivity = now();
   let holds = 0;
   let watching = null;
@@ -110,9 +116,19 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   const urlFor = (id) => proxyUrl(id);
   const agentFor = (id) => agentUrl(id);
 
+  // Whether another call to RunPod is allowed right now, within the budget.
+  function withinBudget() {
+    const t = now();
+    while (spent.length && spent[0] < t - 3600e3) spent.shift();
+    return spent.filter((at) => at > t - 60e3).length < BUDGET.minute && spent.length < BUDGET.hour;
+  }
+
   async function request(method, path, body) {
     if (!key()) throw new RentError("Add a RunPod API key in Settings to rent a GPU.", 400);
-    if (now() < throttledUntil) throw new RentError(`RunPod is rate limiting this key; it accepts requests again in ${waitText(throttledUntil - now())}. A new key at RunPod works at once.`, 429);
+    // A back-off belongs to the key that was throttled; a fresh key starts clean.
+    if (throttledKey === key() && now() < throttledUntil) throw new RentError(`RunPod is rate limiting this key; it accepts requests again in ${waitText(throttledUntil - now())}. A new key at RunPod works at once.`, 429);
+    if (!withinBudget()) throw new RentError("HuggingFound has asked RunPod enough for the moment; it asks again in a minute.", 429);
+    spent.push(now());
     let res;
     try {
       res = await fetchImpl(`${base}${path}`, {
@@ -142,6 +158,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // A spent daily allowance means hours; the wait is honoured up to a day.
       const waitMs = Math.min((retryAfter || reset) * 1000 || BACKOFF_MS, 86400e3);
       throttledUntil = now() + waitMs;
+      throttledKey = key();
       console.error(`RunPod rate limited ${method} ${path}: retry-after=${res.headers.get("retry-after") ?? "-"} ratelimit=${res.headers.get("ratelimit") ?? res.headers.get("x-ratelimit-remaining") ?? "-"} policy=${res.headers.get("ratelimit-policy") ?? "-"}`);
       throw new RentError(`RunPod is rate limiting this key; it accepts requests again in ${waitText(waitMs)}. A new key at RunPod works at once.`, 429);
     }

@@ -35,7 +35,8 @@ export function startStubRunpod() {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(data === undefined ? "" : JSON.stringify(data));
       };
-      if (req.headers.authorization !== `Bearer ${KEY}` || state.badKey) return reply(401, { error: "Unauthorized" });
+      const bearer = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
+      if ((bearer !== KEY && !(state.extraKeys ?? []).includes(bearer)) || state.badKey) return reply(401, { error: "Unauthorized" });
       if (state.rateLimited) return reply(429, { error: "Too Many Requests" });
       const data = body ? JSON.parse(body) : {};
       if (req.method === "GET" && url.pathname === "/catalog/gpus") return reply(200, { gpus: GPUS });

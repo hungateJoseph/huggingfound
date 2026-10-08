@@ -376,8 +376,38 @@ test("a page asking several times at once costs one RunPod call, and a throttled
   assert.equal(kept.rented, true, "the machine is still shown");
   assert.match(kept.error, /rate limiting/);
   assert.equal(runpod.state.calls.length, calls + 1, "nothing else reached RunPod during the back-off");
+  // A fresh key is not held to the old key's back-off.
+  writeEnv(file, { RUNPOD_API_KEY: `${KEY}` });
   runpod.state.rateLimited = false;
+  writeEnv(file, { RUNPOD_API_KEY: "rpa_anotherkey_0123456789abcdef" });
+  runpod.state.extraKeys = ["rpa_anotherkey_0123456789abcdef"];
+  const fresh = await rental.status({ probe: false });
+  assert.equal(fresh.rented, true);
+  assert.equal(fresh.error, undefined, "the new key is asked straight away");
   clock += 31e3;
+  await rental.remove();
+});
+
+test("one rental can never spend a key: calls beyond the budget are answered from what was last known", async () => {
+  let clock = 1_800_000_000_000;
+  const file = path.join(home, "budget.env");
+  writeEnv(file, { RUNPOD_API_KEY: KEY });
+  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, agentUrl: () => agent.url, imageCheck: async () => true, statusTtl: 0, now: () => clock });
+  await rental.rent({ gb: 24, diskGb: 50 });
+  const before = runpod.state.calls.length;
+  // A runaway page: a hundred status requests in a minute.
+  let kept = 0;
+  for (let i = 0; i < 100; i++) {
+    const r = await rental.status({ probe: false });
+    if (r.error) kept++;
+    clock += 500;
+  }
+  const made = runpod.state.calls.length - before;
+  assert.ok(made <= 30, `at most thirty calls reached RunPod, not ${made}`);
+  assert.ok(kept >= 60, "the rest were answered from the last known status");
+  // The budget refills with time.
+  clock += 61e3;
+  assert.equal((await rental.status({ probe: false })).error, undefined);
   await rental.remove();
 });
 
