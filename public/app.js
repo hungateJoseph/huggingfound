@@ -622,8 +622,14 @@ function renderModel(model, plan, choice = null) {
       state.rentAsk = model.id;
       parts.push(rentAskHtml(choice, plan));
     }
+    // A machine from before this feature is replaced from here.
+    if (plan.staleMachine) parts.push(`<div class="actions"><button class="primary" id="replace-from-model">Replace the machine</button></div>`);
     body.innerHTML = parts.join("");
     body.querySelector("#open-settings-from-model")?.addEventListener("click", () => ($("#settings").hidden = false));
+    body.querySelector("#replace-from-model")?.addEventListener("click", () => {
+      state.rentFrom = model.id;
+      replaceMachine();
+    });
     if (plan.needsGpu && choice) wireRentAsk(body, model, choice);
     return;
   }
@@ -2459,11 +2465,13 @@ function renderRental() {
     const time = running && r.uptimeSeconds ? `Running for ${minutesText(r.uptimeSeconds)}${r.spent != null ? `, about ${money(r.spent)} this time` : ""}. ` : "";
     const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for a small charge a day; Start brings it back in a minute or two, Delete removes it and the models.` : "";
     const trouble = r.imageProblem ? ` The image server on it cannot start (${r.imageProblem}); chat still works, and a machine rented after the image is fixed will make pictures.` : "";
+    const older = r.agentVersion != null && r.agentCurrent != null && r.agentVersion < r.agentCurrent;
     const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a ${state.hosted ? "download" : "chat or download"}${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.${state.hosted ? " Chats go straight from your browser to the machine, so the site cannot see them; each message you send counts as use." : ""}` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
     panel.innerHTML = `<div class="rent-card">
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
+      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
@@ -2482,6 +2490,7 @@ function renderRental() {
     loadRegistries(panel);
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-replace")?.addEventListener("click", replaceMachine);
+    panel.querySelector("#rent-replace-old")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
     panel.querySelector("#rent-save-idle").addEventListener("click", async () => {

@@ -30,7 +30,7 @@ export function startStubAgent() {
       }
       const data = body ? JSON.parse(body) : {};
       res.setHeader("Content-Type", "application/json");
-      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: "1", loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
+      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 4), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
       if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files, addons: state.addons }));
       if (req.url === "/models" && req.method === "DELETE" && data.addon) {
         const before = state.addons.length;

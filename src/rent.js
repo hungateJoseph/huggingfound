@@ -3,6 +3,8 @@
 // points the chat server at it, stops it when it has sat idle, and deletes
 // it on request. The user pays RunPod while it runs; nothing is billed
 // through HuggingFound.
+
+import { AGENT_VERSION } from "./plans.js";
 //
 // Only RunPod is wired in. Its API (api.runpod.io/v2) creates a pod from a
 // container image, reports its status and hourly cost, and exposes an HTTP
@@ -223,6 +225,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       imageModels: counts.images ?? 0,
       // Set when the agent reports its image server cannot start on this machine.
       imageProblem: counts.imageProblem ?? "",
+      agentVersion: counts.agentVersion ?? null,
+      agentCurrent: AGENT_VERSION,
       idleMinutes: idleMinutes(),
       idleSeconds: Math.round((now() - lastActivity) / 1000),
       dataCenter: pod.dataCenterId ?? null,
@@ -329,12 +333,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const running = pod.status === "RUNNING";
       let ready = Boolean(last?.ready) && running;
       let imagesReady = Boolean(last?.imagesReady) && running;
-      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "" };
+      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "", agentVersion: last?.agentVersion ?? null };
       if (running && wantProbe) {
         const [tags, health] = await Promise.all([probe(urlFor(id)), hasAgent() ? probe(agentFor(id), "/health") : null]);
         ready = Boolean(tags);
         imagesReady = Boolean(health?.ok);
-        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "" };
+        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "", agentVersion: health ? Number(health.version) || 1 : null };
       }
       last = summarize(pod, ready, imagesReady, counts);
       lastAt = now();

@@ -167,6 +167,8 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       // A folder-layout model: the machine fetches the parts and merges
       // them into one checkpoint, as this computer would.
       if (file.folder) {
+        const stale = staleMachine(model, detected.gpu, "pull-image-folder", "folder-layout models could be merged there");
+        if (stale) return stale;
         const done = detected.gpu.files.includes(`${model.id}/${mergedName}`);
         steps.push({
           kind: "pull-image-folder",
@@ -239,6 +241,24 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   return { runnable: false, reason: "Unsupported runner.", steps: [] };
 }
 
+// The agent on a rented machine grows with the app; a machine rented
+// before a feature runs an older image. Each feature names the version it
+// needs, and a plan for an older machine says to replace it.
+export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4 };
+export const AGENT_VERSION = 4;
+
+function staleMachine(model, gpu, kind, what) {
+  const have = gpu.version ?? null;
+  if (!gpu.running || have == null || have >= AGENT_NEEDS[kind]) return null;
+  return {
+    runnable: false,
+    staleMachine: true,
+    reason: `Your rented machine runs an older HuggingFound image (version ${have}) from before ${what}. Replace the machine and the new one comes up with the current image; models downloaded onto the old one are fetched again.`,
+    steps: [],
+    link: model.url,
+  };
+}
+
 // An add-on (an IP-Adapter, a LoRA) is applied on the rented GPU to a base
 // model that is already there: the machine fetches the add-on's files and
 // its Python side loads the base with the add-on on top. An IP-Adapter
@@ -281,6 +301,8 @@ function addonPlan({ model, files, detected }) {
       link: model.url,
     };
   }
+  const stale = staleMachine(model, detected.gpu, "pull-addon", "add-ons could be applied there");
+  if (stale) return stale;
   const download = [...variants.map((v) => v.file), ...variants.map((v) => v.lora).filter(Boolean), ...encoders];
   const have = new Set(detected.gpu.addons ?? []);
   const done = download.every((f) => have.has(`${model.id}/${f}`));
@@ -354,6 +376,8 @@ function diffusersPlan({ model, files, machine, detected }) {
   if (model.gated) {
     return { runnable: false, gated: true, reason: `${model.name} is gated, and the rented GPU fetches files without your Hugging Face token. Pick an open model, or the same family from a maker who publishes it openly.`, steps: [], link: model.url };
   }
+  const stale = staleMachine(model, detected.gpu, "pull-image-repo", "this family could run there");
+  if (stale) return stale;
   const fit = fitFor(repo.gb, machine);
   const done = detected.gpu.files.includes(`${model.id}/model_index.json`);
   const fast = /turbo|lightning|schnell|distill|hyper|rapid|fast|step/i.test(model.id);

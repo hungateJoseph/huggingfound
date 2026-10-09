@@ -860,6 +860,17 @@ export async function removeAgentAddon(repo, file, fetchImpl = fetch, agent = ""
   if (!res.ok) throw new Error(`The rented GPU replied HTTP ${res.status}`);
 }
 
+// What the agent on the machine reports about itself, or null when it does not answer.
+export async function agentHealth(agent, fetchImpl = fetch) {
+  try {
+    const res = await fetchImpl(`${agent}/health`, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 // Every add-on file on the agent, as "owner/repo/path".
 export async function agentAddons(agent, fetchImpl = fetch) {
   const res = await fetchImpl(`${agent}/models`, { signal: AbortSignal.timeout(4000) });
@@ -888,6 +899,7 @@ function agentDownload(title, route, body, fetchImpl, agent, owner) {
     if (said) emit("The machine is up.");
     const stop = new AbortController();
     const res = await fetchImpl(`${agent}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: stop.signal });
+    if (res.status === 404 && route !== "/download") throw new Error("the rented machine runs an older HuggingFound image that cannot do this; replace the machine (Settings, Delete machine and models, then Rent it) and the new one has the current image");
     if (!res.ok) throw new Error(`the rented GPU answered HTTP ${res.status}`);
     const reader = res.body.getReader();
     const dec = new TextDecoder();

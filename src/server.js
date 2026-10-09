@@ -15,7 +15,8 @@ import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, clearOutputs, describeIm
   pullImageRepoOnAgent,
   pullAddonOnAgent,
   removeAgentAddon,
-  agentAddons, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
+  agentAddons,
+  agentHealth, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
@@ -854,13 +855,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     let files = [];
     let addons = [];
     let running = false;
+    let health = null;
     try {
-      [files, addons] = await Promise.all([agentModels(agent, fetchImpl), agentAddons(agent, fetchImpl)]);
+      [files, addons, health] = await Promise.all([agentModels(agent, fetchImpl), agentAddons(agent, fetchImpl), agentHealth(agent, fetchImpl)]);
       running = true;
     } catch {
       // not up yet, or stopped
     }
-    return { ...detected, gpu: { url: agent, running, files, addons, rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
+    return { ...detected, gpu: { url: agent, running, files, addons, version: Number(health?.version) || (running ? 1 : null), rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
   }
 
   // When the chat server is the rented machine, the plan can say whether it

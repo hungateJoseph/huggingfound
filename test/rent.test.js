@@ -277,6 +277,20 @@ test("a diffusers-family model is fetched as a folder on the rented GPU, and a v
   assert.equal((await post("/api/remove", { kind: "gpu-file", repo: QWEN_IMAGE, file: "model_index.json" })).status, 200);
 });
 
+test("a machine from before a feature is told apart by its agent's version, and the plan says to replace it", async () => {
+  agent.state.version = 1;
+  const addon = (await json("/api/model?id=h94/IP-Adapter-FaceID")).plan;
+  assert.equal(addon.runnable, false);
+  assert.equal(addon.staleMachine, true);
+  assert.match(addon.reason, /older HuggingFound image \(version 1\) from before add-ons could be applied there/);
+  assert.equal((await json("/api/model?id=John6666/pony-realism-v23-sdxl")).plan.staleMachine, true);
+  assert.equal((await json("/api/model?id=Qwen/Qwen-Image")).plan.staleMachine, true);
+  assert.equal((await json("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).plan.runnable, true, "a single-file model still runs on the old machine");
+  assert.equal((await json("/api/rent")).agentCurrent, 4, "the status says which version is current");
+  agent.state.version = 4;
+  assert.equal((await json("/api/model?id=h94/IP-Adapter-FaceID")).plan.runnable, true);
+});
+
 test("an add-on is downloaded onto the rented GPU and applied there to a base model", async () => {
   const ADDON = "h94/IP-Adapter-FaceID";
   const { plan, choice } = await json(`/api/model?id=${ADDON}`);
