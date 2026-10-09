@@ -74,8 +74,10 @@ function runnerFor(model, cats, gguf) {
     const sdPipeline = rawTags.includes("stable-diffusion-xl") || rawTags.includes("stable-diffusion") || rawTags.some((t) => /^diffusers:stablediffusion(xl)?(img2img|inpaint)?pipeline$/.test(t));
     const single = !parts && (family || sdPipeline || model.library_name === "diffusion-single-file" || rawTags.includes("diffusion-single-file"));
     if (single) return { id: "sd", name: "stable-diffusion.cpp", easy: true };
-    if (gguf || parts) return { id: "sd-parts", name: "stable-diffusion.cpp with separate encoder and VAE files", easy: false };
-    return { id: "python-diffusers", name: "Python + diffusers", easy: false };
+    // Everything else in the image category (FLUX, Qwen-Image, Wan and
+    // the video families, any diffusers folder of an unknown family) is
+    // run by the diffusers library on a rented GPU; nothing here loads it.
+    return { id: "diffusers", name: "the diffusers library on a rented GPU", easy: false, gpu: true };
   }
   if (cats.includes("speech")) {
     // whisper.cpp loads ggml files; the Hub has them under ggerganov and in

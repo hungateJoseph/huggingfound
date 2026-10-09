@@ -833,6 +833,14 @@ export function pullImageFolderOnAgent(repo, files, into, fetchImpl = fetch, age
   return agentDownload(`Downloading ${parts.length} files of ${repo} on the rented GPU and merging them`, "/download-folder", { repo, files: parts, into, token: token || undefined }, fetchImpl, agent, owner);
 }
 
+// A model only the diffusers library loads: the agent fetches every file
+// it needs into the repository's folder.
+export function pullImageRepoOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
+  const list = Array.isArray(files) ? files.map((f) => String(typeof f === "string" ? f : (f?.from ?? ""))) : [];
+  if (!REPO_RE.test(String(repo)) || !list.length || list.length > 120 || !list.every((f) => SUBPATH_RE.test(f))) throw new Error("Bad model arguments");
+  return agentDownload(`Downloading ${list.length} files of ${repo} on the rented GPU`, "/download-repo", { repo, files: list, token: token || undefined }, fetchImpl, agent, owner);
+}
+
 function agentDownload(title, route, body, fetchImpl, agent, owner) {
   if (!agent) throw new Error("No rented GPU");
   return startCustomRun(title, async (emit, cancelled) => {

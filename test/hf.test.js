@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { chooseFile, createHub, diffusersFolder, quantTag, summarize } from "../src/hf.js";
+import { chooseFile, createHub, diffusersFolder, quantTag, repoFiles, summarize } from "../src/hf.js";
 import { FILES, MODELS, startStubHub } from "./stub-hub.js";
 
 let stub;
@@ -140,4 +140,18 @@ test("small add-on files at the top level are never taken for the checkpoint", (
   assert.equal(chooseFile(addOnsOnly, "sd").folder, true, "falls through to the diffusers folder");
   assert.equal(chooseFile([{ name: "tiny.safetensors", gb: 0.1 }], "sd"), null);
   assert.equal(chooseFile([{ name: "sd-lora-Q4_0.gguf", gb: 0.05 }, { name: "model-Q8_0.gguf", gb: 1.7 }], "sd").name, "model-Q8_0.gguf");
+});
+
+test("the files a diffusers folder needs: index, configs, one copy of each weight, no pictures or cards", () => {
+  const files = [
+    { name: ".gitattributes", gb: 0 }, { name: "README.md", gb: 0 }, { name: "model_index.json", gb: 0 }, { name: "images/sample.png", gb: 0.01 },
+    { name: "scheduler/scheduler_config.json", gb: 0 }, { name: "tokenizer/tokenizer.json", gb: 0.01 },
+    { name: "unet/config.json", gb: 0 }, { name: "unet/diffusion_pytorch_model.safetensors", gb: 10 }, { name: "unet/diffusion_pytorch_model.fp16.safetensors", gb: 5 }, { name: "unet/diffusion_pytorch_model.bin", gb: 10 },
+    { name: "vae/diffusion_pytorch_model.bin", gb: 0.3 }, { name: "sd_xl_base_1.0.safetensors", gb: 6.9 },
+  ];
+  const repo = repoFiles(files);
+  assert.deepEqual(repo.files.map((f) => f.from), ["model_index.json", "scheduler/scheduler_config.json", "tokenizer/tokenizer.json", "unet/config.json", "unet/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"], "the half-precision variant over the full one, safetensors over .bin, a .bin alone kept, no single-file checkpoint, no samples");
+  assert.equal(repo.files.find((f) => /fp16/.test(f.from)).to, "unet/diffusion_pytorch_model.safetensors");
+  assert.equal(repo.gb.toFixed(2), "5.31");
+  assert.equal(repoFiles([{ name: "flux1-dev-Q8_0.gguf", gb: 12 }]), null, "no index, no folder");
 });

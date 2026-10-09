@@ -42,9 +42,11 @@ done. You pay RunPod; HuggingFound charges nothing and never sees your card.
    rented GPU, and choosing the GPU without one asks whether you have a
    RunPod key, takes it, and opens this section with the right size chosen.
 
-The machine runs HuggingFound's own image (built from `gpu/` in this
-repository): Ollama for chat models, and stable-diffusion.cpp with a small
-agent for image models. Speech models stay on your computer.
+The machine runs HuggingFound's own image (built with `gpu/Dockerfile` in this
+repository): Ollama for chat models, stable-diffusion.cpp for single-file
+image models, and a Python worker with the diffusers library for the
+families only it loads (FLUX, Qwen-Image, Wan and other video models),
+all behind a small agent. Speech models stay on your computer.
 
 The machine takes two to four minutes to start. Meanwhile:
 

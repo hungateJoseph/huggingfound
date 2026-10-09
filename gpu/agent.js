@@ -13,13 +13,23 @@
 //   HF_MODELS_DIR   where model files live (/root/.ollama/huggingfound/models,
 //                   on the persistent disk next to Ollama's models)
 //   SD_SERVER       path to sd-server; SD_PORT the local port it listens on
+//   HF_PYTHON       the Python that has torch and diffusers; HF_WORKER the
+//                   worker script it runs (worker.py next to this file)
 //   HF_TOKEN        a Hugging Face token for gated downloads (optional)
+//
+// Two engines: stable-diffusion.cpp for single-file checkpoints (fast,
+// small), and the diffusers library through worker.py for the families
+// that only it loads (FLUX, Qwen-Image, Wan, Hunyuan and the rest of the
+// folder layouts), which also make video. A folder model is handled by
+// its model_index.json, so the rest of the app can treat it as a file.
 
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 import { convertDiffusersFolder } from "./convert.js";
 
 const PORT = Number(process.env.HF_AGENT_PORT || 7860);
@@ -29,8 +39,11 @@ const SD_SERVER = process.env.SD_SERVER || "/opt/huggingfound/bin/sd-server";
 const SD_PORT = Number(process.env.SD_PORT || 7861);
 const SD_URL = `http://127.0.0.1:${SD_PORT}`;
 const HUB = process.env.HF_HUB || "https://huggingface.co";
+const PYTHON = process.env.HF_PYTHON || "/opt/huggingfound/py/bin/python3";
+const WORKER = process.env.HF_WORKER || path.join(path.dirname(fileURLToPath(import.meta.url)), "worker.py");
+const INDEX = "model_index.json";
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
-const VERSION = "2";
+const VERSION = "3";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -63,6 +76,137 @@ function checkServer() {
 }
 checkServer();
 
+// Whether the Python side (torch, diffusers, the GPU) works, checked once
+// at startup the same way.
+const pyCheck = { ok: null, problem: "", gpu: null, vramGb: null };
+function checkWorker() {
+  const child = spawn(PYTHON, [WORKER, "--check"], { stdio: ["ignore", "pipe", "pipe"] });
+  let out = "";
+  let err = "";
+  child.stdout.on("data", (c) => (out += c));
+  child.stderr.on("data", (c) => (err += c));
+  child.on("error", (e) => {
+    pyCheck.ok = false;
+    pyCheck.problem = e.message;
+  });
+  child.on("exit", (code) => {
+    if (pyCheck.ok === false) return;
+    try {
+      const info = JSON.parse(out.trim().split("\n").pop());
+      pyCheck.ok = Boolean(info.ok && info.cuda !== false);
+      pyCheck.problem = info.ok ? (info.cuda === false ? "torch sees no GPU" : "") : info.error;
+      pyCheck.gpu = info.gpu ?? null;
+      pyCheck.vramGb = info.vramGb ?? null;
+    } catch {
+      pyCheck.ok = false;
+      pyCheck.problem = (err.trim().split("\n").pop() || `exit code ${code}`).slice(0, 300);
+    }
+  });
+}
+checkWorker();
+
+// ---- the Python worker --------------------------------------------------------
+// One long-lived process; requests go one at a time, each a line in and a
+// line out, with progress lines in between.
+
+const py = { proc: null, dir: null, kind: null, pending: null, chain: Promise.resolve(), tail: "" };
+
+function stopWorker() {
+  if (py.proc) {
+    try {
+      py.proc.kill();
+    } catch {
+      // already gone
+    }
+  }
+  py.proc = null;
+  py.dir = null;
+  py.kind = null;
+}
+
+function startWorker() {
+  if (py.proc) return;
+  const proc = spawn(PYTHON, [WORKER], { stdio: ["pipe", "pipe", "pipe"] });
+  py.proc = proc;
+  py.tail = "";
+  proc.stderr.on("data", (c) => (py.tail = (py.tail + c.toString()).slice(-4000)));
+  const rl = readline.createInterface({ input: proc.stdout });
+  rl.on("line", (line) => {
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (!py.pending) return;
+    if (msg.progress != null && msg.ok === undefined) {
+      py.pending.onProgress?.(msg.progress);
+      return;
+    }
+    const { resolve } = py.pending;
+    py.pending = null;
+    resolve(msg);
+  });
+  const gone = () => {
+    if (py.proc !== proc) return;
+    const pending = py.pending;
+    py.pending = null;
+    stopWorker();
+    pending?.resolve({ ok: false, error: `the Python worker stopped: ${py.tail.trim().split("\n").pop() || "no output"}` });
+  };
+  proc.on("exit", gone);
+  proc.on("error", (err) => {
+    py.tail += `\n${err.message}`;
+    gone();
+  });
+}
+
+// Sends one request and waits for its answer; requests queue behind each other.
+function askWorker(req, onProgress = null, timeoutMs = 60 * 60e3) {
+  const run = () => new Promise((resolve) => {
+    startWorker();
+    if (!py.proc) return resolve({ ok: false, error: "the Python worker could not start" });
+    let settled = false;
+    const finish = (msg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (py.pending?.resolve === finish) py.pending = null;
+      resolve(msg);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      stopWorker();
+      finish({ ok: false, error: "the Python worker did not answer in time" });
+    }, timeoutMs);
+    py.pending = { resolve: finish, onProgress };
+    py.proc.stdin.write(`${JSON.stringify(req)}\n`, (err) => {
+      if (err) finish({ ok: false, error: err.message });
+    });
+  });
+  const next = py.chain.then(run, run);
+  py.chain = next.catch(() => {});
+  return next;
+}
+
+// Loads a folder model into the worker, replacing whatever either engine
+// had: the two cannot share the card.
+async function ensureWorkerLoaded(dir) {
+  if (py.proc && py.dir === dir) return;
+  stopServer();
+  const answer = await askWorker({ op: "load", dir }, null, 30 * 60e3);
+  if (!answer.ok) throw new Error(answer.error || "the model did not load");
+  py.dir = dir;
+  py.kind = answer.kind ?? "image";
+}
+
+async function unloadWorker() {
+  if (!py.proc) return;
+  if (py.dir) await askWorker({ op: "unload" });
+  py.dir = null;
+  py.kind = null;
+}
+
 // ---- the image server --------------------------------------------------------
 
 const sd = { proc: null, file: null, ready: false, loading: null, errors: [], tail: "" };
@@ -87,6 +231,8 @@ function ensureLoaded(file) {
   if (sd.proc && sd.file === file && sd.ready) return Promise.resolve();
   if (sd.loading && sd.file === file) return sd.loading;
   stopServer();
+  // The Python side gives the card back before sd-server takes it.
+  const freed = unloadWorker().catch(() => {});
   sd.file = file;
   sd.errors = [];
   sd.tail = "";
@@ -107,6 +253,7 @@ function ensureLoaded(file) {
     if (sd.proc === proc) stopServer();
   });
   sd.loading = (async () => {
+    await freed;
     for (let i = 0; i < 300; i++) {
       if (sd.proc !== proc) throw new Error(`the image server stopped: ${lastLine()}`);
       try {
@@ -137,12 +284,29 @@ const jobs = new Map();
 
 function startJob(input) {
   const id = crypto.randomBytes(8).toString("hex");
-  const job = { id, status: "loading", createdAt: Date.now(), image: null, error: null, note: "" };
+  const job = { id, status: "loading", createdAt: Date.now(), image: null, video: null, kind: "image", progress: null, error: null, note: "" };
   jobs.set(id, job);
   (async () => {
     try {
       const file = modelFile(input.repo, input.file);
       if (!fs.existsSync(file)) throw new Error("that model is not on this machine yet");
+      if (input.file === INDEX) {
+        await ensureWorkerLoaded(path.dirname(file));
+        job.kind = py.kind;
+        job.status = "generating";
+        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, strength: input.init ? input.strength : undefined };
+        const answer = await askWorker(req, (p) => (job.progress = p));
+        if (!answer.ok) throw new Error(answer.error || "the worker made nothing");
+        if (answer.video) {
+          job.video = answer.video;
+          job.kind = "video";
+        } else if (answer.image) {
+          job.image = answer.image;
+          job.kind = "image";
+        } else throw new Error("the worker returned no picture");
+        job.status = "completed";
+        return;
+      }
       await ensureLoaded(file);
       job.status = "queued";
       const body = {
@@ -213,6 +377,11 @@ function listModels() {
     for (const repo of fs.readdirSync(ownerDir)) {
       const repoDir = path.join(ownerDir, repo);
       if (!fs.statSync(repoDir).isDirectory()) continue;
+      // A diffusers folder is one model, listed by its index file.
+      if (fs.existsSync(path.join(repoDir, INDEX))) {
+        out.push({ repo: `${owner}/${repo}`, file: INDEX, gb: folderSize(repoDir), engine: "diffusers" });
+        continue;
+      }
       for (const file of fs.readdirSync(repoDir)) {
         if (file.endsWith(".part")) continue;
         const full = path.join(repoDir, file);
@@ -223,6 +392,16 @@ function listModels() {
     }
   }
   return out;
+}
+
+function folderSize(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += folderSize(full);
+    else if (entry.isFile() && !entry.name.endsWith(".part")) total += fs.statSync(full).size / 1024 ** 3;
+  }
+  return total;
 }
 
 const downloading = new Set();
@@ -270,6 +449,25 @@ async function download(repo, file, token, write, saveAs = file) {
   } finally {
     downloading.delete(key);
   }
+}
+
+// A model only the diffusers library loads: every file it needs is fetched
+// into the repository's folder, kept as published. Files already there are
+// skipped, so an interrupted download picks up where it stopped.
+async function downloadRepo(repo, files, token, write) {
+  const have = files.filter((f) => fs.existsSync(modelFile(repo, f, true)));
+  if (have.length === files.length) {
+    write({ status: "already here" });
+    write({ status: "success" });
+    return;
+  }
+  for (const [i, f] of files.entries()) {
+    if (fs.existsSync(modelFile(repo, f, true))) continue;
+    write({ status: `file ${i + 1} of ${files.length}: ${f}` });
+    await download(repo, f, token, (line) => (line.status === "success" ? null : write(line)));
+  }
+  if (!fs.existsSync(modelFile(repo, INDEX))) throw new Error("the download has no model_index.json, so the model cannot be loaded");
+  write({ status: "success" });
 }
 
 // A model published in the diffusers folder layout: its parts are fetched
@@ -362,7 +560,9 @@ const server = http.createServer(async (req, res) => {
     }
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/health") {
-      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, loaded: sd.file ? path.relative(MODELS_DIR, sd.file).split(path.sep).join("/") : null, ready: sd.ready, loading: Boolean(sd.loading), models: listModels().length });
+      const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
+      const loaded = sd.file ? rel(sd.file) : py.dir ? `${rel(py.dir)}/${INDEX}` : null;
+      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels() });
     if (req.method === "POST" && url.pathname === "/download") {
@@ -374,6 +574,20 @@ const server = http.createServer(async (req, res) => {
       const write = (line) => res.write(`${JSON.stringify(line)}\n`);
       try {
         await download(repo, file, typeof body.token === "string" ? body.token : "", write);
+      } catch (err) {
+        write({ error: err.message });
+      }
+      return res.end();
+    }
+    if (req.method === "POST" && url.pathname === "/download-repo") {
+      const body = await readJson(req, 256 * 1024);
+      const repo = String(body.repo ?? "");
+      const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
+      if (!REPO_RE.test(repo) || files.length === 0 || files.length > 120 || !files.every((f) => SUBPATH_RE.test(f)) || !files.includes(INDEX)) return send(res, 400, { error: "Bad model name" });
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      const write = (line) => res.write(`${JSON.stringify(line)}\n`);
+      try {
+        await downloadRepo(repo, files, typeof body.token === "string" ? body.token : "", write);
       } catch (err) {
         write({ error: err.message });
       }
@@ -405,7 +619,11 @@ const server = http.createServer(async (req, res) => {
       }
       if (sd.file === file) stopServer();
       if (!fs.existsSync(file)) return send(res, 404, { error: "Not on this machine" });
-      fs.rmSync(file, { force: true });
+      if (path.basename(file) === INDEX) {
+        // The index stands for the whole folder.
+        if (py.dir === path.dirname(file)) await unloadWorker().catch(() => {});
+        fs.rmSync(path.dirname(file), { recursive: true, force: true });
+      } else fs.rmSync(file, { force: true });
       let dir = path.dirname(file);
       while (dir.startsWith(MODELS_DIR) && dir !== MODELS_DIR && fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
         fs.rmdirSync(dir);
@@ -420,8 +638,13 @@ const server = http.createServer(async (req, res) => {
       const prompt = String(body.prompt ?? "").slice(0, 2000);
       if (!REPO_RE.test(repo) || !FILE_RE.test(file)) return send(res, 400, { error: "Bad model name" });
       if (!prompt.trim()) return send(res, 400, { error: "Say what the picture should show" });
-      const size = (n, fallback) => (Number.isInteger(n) && n >= 256 && n <= 2048 && n % 64 === 0 ? n : fallback);
-      const steps = Number.isInteger(body.steps) && body.steps >= 1 && body.steps <= 150 ? body.steps : 20;
+      const diffusers = file === INDEX;
+      // sd-server wants multiples of 64; the diffusers families take 16.
+      const grain = diffusers ? 16 : 64;
+      const size = (n, fallback) => (Number.isInteger(n) && n >= 256 && n <= 2048 && n % grain === 0 ? n : fallback);
+      const steps = Number.isInteger(body.steps) && body.steps >= 1 && body.steps <= 150 ? body.steps : diffusers ? 28 : 20;
+      const frames = Number.isInteger(body.frames) && body.frames >= 9 && body.frames <= 161 ? body.frames : 33;
+      const fps = Number.isInteger(body.fps) && body.fps >= 8 && body.fps <= 30 ? body.fps : 16;
       const cfg = Number.isFinite(body.cfg) && body.cfg >= 0 && body.cfg <= 30 ? body.cfg : 7;
       const sampler = SAMPLERS.has(body.sampler) ? body.sampler : "euler_a";
       const scheduler = SCHEDULERS.has(body.scheduler) ? body.scheduler : "discrete";
@@ -433,14 +656,14 @@ const server = http.createServer(async (req, res) => {
         init = data;
         strength = Math.min(0.95, Math.max(0.1, Number(body.strength) || 0.55));
       }
-      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, 512), height: size(body.height, 512), steps, cfg, sampler, scheduler, init, strength });
+      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps });
       return send(res, 202, { id: job.id, status: job.status });
     }
     const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})$/);
     if (req.method === "GET" && m) {
       const job = jobs.get(m[1]);
       if (!job) return send(res, 404, { error: "No such job" });
-      return send(res, 200, { id: job.id, status: job.status, error: job.error, image: job.status === "completed" ? job.image : null });
+      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, error: job.error, image: job.status === "completed" ? job.image : null, video: job.status === "completed" ? job.video : null });
     }
     send(res, 404, { error: "Not found" });
   } catch (err) {
@@ -455,6 +678,7 @@ function sleep(ms) {
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
     stopServer();
+    stopWorker();
     process.exit(0);
   });
 }

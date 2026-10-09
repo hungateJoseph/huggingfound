@@ -9,6 +9,8 @@ export const MODELS = [
   { id: "bartowski/Qwen2.5-Math-7B-Instruct-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "math"], downloads: 12000, likes: 30, createdAt: "2024-10-01T00:00:00.000Z" },
   { id: "meta-llama/Llama-3.1-8B-Instruct", pipeline_tag: "text-generation", library_name: "transformers", tags: ["transformers", "safetensors", "conversational"], gated: "manual", downloads: 5000000, likes: 4000, createdAt: "2024-07-23T00:00:00.000Z" },
   { id: "unsloth/gemma-3-4b-it-GGUF", pipeline_tag: "image-text-to-text", library_name: "transformers", tags: ["gguf", "image-text-to-text"], downloads: 80000, likes: 200, createdAt: "2025-03-12T00:00:00.000Z" },
+  { id: "Qwen/Qwen-Image", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "text-to-image"], downloads: 300000, likes: 2500, createdAt: "2025-08-04T00:00:00.000Z" },
+  { id: "Wan-AI/Wan2.2-TI2V-5B-Diffusers", pipeline_tag: "text-to-video", library_name: "diffusers", tags: ["diffusers", "text-to-video"], downloads: 50000, likes: 400, createdAt: "2025-07-28T00:00:00.000Z" },
   { id: "Wan-AI/Wan2.2-T2V-A14B", pipeline_tag: "text-to-video", library_name: "diffusers", tags: ["diffusers", "text-to-video"], downloads: 40000, likes: 700, createdAt: "2025-07-28T00:00:00.000Z" },
   { id: "stabilityai/stable-video-diffusion-img2vid", pipeline_tag: "image-to-video", library_name: "diffusers", tags: ["diffusers", "image-to-video"], downloads: 200000, likes: 3000, createdAt: "2023-11-21T00:00:00.000Z" },
   { id: "second-state/stable-diffusion-v1-5-GGUF", pipeline_tag: "text-to-image", library_name: null, tags: ["gguf", "text-to-image"], downloads: 3000, likes: 20, createdAt: "2024-08-20T00:00:00.000Z" },
@@ -44,6 +46,35 @@ export const FILES = {
   ],
   "openai/whisper-large-v3": [{ rfilename: "model.safetensors", size: 3.1 * 1024 ** 3 }],
   "TheDrummer/Cydonia-24B-v2-GGUF": [{ rfilename: "Cydonia-24B-v2-Q8_0.gguf", size: 25.6 * 1024 ** 3 }],
+  "Qwen/Qwen-Image": [
+    { rfilename: "README.md", size: 9000 },
+    { rfilename: "model_index.json", size: 500 },
+    { rfilename: "assets/demo.png", size: 2000000 },
+    { rfilename: "scheduler/scheduler_config.json", size: 300 },
+    { rfilename: "text_encoder/config.json", size: 1200 },
+    { rfilename: "text_encoder/model-00001-of-00002.safetensors", size: 9 * 1024 ** 3 },
+    { rfilename: "text_encoder/model-00002-of-00002.safetensors", size: 7.4 * 1024 ** 3 },
+    { rfilename: "text_encoder/model.safetensors.index.json", size: 60000 },
+    { rfilename: "tokenizer/tokenizer.json", size: 7000000 },
+    { rfilename: "tokenizer/tokenizer_config.json", size: 4000 },
+    { rfilename: "transformer/config.json", size: 600 },
+    { rfilename: "transformer/diffusion_pytorch_model-00001-of-00002.safetensors", size: 20 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model-00002-of-00002.safetensors", size: 20.9 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model.safetensors.index.json", size: 90000 },
+    { rfilename: "vae/config.json", size: 800 },
+    { rfilename: "vae/diffusion_pytorch_model.safetensors", size: 0.25 * 1024 ** 3 },
+  ],
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers": [
+    { rfilename: "model_index.json", size: 500 },
+    { rfilename: "scheduler/scheduler_config.json", size: 300 },
+    { rfilename: "text_encoder/config.json", size: 1200 },
+    { rfilename: "text_encoder/model.safetensors", size: 11.4 * 1024 ** 3 },
+    { rfilename: "tokenizer/spiece.model", size: 800000 },
+    { rfilename: "transformer/config.json", size: 600 },
+    { rfilename: "transformer/diffusion_pytorch_model.safetensors", size: 10 * 1024 ** 3 },
+    { rfilename: "vae/config.json", size: 800 },
+    { rfilename: "vae/diffusion_pytorch_model.safetensors", size: 1.4 * 1024 ** 3 },
+  ],
   "John6666/pony-realism-v23-sdxl": [
     { rfilename: "model_index.json", size: 600 },
     { rfilename: "unet/config.json", size: 1800 },
@@ -149,7 +180,8 @@ export function startStubHub({ extraModels = [] } = {}) {
       const m = all.find((x) => x.id === dl[1]);
       if (!m) return json(res, 404, { error: "not found" });
       if (m.gated && !req.headers.authorization) return json(res, 401, { error: "gated" });
-      const body = TINY_PARTS[dl[2]] ? tinySafetensors(TINY_PARTS[dl[2]]) : Buffer.alloc(64 * 1024, dl[2]);
+      // A diffusers index names the pipeline class, which says image or video.
+      const body = dl[2] === "model_index.json" ? Buffer.from(JSON.stringify({ _class_name: /wan|video/i.test(dl[1]) ? "WanPipeline" : "QwenImagePipeline", _diffusers_version: "0.33.0" })) : TINY_PARTS[dl[2]] ? tinySafetensors(TINY_PARTS[dl[2]]) : Buffer.alloc(64 * 1024, dl[2]);
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": body.length });
       return res.end(body);
     }

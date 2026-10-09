@@ -438,7 +438,7 @@ function fit(gb, runner) {
   if (!gb) return { level: "unknown", text: "Size after scan" };
   // Chat models are judged against the rented GPU when one is set, and
   // image models too once the machine has its image agent.
-  if ((runner === "ollama" && state.chatServer) || (runner === "sd" && state.chatServer?.agent)) {
+  if ((runner === "ollama" && state.chatServer) || ((runner === "sd" || runner === "diffusers") && state.chatServer?.agent)) {
     const room = state.chatServer.comfortableGb;
     if (gb <= room * 0.8) return { level: "good", text: `Fits the server's GPU, ${gb.toFixed(1)} GB` };
     if (gb <= room) return { level: "tight", text: `Tight on the server's GPU, ${gb.toFixed(1)} GB` };
@@ -612,11 +612,17 @@ function renderModel(model, plan, choice = null) {
   const parts = [];
 
   if (!plan.runnable) {
-    parts.push(`<div class="notice ${plan.gated ? "info" : "warn"}">${esc(plan.reason)}${plan.link ? ` <a href="${esc(plan.link)}" target="_blank" rel="noopener">${plan.gated || plan.addon ? "Open the model page" : "Search for a GGUF version"}</a>` : ""}</div>`);
+    parts.push(`<div class="notice ${plan.gated || plan.needsGpu ? "info" : "warn"}">${esc(plan.reason)}${plan.link ? ` <a href="${esc(plan.link)}" target="_blank" rel="noopener">${plan.gated || plan.addon || plan.needsGpu ? "Open the model page" : "Search for a GGUF version"}</a>` : ""}</div>`);
     if (plan.gated && state.hosted) parts.push(`<p class="muted small">On your computer, HuggingFound's Settings take a Hugging Face read token, and this plan unlocks there.</p>`);
     else if (plan.gated) parts.push(`<div class="actions"><button class="ghost" id="open-settings-from-model">Add a token in Settings</button></div>`);
+    // A model that runs only on a rented GPU leads straight to renting one.
+    if (plan.needsGpu && choice) {
+      state.rentAsk = model.id;
+      parts.push(rentAskHtml(choice, plan));
+    }
     body.innerHTML = parts.join("");
     body.querySelector("#open-settings-from-model")?.addEventListener("click", () => ($("#settings").hidden = false));
+    if (plan.needsGpu && choice) wireRentAsk(body, model, choice);
     return;
   }
 
@@ -631,7 +637,7 @@ function renderModel(model, plan, choice = null) {
   parts.push(`<div class="facts">
     <span class="pill makes">${esc(makesOf(model).text)}</span>
     <span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span>
-    <span class="fact" title="${esc(plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : plan.file.name)}">${plan.file.folder ? `${plan.file.parts.length} files` : esc(plan.file.name)}${plan.file.gb ? `, ${plan.file.gb.toFixed(1)} GB` : ""}</span>
+    <span class="fact" title="${esc(plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : plan.file.repo ? `${plan.file.files.length} files, loaded as a folder by the diffusers library` : plan.file.name)}">${plan.file.folder ? `${plan.file.parts.length} files` : plan.file.repo ? `${plan.file.files.length} files` : esc(plan.file.name)}${plan.file.gb ? `, ${plan.file.gb.toFixed(1)} GB` : ""}</span>
     <span class="fact">${plan.measured ? esc(plan.measured) : esc(plan.speed?.text ?? "")}</span>
   </div>
   ${onMachine ? `<p class="muted small">Runs on your rented GPU; your browser talks to the machine directly and nothing passes through ${state.hosted ? "this site" : "the app"}.</p>` : plan.measured ? "" : `<p class="muted small">${state.hosted ? "Speed is a guess for a typical laptop without a separate GPU." : "Speed is a guess for this computer until a real run measures it."}</p>`}`);
@@ -662,6 +668,7 @@ npm start</code></div>`);
 // ---- where a chat model runs -------------------------------------------------
 
 function whereHtml(choice) {
+  if (choice.gpuOnly) return "";
   const here = state.hosted ? "your computer" : "this computer";
   // While the questions that lead to a machine are showing, the GPU button is the chosen one.
   const rented = choice.where === "rented" || state.rentAsk === state.open;
@@ -686,7 +693,7 @@ function chooseWhere(id, where) {
 }
 
 function rentAskHtml(choice, plan) {
-  const back = `<button class="ghost" data-where="local">Run it on my computer instead</button>`;
+  const back = choice.gpuOnly ? "" : `<button class="ghost" data-where="local">Run it on my computer instead</button>`;
   const size = choice.tier ? `This ${plan.file?.gb ? `${plan.file.gb.toFixed(1)} GB ` : ""}file wants a ${choice.tier} GB card.` : "This file is bigger than any card on offer.";
   // A machine that exists but is stopped (it stops itself when idle) is
   // started again, not replaced.
@@ -915,7 +922,7 @@ function renderTry(model, plan) {
     return;
   }
   if (plan.tryWith.kind === "chat") renderChat(box, plan.tryWith.model);
-  if (plan.tryWith.kind === "image") renderImage(box, plan.tryWith);
+  if (plan.tryWith.kind === "image" || plan.tryWith.kind === "video") renderImage(box, plan.tryWith);
   if (plan.tryWith.kind === "transcribe") renderTranscribe(box, plan.tryWith);
   renderRemove(box, model, plan);
 }
@@ -1879,6 +1886,8 @@ function pictureLink(url, alt) {
 
 function qualityLabel(q, info, fast) {
   const names = { fast: "Fast", default: "Default", max: "Max" };
+  // The diffusers presets say what they make in their own words.
+  if (info.text) return `<b>${names[q]}</b> <span class="muted">${esc(info.text)}, ${info.steps} steps</span>`;
   const what = fast ? `${info.steps} steps` : q === "default" ? `${info.steps} steps, the standard settings` : q === "fast" ? `${info.steps} steps, sharper sampler` : `${info.steps} steps, for the most detail`;
   return `<b>${names[q]}</b> <span class="muted">${what}${info.seconds ? `, about ${esc(shortDuration(info.seconds))}` : ""}</span>`;
 }
@@ -1901,14 +1910,15 @@ function renderImage(box, t) {
   const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
   const loaded = plan?.keepsLoaded && !t.remote && !t.agent ? `<p class="muted small loaded-note"><span>After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.</span><button class="ghost" id="unload-model">Unload now</button></p>` : "";
   const style = plan?.style ? `<p class="muted small style-note"><b>${plan.style.kind === "anime" ? "Anime model." : "Realistic model."}</b> ${esc(plan.style.text)}</p>` : "";
+  const video = t.kind === "video";
   box.innerHTML = `<h3>Try it</h3>
     ${remote}
     ${style}
     <div class="effort-title">Effort</div>
     <div class="quality" id="quality">${options}</div>
     <div class="prompt-input">
-      <textarea id="image-prompt" rows="2" placeholder="Describe a picture, for example: a lighthouse at dusk, oil painting"></textarea>
-      <button class="primary" id="image-go">Generate</button>
+      <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
+      <button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>
     </div>
     <label class="field avoid">
       <span>Avoid</span>
@@ -1940,12 +1950,13 @@ function renderImage(box, t) {
       if (t.agent) {
         // The rented GPU makes the picture; the browser asks it directly and
         // keeps the result, which is saved only when downloaded.
-        const image = await agentPicture(t.agent, { repo: t.repo, file: t.file, prompt, negative, quality: plan?.qualities?.[quality] }, (line) => {
+        const job = await agentJob(t.agent, { repo: t.repo, file: t.file, prompt, negative, quality: plan?.qualities?.[quality], video }, (line) => {
           log.textContent += line + "\n";
           log.scrollTop = log.scrollHeight;
         });
         $("#image-out").innerHTML = "";
-        showPicture($("#image-out"), { data: image, prompt, negative, model: t.repo, madeBy: t.file, agent: t.agent, repo: t.repo, modelFile: t.file, chain: [] });
+        if (job.video) showClip($("#image-out"), { data: job.video, prompt });
+        else showPicture($("#image-out"), { data: job.image, prompt, negative, model: t.repo, madeBy: t.file, agent: t.agent, repo: t.repo, modelFile: t.file, chain: [] });
         return;
       }
       const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt, negative, quality } });
@@ -2008,15 +2019,27 @@ function showPicture(into, { file = null, data = null, prompt, negative, model, 
 // Asks the rented GPU's agent for a picture and waits for it: a job is
 // submitted, then polled, so RunPod's proxy never holds a long request.
 // `quality` is a preset from the plan, with the exact settings to use.
-async function agentPicture(agent, { repo, file, prompt, negative, quality, init = null, strength = null }, onLine = () => {}) {
+async function agentPicture(agent, args, onLine = () => {}) {
+  return (await agentJob(agent, args, onLine)).image;
+}
+
+// A job on the rented GPU: a picture, or a clip from a video family. The
+// browser asks the machine directly and keeps the result in the page.
+async function agentJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false }, onLine = () => {}) {
   api.post("/api/rent/touch", {}).catch(() => {});
   const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
-  const body = { repo, file, prompt, negative, steps: q.steps, width: q.size, height: q.size, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler };
+  const width = q.width ?? q.size;
+  const height = q.height ?? q.size;
+  const body = { repo, file, prompt, negative, steps: q.steps, width, height, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler };
+  if (video) {
+    body.frames = q.frames;
+    body.fps = q.fps;
+  }
   if (init) {
     body.init = init;
     body.strength = strength ?? 0.55;
   }
-  onLine(`Asking the rented GPU for a ${q.size} by ${q.size} picture, ${q.steps} steps${init ? ", painting over the picture" : ""}`);
+  onLine(video ? `Asking the rented GPU for a ${q.frames}-frame clip at ${width} by ${height}, ${q.steps} steps` : `Asking the rented GPU for a ${width} by ${height} picture, ${q.steps} steps${init ? ", painting over the picture" : ""}`);
   const res = await fetch(`${agent}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `the machine answered HTTP ${res.status}`);
   const { id } = await res.json();
@@ -2027,18 +2050,28 @@ async function agentPicture(agent, { repo, file, prompt, negative, quality, init
     const poll = await fetch(`${agent}/jobs/${id}`);
     if (!poll.ok) throw new Error(`lost the machine while waiting (HTTP ${poll.status})`);
     const job = await poll.json();
-    const word = { loading: "Loading the model into the GPU (the first picture with a model takes longer)", queued: "Waiting for the GPU", generating: "Generating" }[job.status];
+    const word = { loading: "Loading the model into the GPU (the first picture with a model takes longer)", queued: "Waiting for the GPU", generating: job.progress ? `Generating, ${Math.round(job.progress * 100)}%` : "Generating" }[job.status];
     if (word && word !== last) {
       onLine(word);
       last = word;
     }
     if (job.status === "completed") {
       onLine(`Done in ${Math.round((Date.now() - started) / 1000)} s.`);
-      return job.image;
+      return job;
     }
     if (job.status === "failed") throw new Error(job.error || "the machine could not make the picture");
     if (Date.now() - started > 30 * 60e3) throw new Error("no picture after 30 minutes");
   }
+}
+
+// A clip from the rented GPU, shown and kept in the page until downloaded.
+function showClip(into, { data, prompt }) {
+  const card = document.createElement("div");
+  card.className = "image-card";
+  const src = `data:video/mp4;base64,${data}`;
+  card.innerHTML = `<video class="result-image" src="${esc(src)}" controls autoplay loop muted playsinline title="${esc(prompt)}"></video>
+    <p class="muted small tools-row"><span>Made on the rented GPU; it lives in this page until you download it.</span><a class="button" href="${esc(src)}" download="clip-${Date.now()}.mp4">Download</a></p>`;
+  into.appendChild(card);
 }
 
 function renderTranscribe(box, t) {

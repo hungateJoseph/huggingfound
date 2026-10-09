@@ -242,6 +242,41 @@ test("an image model's plan on the rented GPU is one download, done by the machi
   agent.state.down = false;
 });
 
+test("a diffusers-family model is fetched as a folder on the rented GPU, and a video family answers with a clip", async () => {
+  const QWEN_IMAGE = "Qwen/Qwen-Image";
+  const { plan, choice } = await json(`/api/model?id=${QWEN_IMAGE}`);
+  assert.deepEqual(choice, { where: "rented", rented: true, tier: 141, hasRunpodKey: true, gpuOnly: true }, "rented only, and 58 GB of weights want the biggest card");
+  assert.equal(plan.runnable, true);
+  assert.equal(plan.steps[0].kind, "pull-image-repo");
+  assert.ok(!plan.steps[0].args.files.some((f) => /README|assets\//.test(f)), "no card or demo pictures");
+  assert.ok(plan.steps[0].args.files.includes("transformer/diffusion_pytorch_model-00001-of-00002.safetensors"));
+  assert.match(plan.steps[0].title, /files on the rented GPU \(57\.6 GB\)/);
+  assert.deepEqual(plan.tryWith, { kind: "image", repo: QWEN_IMAGE, file: "model_index.json", agent: agent.url, engine: "diffusers" });
+  const res = await post("/api/run", { kind: "pull-image-repo", args: plan.steps[0].args, where: "rented" });
+  assert.equal(res.status, 200);
+  const log = await (await get(`/api/runs/${(await res.json()).id}`)).text();
+  assert.match(log, /Downloading \d+ files of Qwen\/Qwen-Image on the rented GPU/);
+  assert.match(log, /100% of 0\.50 GB \(model_index\.json\)/);
+  assert.match(log, /Done\./);
+  assert.equal(agent.state.downloads.at(-1).repo, QWEN_IMAGE);
+  assert.equal((await json(`/api/model?id=${QWEN_IMAGE}`)).plan.steps[0].done, true);
+  // The same machine answers a picture job for it, and a clip for a video family.
+  const job = await (await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: QWEN_IMAGE, file: "model_index.json", prompt: "a cat" }) })).json();
+  let state = await (await fetch(`${agent.url}/jobs/${job.id}`)).json();
+  assert.equal(state.kind, "image");
+  const models = await json("/api/rent/models");
+  assert.ok(models.images.some((m) => m.repo === QWEN_IMAGE && m.file === "model_index.json" && m.loaded), "listed on the machine, by its index file, as the loaded one");
+  const WAN = "Wan-AI/Wan2.2-TI2V-5B-Diffusers";
+  const wan = (await json(`/api/model?id=${WAN}`)).plan;
+  assert.equal(wan.tryWith.kind, "video");
+  const clip = await (await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: WAN, file: "model_index.json", prompt: "waves" }) })).json();
+  state = await (await fetch(`${agent.url}/jobs/${clip.id}`)).json();
+  state = await (await fetch(`${agent.url}/jobs/${clip.id}`)).json();
+  assert.equal(state.kind, "video");
+  assert.ok(state.video);
+  assert.equal((await post("/api/remove", { kind: "gpu-file", repo: QWEN_IMAGE, file: "model_index.json" })).status, 200);
+});
+
 test("everything on the machine is listed in one place: chat models with the loaded one, image models with the one in the GPU", async () => {
   const SD = "second-state/stable-diffusion-v1-5-GGUF";
   const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";

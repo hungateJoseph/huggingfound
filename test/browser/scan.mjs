@@ -116,11 +116,12 @@ await step("the page opens on a single search box", async () => {
   await page.waitForFunction(() => /video generation/.test(document.querySelector("#found-title").textContent));
   await page.waitForSelector("#found .model");
   const videos = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
-  assert.deepEqual(videos.slice(0, 2), ["Wan2.2-T2V-A14B", "stable-video-diffusion-img2vid"], "the stronger video family first, the far more liked old one second, chat models after both");
+  assert.deepEqual(videos.slice(0, 3), ["Wan2.2-T2V-A14B", "Wan2.2-TI2V-5B-Diffusers", "stable-video-diffusion-img2vid"], "the stronger video family first, the far more liked old one last, chat models after all three");
   assert.equal(await page.locator("#found-sort").inputValue(), "match");
   await page.selectOption("#found-sort", "likes");
   const byLikes = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.deepEqual(byLikes.slice(0, 2), ["stable-video-diffusion-img2vid", "Wan2.2-T2V-A14B"], "by users' opinion the liked one leads, and video models still come before the rest");
+  assert.equal(await page.locator("#found-sort").inputValue(), "likes");
   await page.selectOption("#found-sort", "match");
   await page.fill("#trait", "");
   await page.click("#trait-go");

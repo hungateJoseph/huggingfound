@@ -46,14 +46,19 @@ test("vision, image, and speech pipelines get their runners", () => {
 
   const flux = categorize({ id: "black-forest-labs/FLUX.1-dev", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers"] });
   assert.deepEqual(flux.categories, ["images"]);
-  assert.equal(flux.runner.id, "sd-parts");
+  assert.equal(flux.runner.id, "diffusers", "FLUX runs on a rented GPU through the diffusers library");
+  assert.equal(flux.runner.gpu, true);
 
   const qwenImage = categorize({ id: "unsloth/Qwen-Image-2.1-GGUF", pipeline_tag: "text-to-image", tags: ["gguf"] });
-  assert.equal(qwenImage.runner.id, "sd-parts");
+  assert.equal(qwenImage.runner.id, "diffusers");
   assert.equal(qwenImage.runner.easy, false);
 
   const other = categorize({ id: "someone/painting-model", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers"] });
-  assert.equal(other.runner.id, "python-diffusers");
+  assert.equal(other.runner.id, "diffusers");
+
+  const wan = categorize({ id: "Wan-AI/Wan2.2-TI2V-5B-Diffusers", pipeline_tag: "text-to-video", library_name: "diffusers", tags: ["diffusers"] });
+  assert.ok(wan.categories.includes("images"));
+  assert.equal(wan.runner.id, "diffusers", "video families too");
 
   const whisper = categorize({ id: "ggerganov/whisper.cpp", pipeline_tag: "automatic-speech-recognition", tags: [] });
   assert.deepEqual(whisper.categories, ["easy", "speech"]);
@@ -100,15 +105,15 @@ test("parts of a model are not offered as models", () => {
   }
 });
 
-test("diffusers repositories of the Stable Diffusion families run, other pipelines do not", () => {
+test("diffusers repositories of the Stable Diffusion families run here; other pipelines run on a rented GPU", () => {
   const sdxl = categorize({ id: "someone/my-anime-mix", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusers:StableDiffusionXLPipeline"] });
   assert.equal(sdxl.runner.id, "sd");
   const sd15 = categorize({ id: "someone/dreamy-photos", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion"] });
   assert.equal(sd15.runner.id, "sd");
   const sd3 = categorize({ id: "stabilityai/stable-diffusion-3.5-medium", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusers:StableDiffusion3Pipeline"] });
-  assert.equal(sd3.runner.id, "sd-parts");
+  assert.equal(sd3.runner.id, "diffusers");
   const unknown = categorize({ id: "someone/painting-model", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "diffusers:KandinskyPipeline"] });
-  assert.equal(unknown.runner.id, "python-diffusers");
+  assert.equal(unknown.runner.id, "diffusers");
 });
 
 test("an image-editing model with a bundled text encoder is an image model, never a chat model", () => {
@@ -116,7 +121,7 @@ test("an image-editing model with a bundled text encoder is an image model, neve
   assert.ok(!r.categories.includes("chat"));
   assert.ok(r.categories.includes("images"));
   assert.ok(r.categories.includes("nsfw-images"));
-  assert.equal(r.runner.id, "sd-parts", "FLUX ships in pieces; shown, not set up");
+  assert.equal(r.runner.id, "diffusers", "FLUX runs on a rented GPU, not here");
   assert.equal(r.runner.easy, false);
   const chat = categorize({ id: "x/some-chat-GGUF", pipeline_tag: "text-generation", tags: ["gguf", "conversational"] });
   assert.ok(chat.categories.includes("chat"));

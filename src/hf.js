@@ -225,6 +225,40 @@ export function diffusersFolder(files) {
   return { name: "diffusers folder", folder: true, xl: parts.some((p) => p.to.startsWith("text_encoder_2/")), parts, gb: parts.reduce((t, p) => t + p.gb, 0) || null };
 }
 
+// The files to fetch for a model the diffusers library loads from its
+// folder: the index, every component's config and weights, tokenizers and
+// the scheduler. Pictures, cards and duplicate formats stay behind: where
+// a component has a half-precision variant next to the full one, only the
+// variant is taken (saved under the plain name, which is what loads); where
+// safetensors exist, .bin and .ckpt copies are left.
+export function repoFiles(files) {
+  const names = new Set(files.map((f) => f.name));
+  if (!names.has("model_index.json")) return null;
+  const keep = [];
+  let gb = 0;
+  const skipName = /\.(md|png|jpg|jpeg|gif|webp|mp4|txt|py|ipynb|gitattributes|msgpack|h5|onnx|pt|pth|ckpt)$/i;
+  for (const f of files) {
+    const name = f.name;
+    if (name.startsWith(".") || skipName.test(name)) continue;
+    const dir = name.includes("/") ? name.split("/")[0] : "";
+    if (/^(images?|assets?|examples?|samples?|demo|docs?)$/i.test(dir)) continue;
+    // Single-file checkpoints at the top level are the same model again.
+    if (!dir && /\.(safetensors|bin|gguf)$/i.test(name)) continue;
+    if (/\.bin$/i.test(name) && [...names].some((n) => n.startsWith(`${dir}/`) && /\.safetensors$/i.test(n))) continue;
+    if (/\.safetensors$/i.test(name) && /\.(fp16|bf16)\.safetensors$/i.test(name) === false) {
+      // The full-precision copy of a component that also has a half one.
+      const half = [".fp16.safetensors", ".bf16.safetensors"].map((x) => name.replace(/\.safetensors$/i, x)).find((x) => names.has(x));
+      if (half) continue;
+    }
+    keep.push({ from: name, to: name.replace(/\.(fp16|bf16)\.safetensors$/i, ".safetensors"), gb: f.gb ?? 0 });
+    gb += f.gb ?? 0;
+  }
+  // The variant is saved under the plain name; two files cannot land on one path.
+  const seen = new Set();
+  const list = keep.filter((f) => (seen.has(f.to) ? false : seen.add(f.to)));
+  return { name: "diffusers folder", repo: true, files: list, gb: gb || null };
+}
+
 // The quantization suffix Ollama wants after `hf.co/user/repo:`.
 export function quantTag(fileName) {
   const m = /[-.]((?:I?Q\d[_A-Z0-9]*)|F16|BF16|f16|bf16)\.gguf$/i.exec(fileName);

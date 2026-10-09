@@ -11,7 +11,8 @@ import { chatServerMachine, describeMachine, hostedMachine } from "./machine.js"
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
 import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeAgentModel, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullImageOnAgent,
-  pullImageFolderOnAgent, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
+  pullImageFolderOnAgent,
+  pullImageRepoOnAgent, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
@@ -93,7 +94,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // Image models go to the rented machine's agent, set and cleared with the chat server.
   const imageAgent = (ctx) => ctx.settings().GPU_AGENT || "";
   const rentedChat = (ctx) => Boolean(ctx.rental?.owns(chatServer(ctx)));
-  const remoteFor = (runnerId, ctx) => (runnerId === "ollama" ? chatServer(ctx) : runnerId === "sd" ? imageAgent(ctx) : "");
+  const remoteFor = (runnerId, ctx) => (runnerId === "ollama" ? chatServer(ctx) : runnerId === "sd" || runnerId === "diffusers" ? imageAgent(ctx) : "");
   const machineFor = (runnerId, ctx) => (remoteFor(runnerId, ctx) ? chatServerMachine(remoteFor(runnerId, ctx), ctx.settings().OLLAMA_SERVER_GB) : machine);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
   const hub_ = hub;
@@ -567,16 +568,17 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       // Without a choice the rented machine wins when there is one.
       const kind = model.runner?.id;
       const remote = remoteFor(kind, ctx);
-      const where = ["ollama", "sd"].includes(kind) ? (url.searchParams.get("where") || (remote ? "rented" : "local")) : "local";
+      // The diffusers families run nowhere but a rented GPU.
+      const where = kind === "diffusers" ? "rented" : ["ollama", "sd"].includes(kind) ? (url.searchParams.get("where") || (remote ? "rented" : "local")) : "local";
       const useRemote = where === "rented" && remote;
       const planMachine = useRemote ? chatServerMachine(remote, ctx.settings().OLLAMA_SERVER_GB) : machine;
-      const detected = useRemote && kind === "ollama" ? withRental(await detect(fetchImpl, remote), ctx) : useRemote && kind === "sd" ? await withGpu(hosted ? noRunners() : await detect(fetchImpl), remote, ctx) : hosted ? noRunners() : await detect(fetchImpl);
+      const detected = useRemote && kind === "ollama" ? withRental(await detect(fetchImpl, remote), ctx) : useRemote && (kind === "sd" || kind === "diffusers") ? await withGpu(hosted ? noRunners() : await detect(fetchImpl), remote, ctx) : hosted ? noRunners() : await detect(fetchImpl);
       const plan = model.gatedBlocked
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
         : buildPlan({ model, files: model.files, machine: planMachine, detected, hasToken: !hosted && Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer() });
       // What the page needs to offer the other place: the size of GPU this
       // file wants, and whether a machine is rented already.
-      const choice = ["ollama", "sd"].includes(kind) ? { where: useRemote ? "rented" : "local", rented: Boolean(remote), tier: tierFor(plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY) } : null;
+      const choice = ["ollama", "sd", "diffusers"].includes(kind) ? { where: useRemote || kind === "diffusers" ? "rented" : "local", rented: Boolean(remote), tier: tierFor(plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY), ...(kind === "diffusers" ? { gpuOnly: true } : {}) } : null;
       return send(res, 200, { model, plan, choice });
     }
     if (req.method === "GET" && url.pathname === "/api/storage") {
@@ -669,7 +671,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         // The page says where a step belongs; a rented machine is the
         // default while there is one, this computer otherwise.
         const where = body.where || (remote || agent ? "rented" : "local");
-        const agentKinds = ["pull-image-model", "pull-image-folder"];
+        const agentKinds = ["pull-image-model", "pull-image-folder", "pull-image-repo"];
         if (hosted && !(where === "rented" && ((remote && body.kind === "pull-model") || (agent && agentKinds.includes(body.kind))))) return send(res, 403, { error: "On this site the only step that runs is a download onto your rented GPU. Everything else runs in HuggingFound on your own computer." });
         if (where === "rented" && agentKinds.includes(body.kind)) {
           if (!agent) return send(res, 400, { error: "No GPU is rented. Rent one in Settings, or run the model on this computer." });
@@ -677,7 +679,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           const owner = ctx.user?.id ?? null;
           const run = body.kind === "pull-image-folder"
             ? pullImageFolderOnAgent(String(args.repo ?? ""), args.files, String(args.into ?? ""), fetchImpl, agent, { owner })
-            : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner });
+            : body.kind === "pull-image-repo"
+              ? pullImageRepoOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner })
+              : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner });
           run.finished.then(release);
           return send(res, 200, { id: run.id });
         }

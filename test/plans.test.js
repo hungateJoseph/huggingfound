@@ -94,12 +94,12 @@ test("a file too big for the machine is still planned but flagged", () => {
   assert.equal(plan.fit.level, "no");
 });
 
-test("a multi-file image model is shown but not set up", () => {
+test("a quantised image model without the diffusers folder is shown but not set up, with the way to the folder version", () => {
   const model = { ...summarize({ id: "unsloth/Qwen-Image-2.1-GGUF", pipeline_tag: "text-to-image", tags: ["gguf"] }), files: [{ name: "qwen-image-Q4_0.gguf", gb: 12 }] };
   const plan = buildPlan({ model, files: model.files, machine, detected: nothing(), hasToken: false });
   assert.equal(plan.runnable, false);
-  assert.match(plan.reason, /several files/);
-  assert.equal(plan.link, model.url);
+  assert.match(plan.reason, /loose pieces/);
+  assert.match(plan.link, /search=Qwen-Image-2\.1%20diffusers/);
 });
 
 test("a repository without a loadable file says so", () => {
@@ -107,6 +107,40 @@ test("a repository without a loadable file says so", () => {
   const plan = buildPlan({ model, files: model.files, machine, detected: nothing(), hasToken: false });
   assert.equal(plan.runnable, false);
   assert.match(plan.reason, /no single checkpoint/);
+});
+
+test("a diffusers family runs on a rented GPU only: the plan asks for one, then is one folder download with presets", () => {
+  const files = [{ name: "README.md", gb: 0 }, { name: "model_index.json", gb: 0 }, { name: "assets/demo.png", gb: 0.01 }, { name: "transformer/config.json", gb: 0 }, { name: "transformer/diffusion_pytorch_model.safetensors", gb: 20 }, { name: "transformer/diffusion_pytorch_model.fp16.safetensors", gb: 10 }, { name: "text_encoder/model.safetensors", gb: 9 }, { name: "text_encoder/pytorch_model.bin", gb: 9 }, { name: "vae/diffusion_pytorch_model.safetensors", gb: 0.3 }, { name: "flux1-dev.safetensors", gb: 23 }];
+  const model = { ...summarize({ id: "someone/Open-Flux", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "flux"] }), files };
+  assert.equal(model.runner.id, "diffusers");
+  const withoutGpu = buildPlan({ model, files, machine, detected: nothing(), hasToken: false });
+  assert.equal(withoutGpu.runnable, false);
+  assert.equal(withoutGpu.needsGpu, true);
+  assert.match(withoutGpu.reason, /runs only on a rented GPU/);
+  const gpu = { ...nothing(), gpu: { url: "http://agent", running: true, files: [] } };
+  const plan = buildPlan({ model, files, machine: { ...machine, comfortableGb: 40 }, detected: gpu, hasToken: false });
+  assert.equal(plan.runnable, true);
+  assert.equal(plan.runner, "diffusers");
+  assert.equal(plan.steps.length, 1);
+  assert.equal(plan.steps[0].kind, "pull-image-repo");
+  assert.deepEqual(plan.steps[0].args.files, ["model_index.json", "transformer/config.json", "transformer/diffusion_pytorch_model.fp16.safetensors", "text_encoder/model.safetensors", "vae/diffusion_pytorch_model.safetensors"], "the index, configs and one copy of each weight: the half-precision variant over the full one, safetensors over .bin, no single-file duplicate, no demo pictures");
+  assert.equal(plan.file.files.find((f) => /fp16/.test(f.from)).to, "transformer/diffusion_pytorch_model.safetensors", "a variant is saved under the plain name");
+  assert.match(plan.steps[0].title, /5 files on the rented GPU \(19\.3 GB\)/);
+  assert.deepEqual(plan.tryWith, { kind: "image", repo: "someone/Open-Flux", file: "model_index.json", agent: "http://agent", engine: "diffusers" });
+  assert.deepEqual([plan.qualities.default.steps, plan.qualities.default.width, plan.qualities.default.cfg], [28, 1024, 3.5], "FLUX presets");
+  assert.deepEqual(plan.remove, [{ kind: "gpu-file", repo: "someone/Open-Flux", file: "model_index.json" }]);
+  const done = buildPlan({ model, files, machine, detected: { ...gpu, gpu: { ...gpu.gpu, files: ["someone/Open-Flux/model_index.json"] } }, hasToken: false });
+  assert.equal(done.steps[0].done, true);
+  // A video family gets clip presets and a video try box.
+  const wan = { ...summarize({ id: "Wan-AI/Wan2.2-TI2V-5B-Diffusers", pipeline_tag: "text-to-video", library_name: "diffusers", tags: ["diffusers"] }), files: [{ name: "model_index.json", gb: 0 }, { name: "transformer/diffusion_pytorch_model.safetensors", gb: 10 }] };
+  const clip = buildPlan({ model: wan, files: wan.files, machine, detected: gpu, hasToken: false });
+  assert.equal(clip.tryWith.kind, "video");
+  assert.deepEqual([clip.qualities.default.frames, clip.qualities.default.width, clip.qualities.default.height], [49, 832, 480]);
+  // Loose pieces without the folder cannot be assembled by the machine.
+  const gguf = { ...summarize({ id: "city96/FLUX.1-dev-gguf", pipeline_tag: "text-to-image", tags: ["gguf"] }), files: [{ name: "flux1-dev-Q8_0.gguf", gb: 12 }] };
+  const pieces = buildPlan({ model: gguf, files: gguf.files, machine, detected: gpu, hasToken: false });
+  assert.equal(pieces.runnable, false);
+  assert.match(pieces.reason, /loose pieces/);
 });
 
 test("an add-on such as an IP-Adapter is explained as a piece for a base model, not a model", () => {

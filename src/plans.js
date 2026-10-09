@@ -1,4 +1,4 @@
-import { chooseFile, quantTag } from "./hf.js";
+import { chooseFile, quantTag, repoFiles } from "./hf.js";
 import { fitFor, platformName } from "./machine.js";
 import { imageSettings } from "./runners.js";
 import { estimate, measuredText } from "./speed.js";
@@ -11,15 +11,8 @@ import { isAddon } from "./quality.js";
 export function buildPlan({ model, files, machine, detected, hasToken, preferredFile, timings = {}, imageServer = null }) {
   const runner = model.runner;
   if (!runner) return { runnable: false, reason: "This kind of model has no local runner in HuggingFound yet.", steps: [] };
+  if (runner.id === "diffusers") return diffusersPlan({ model, files, machine, detected });
   if (!runner.easy) {
-    if (runner.id === "sd-parts") {
-      return {
-        runnable: false,
-        reason: `${model.name} ships as several files (the model, one or two text encoders and a VAE) that have to be matched by hand. HuggingFound sets up image models that come as one file, such as Stable Diffusion 1.5 and SDXL Turbo on the Easy to set up list.`,
-        steps: [],
-        link: model.url,
-      };
-    }
     return {
       runnable: false,
       reason: `${model.name} is published for ${runner.name}, which needs a Python setup. HuggingFound runs models that come as single files for Ollama, whisper.cpp or stable-diffusion.cpp. Look for a version of this model tagged GGUF, or pick one from the Easy to set up list.`,
@@ -243,6 +236,65 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   }
 
   return { runnable: false, reason: "Unsupported runner.", steps: [] };
+}
+
+// A model only the diffusers library loads (FLUX, Qwen-Image, Wan and the
+// other folder-layout families, video included): it runs on a rented GPU,
+// where the machine fetches the folder and its Python side makes the
+// pictures or clips. Nothing on a person's own computer loads these.
+function diffusersPlan({ model, files, machine, detected }) {
+  const repo = repoFiles(files);
+  const video = /video/.test(model.pipeline ?? "");
+  const what = video ? "clips" : "pictures";
+  if (!repo) {
+    return {
+      runnable: false,
+      reason: `${model.name} is published as loose pieces (quantised or split weights without the folder the diffusers library loads), which have to be assembled by hand. Look for the model's diffusers version, usually the maker's own repository or one whose name ends in -Diffusers.`,
+      steps: [],
+      link: `https://huggingface.co/models?search=${encodeURIComponent(model.name.replace(/-?gguf/i, ""))}%20diffusers`,
+    };
+  }
+  if (isAddon(model.name)) {
+    return { runnable: false, addon: true, reason: `${model.name} is an add-on, not a model: a piece that changes how a base model draws. It makes nothing by itself, and HuggingFound does not apply add-ons yet.`, steps: [], link: model.url };
+  }
+  if (!detected.gpu?.url) {
+    return {
+      runnable: false,
+      needsGpu: true,
+      reason: `${model.name} runs only on a rented GPU: it is loaded by the diffusers library, which nothing on a laptop runs well${repo.gb ? `, and its ${repo.gb.toFixed(0)} GB of weights want a data-centre card` : ""}. Rent one by the hour and the machine fetches the model and makes ${what} there.`,
+      steps: [],
+      link: model.url,
+      file: repo,
+    };
+  }
+  if (model.gated) {
+    return { runnable: false, gated: true, reason: `${model.name} is gated, and the rented GPU fetches files without your Hugging Face token. Pick an open model, or the same family from a maker who publishes it openly.`, steps: [], link: model.url };
+  }
+  const fit = fitFor(repo.gb, machine);
+  const done = detected.gpu.files.includes(`${model.id}/model_index.json`);
+  const fast = /turbo|lightning|schnell|distill|hyper|rapid|fast|step/i.test(model.id);
+  const cfg = /flux/i.test(model.id) ? 3.5 : /qwen/i.test(model.id) ? 4 : 5;
+  const qualities = video
+    ? {
+        fast: { steps: 20, width: 832, height: 480, frames: 33, fps: 16, cfg, text: "a 2-second clip at 480p" },
+        default: { steps: 30, width: 832, height: 480, frames: 49, fps: 16, cfg, text: "a 3-second clip at 480p" },
+        max: { steps: 40, width: 1280, height: 720, frames: 81, fps: 16, cfg, text: "a 5-second clip at 720p, many minutes" },
+      }
+    : {
+        fast: { steps: fast ? 4 : 12, size: 768, width: 768, height: 768, cfg, text: "768 by 768, fewer steps" },
+        default: { steps: fast ? 4 : 28, size: 1024, width: 1024, height: 1024, cfg, text: "1024 by 1024" },
+        max: { steps: fast ? 8 : 40, size: 1024, width: 1024, height: 1024, cfg, text: "1024 by 1024, more steps" },
+      };
+  const steps = [{
+    kind: "pull-image-repo",
+    args: { repo: model.id, files: repo.files.map((f) => f.from) },
+    title: `Download the model's ${repo.files.length} files on the rented GPU (${repo.gb ? repo.gb.toFixed(1) + " GB" : "size unknown"})`,
+    text: `The machine fetches the model's folder straight from Hugging Face onto its own disk; nothing comes to this computer. ${fit.text}.${detected.gpu.running ? "" : ` ${serverDownNote(detected.gpu.rented)}`}`,
+    done,
+    command: `download ${repo.files.length} files of ${model.id} onto the rented GPU`,
+  }];
+  const speed = { text: video ? "A short clip takes a few minutes on a data-centre card; the first one longer while the model loads." : "A picture takes some seconds to a minute on a data-centre card; the first one longer while the model loads.", seconds: null };
+  return { runnable: true, runner: "diffusers", file: repo, fit, speed, measured: "", steps, qualities, fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers" }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
 }
 
 // Why the chat server is not answering: a rented machine says where it is

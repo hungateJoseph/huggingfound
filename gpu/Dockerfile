@@ -26,9 +26,17 @@ RUN mkdir -p /out/lib \
  && ls -la /out/lib
 
 FROM ollama/ollama:latest
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils libgomp1 && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils libgomp1 python3 python3-venv ffmpeg && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz | tar -xJ -C /opt \
  && mv /opt/node-v22.23.3-linux-x64 /opt/node
+# The Python side: torch for CUDA 12.4 and the diffusers library, for the
+# image and video families that only it loads. Its own environment, so
+# nothing else on the machine is touched.
+RUN python3 -m venv /opt/huggingfound/py \
+ && /opt/huggingfound/py/bin/pip install --no-cache-dir --upgrade pip \
+ && /opt/huggingfound/py/bin/pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 \
+ && /opt/huggingfound/py/bin/pip install --no-cache-dir diffusers transformers accelerate safetensors sentencepiece protobuf pillow imageio imageio-ffmpeg ftfy gguf \
+ && /opt/huggingfound/py/bin/python3 -c "import torch, diffusers, transformers; print(torch.__version__, diffusers.__version__, transformers.__version__)"
 COPY --from=build /src/build/bin/sd-cli /src/build/bin/sd-server /opt/huggingfound/bin/
 COPY --from=build /out/lib/ /opt/huggingfound/lib/
 # Every library must resolve here, or the build fails now rather than on a
@@ -38,7 +46,7 @@ RUN LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /o
  && ! (LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli | grep "not found" | grep -v "libcuda.so.1")
 # Built from the repository root (docker build -f gpu/Dockerfile .) so the
 # agent can take the folder-layout merge from src/ rather than a copy.
-COPY gpu/agent.js gpu/start.sh src/convert.js /opt/huggingfound/
+COPY gpu/agent.js gpu/start.sh gpu/worker.py src/convert.js /opt/huggingfound/
 RUN chmod +x /opt/huggingfound/start.sh /opt/huggingfound/bin/sd-cli /opt/huggingfound/bin/sd-server
 
 ENV PATH=/opt/node/bin:/opt/huggingfound/bin:$PATH \

@@ -18,6 +18,7 @@ const modelsDir = path.join(home, "models");
 const sdLog = path.join(home, "sd-requests.log");
 const sdPort = 7900 + Math.floor(Math.random() * 1000);
 const ORIGIN = "https://huggingfound.test";
+const workerLog = path.join(home, "worker-requests.log");
 let stub;
 let agent;
 let base;
@@ -31,7 +32,8 @@ before(async () => {
   fs.writeFileSync(fake, `#!/bin/sh\nexec "${process.execPath}" "${path.join(here, "fake-sd-server.js")}" "$@"\n`);
   fs.chmodSync(fake, 0o755);
   agent = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], {
-    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, FAKE_SD_LOG: sdLog },
+    // The Python side is played by a Node script that speaks the same protocol.
+    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, FAKE_SD_LOG: sdLog, HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let errors = "";
@@ -68,9 +70,9 @@ async function finish(id) {
 }
 
 test("it answers health, and only the allowed origins may call it from a page", async () => {
-  for (let i = 0; i < 20 && (await (await get("/health")).json()).sdOk === null; i++) await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 40 && ((await (await get("/health")).json()).sdOk === null || (await (await get("/health")).json()).pyOk === null); i++) await new Promise((r) => setTimeout(r, 50));
   const h = await (await get("/health")).json();
-  assert.deepEqual(h, { ok: true, version: "2", sdOk: true, sdProblem: "", loaded: null, ready: false, loading: false, models: 0 }, "the image server's startup check passed");
+  assert.deepEqual(h, { ok: true, version: "3", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0 }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -161,6 +163,60 @@ test("an edit sends the starting picture and how much of it to keep; bad input a
   const bad = await (await post("/jobs", { repo: REPO, file: FILE, prompt: "fail please" })).json();
   assert.match((await finish(bad.id)).error, /the model choked/);
   assert.equal((await get("/jobs/0123456789abcdef")).status, 404);
+});
+
+test("a diffusers-family model is fetched as a folder, loaded by the Python worker, and makes a picture or a clip", async () => {
+  const QWEN = "Qwen/Qwen-Image";
+  const files = ["model_index.json", "transformer/config.json", "transformer/diffusion_pytorch_model-00001-of-00002.safetensors", "vae/diffusion_pytorch_model.safetensors"];
+  assert.equal((await post("/download-repo", { repo: QWEN, files: ["transformer/config.json"] })).status, 400, "without the index nothing loads");
+  assert.equal((await post("/download-repo", { repo: QWEN, files: ["model_index.json", "a/b/c/d.safetensors"] })).status, 400, "too deep");
+  const res = await post("/download-repo", { repo: QWEN, files });
+  assert.equal(res.status, 200);
+  const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines[0].status, "file 1 of 4: model_index.json");
+  assert.equal(lines.at(-1).status, "success", JSON.stringify(lines.at(-1)));
+  const dir = path.join(modelsDir, "Qwen", "Qwen-Image");
+  assert.ok(fs.existsSync(path.join(dir, "transformer", "diffusion_pytorch_model-00001-of-00002.safetensors")));
+  const { models } = await (await get("/models")).json();
+  const entry = models.find((m) => m.repo === QWEN);
+  assert.equal(entry.file, "model_index.json", "a folder model is listed by its index");
+  assert.equal(entry.engine, "diffusers");
+  assert.ok(entry.gb > 0);
+  // Fetching again only fills gaps.
+  const again = (await (await post("/download-repo", { repo: QWEN, files })).text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(again[0].status, "already here");
+  // A picture through the worker, with the diffusers-style settings.
+  const job = await (await post("/jobs", { repo: QWEN, file: "model_index.json", prompt: "a lighthouse", negative: "blurry", steps: 28, width: 1024, height: 768, cfg: 4 })).json();
+  const done = await finish(job.id);
+  assert.equal(done.status, "completed", done.error);
+  assert.equal(done.kind, "image");
+  assert.match(done.image, /^iVBOR/);
+  const asked = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
+  assert.deepEqual([asked.op, asked.prompt, asked.negative, asked.steps, asked.width, asked.height, asked.cfg], ["generate", "a lighthouse", "blurry", 28, 1024, 768, 4]);
+  const h = await (await get("/health")).json();
+  assert.equal(h.loaded, `${QWEN}/model_index.json`);
+  assert.equal(h.ready, true);
+  // A failed generation is explained; the worker stays up for the next one.
+  const bad = await (await post("/jobs", { repo: QWEN, file: "model_index.json", prompt: "fail please" })).json();
+  assert.match((await finish(bad.id)).error, /the model choked/);
+  // A video family answers with a clip.
+  const WAN = "Wan-AI/Wan2.2-TI2V-5B-Diffusers";
+  await post("/download-repo", { repo: WAN, files: ["model_index.json", "transformer/diffusion_pytorch_model.safetensors"] }).then((r) => r.text());
+  const clip = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "waves at dusk", frames: 33, width: 832, height: 480, steps: 20 })).json();
+  const made = await finish(clip.id);
+  assert.equal(made.status, "completed", made.error);
+  assert.equal(made.kind, "video");
+  assert.equal(Buffer.from(made.video, "base64").toString(), "fake mp4 bytes");
+  const askedClip = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
+  assert.deepEqual([askedClip.frames, askedClip.width, askedClip.height], [33, 832, 480]);
+  // Going back to sd-server hands the card over: the worker's model is unloaded first.
+  const sd = await (await post("/jobs", { repo: REPO, file: FILE, prompt: "a boat" })).json();
+  assert.equal((await finish(sd.id)).status, "completed");
+  assert.equal((await (await get("/health")).json()).loaded, `${REPO}/${FILE}`);
+  // Removing a folder model removes the whole folder.
+  assert.equal((await del("/models", { repo: QWEN, file: "model_index.json" })).status, 200);
+  assert.ok(!fs.existsSync(dir));
+  assert.equal((await del("/models", { repo: WAN, file: "model_index.json" })).status, 200);
 });
 
 test("removing a model unloads it and frees the disk", async () => {

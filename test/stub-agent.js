@@ -49,6 +49,16 @@ export function startStubAgent() {
         state.files.push({ repo: data.repo, file: data.file, gb: 1.1 });
         return res.end();
       }
+      if (req.url === "/download-repo") {
+        state.downloads.push({ repo: data.repo, files: data.files, token: data.token ?? null });
+        const total = 0.5 * 1024 ** 3;
+        for (const line of [{ status: `file 1 of ${data.files.length}: ${data.files[0]}` }, { status: `downloading ${data.files[0]}`, total, completed: total, file: data.files[0] }, { status: "success" }]) {
+          res.write(`${JSON.stringify(line)}\n`);
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        state.files.push({ repo: data.repo, file: "model_index.json", gb: 20.4, engine: "diffusers" });
+        return res.end();
+      }
       if (req.url === "/download-folder") {
         state.downloads.push({ repo: data.repo, files: data.files, into: data.into, token: data.token ?? null });
         const total = 1.3 * 1024 ** 3;
@@ -76,7 +86,10 @@ export function startStubAgent() {
           return res.end("{}");
         }
         if (/fail please/.test(job.prompt)) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the model choked", image: null }));
-        return res.end(JSON.stringify(n < 2 ? { id: m[1], status: "generating", error: null, image: null } : { id: m[1], status: "completed", error: null, image: PNG }));
+        // A folder model of a video family answers with a clip.
+        const video = job.file === "model_index.json" && /wan|video/i.test(job.repo);
+        if (n < 2) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: video ? "video" : "image", progress: 0.5, error: null, image: null, video: null }));
+        return res.end(JSON.stringify(video ? { id: m[1], status: "completed", kind: "video", error: null, image: null, video: Buffer.from("fake mp4").toString("base64") } : { id: m[1], status: "completed", kind: "image", error: null, image: PNG, video: null }));
       }
       res.statusCode = 404;
       res.end("{}");
