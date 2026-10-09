@@ -913,6 +913,9 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   await visitor.waitForSelector("#steps .step.done", { timeout: 15000 });
   acceptDialogs = false;
   assert.ok(rentedOllama.state.pulls.some((p) => /Cydonia/.test(p)));
+  // A running step carries a progress bar, full and labelled Done at the end.
+  assert.equal(await visitor.locator("#steps .step .progress .fill").evaluate((el) => el.style.width), "100%");
+  assert.equal(await visitor.locator("#steps .step .progress-text").innerText(), "Done");
   await visitor.waitForSelector("#chat-send");
   assert.match(await visitor.locator(".chat-tools").innerText(), /on the rented GPU/);
   const before = rentedOllama.state.chats.length;

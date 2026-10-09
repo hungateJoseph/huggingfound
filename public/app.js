@@ -865,11 +865,14 @@ async function followStep(model, plan, index, id) {
     li.appendChild(log);
   }
   log.textContent = "";
+  const bar = stepProgress(li, log);
   try {
     const result = await follow(id, (line) => {
       log.textContent += line + "\n";
       log.scrollTop = log.scrollHeight;
+      bar.line(line);
     });
+    bar.finish(result.status);
     li.classList.remove("running");
     if (result.status === "done") {
       step.done = true;
@@ -900,12 +903,77 @@ async function followStep(model, plan, index, id) {
       btn.textContent = "Try again";
     }
   } catch (err) {
+    bar.finish("failed");
     li.classList.remove("running");
     li.classList.add("failed");
     log.textContent += `Lost the step: ${err.message}\n`;
     btn.disabled = false;
     btn.textContent = "Try again";
   }
+}
+
+// A progress bar over a step's log. Real when the log reports a percentage;
+// while a new machine starts there is nothing to measure, so it advances
+// on a guess (a fresh machine pulls a large image and takes a few minutes)
+// and never claims to be done until the log says the machine is up.
+const MACHINE_START_GUESS_S = 240;
+function stepProgress(li, log) {
+  let el = li.querySelector(".progress-wrap");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "progress-wrap";
+    el.innerHTML = `<div class="progress"><div class="fill"></div></div><div class="progress-text muted small"></div>`;
+    li.insertBefore(el, log);
+  }
+  el.hidden = false;
+  const fill = el.querySelector(".fill");
+  const text = el.querySelector(".progress-text");
+  const bar = el.querySelector(".progress");
+  let timer = null;
+  const set = (pct, words, mode = "") => {
+    bar.className = `progress ${mode}`;
+    fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    text.textContent = words;
+  };
+  const stopGuess = () => {
+    clearInterval(timer);
+    timer = null;
+  };
+  const startGuess = () => {
+    if (timer) return;
+    // A machine already running for a while is nearly there.
+    const began = Date.now() - (state.rental?.uptimeSeconds ? state.rental.uptimeSeconds * 1000 : 0);
+    const tick = () => {
+      const elapsed = (Date.now() - began) / 1000;
+      const pct = Math.min(92, (elapsed / MACHINE_START_GUESS_S) * 92);
+      const left = Math.max(0, MACHINE_START_GUESS_S - elapsed);
+      set(pct, left > 0 ? `Machine starting, about ${Math.ceil(left / 60)} min left (a guess; a new machine pulls a large image)` : "Machine starting, taking longer than usual", "guess");
+    };
+    tick();
+    timer = setInterval(tick, 1000);
+  };
+  set(0, "Starting");
+  return {
+    line(line) {
+      const pct = /(\d{1,3})% of ([\d.]+ GB)(?: \(([^)]+)\))?/.exec(line);
+      if (pct) {
+        stopGuess();
+        set(Number(pct[1]), `${pct[1]}% of ${pct[2]}${pct[3] ? `, ${pct[3]}` : ""}`);
+      } else if (/Waiting for (the machine|Ollama on the machine) to start/.test(line)) startGuess();
+      else if (/The machine is up\./.test(line)) {
+        stopGuess();
+        set(100, "Machine up; the download starts");
+      } else if (/merging|Merging|Copying|Registering|already here|file \d+ of \d+/i.test(line)) {
+        stopGuess();
+        set(100, line, "busy");
+      }
+    },
+    finish(status) {
+      stopGuess();
+      if (status === "done") set(100, "Done");
+      else set(100, "Failed", "failed");
+    },
+  };
 }
 
 async function runStep(model, plan, index) {
@@ -2778,8 +2846,10 @@ async function renderGpuModels() {
   const runRow = (run) => {
     const name = run.model ? run.model.split("/").pop() : run.title || run.first;
     const pill = run.status === "running" ? `<span class="pill live">downloading</span>` : run.status === "done" ? `<span class="pill good">done</span>` : `<span class="pill bad">failed</span>`;
+    const pct = /(\d{1,3})% of/.exec(run.last ?? "");
+    const mini = run.status === "running" ? `<div class="progress small ${pct ? "" : "guess"}"><div class="fill" style="width:${pct ? pct[1] : 10}%"></div></div>` : "";
     return `<li data-model="${esc(run.model ?? "")}">
-      <div><div class="name">${esc(name)}</div><div class="sub"><span>${esc(run.title || run.first)}</span>${run.last && run.last !== run.first ? `<span>${esc(run.last)}</span>` : ""}${pill}</div></div>
+      <div><div class="name">${esc(name)}</div><div class="sub"><span>${esc(run.title || run.first)}</span>${run.last && run.last !== run.first ? `<span>${esc(run.last)}</span>` : ""}${pill}</div>${mini}</div>
       <div class="buttons">${run.model ? `<button class="primary" data-open-run>Open</button>` : ""}</div>
     </li>`;
   };

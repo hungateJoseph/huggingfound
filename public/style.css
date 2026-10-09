@@ -417,3 +417,12 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .addon-setup { display: grid; gap: 10px; margin: 8px 0 14px; }
 .addon-setup select, .addon-setup input[type="file"] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); max-width: 100%; }
 .addon-setup output { font-weight: 500; }
+.progress-wrap { margin: 10px 0 6px; }
+.progress { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; position: relative; }
+.progress .fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.6s ease; }
+.progress.guess .fill { background: repeating-linear-gradient(45deg, var(--accent) 0 10px, var(--accent-soft) 10px 20px); background-size: 28px 28px; animation: progress-stripes 1s linear infinite; }
+.progress.busy .fill { background: repeating-linear-gradient(45deg, var(--accent) 0 10px, var(--accent-soft) 10px 20px); background-size: 28px 28px; animation: progress-stripes 0.6s linear infinite; }
+.progress.failed .fill { background: #c0392b; }
+.progress.small { height: 5px; margin-top: 6px; max-width: 280px; }
+.progress-text { margin-top: 4px; }
+@keyframes progress-stripes { from { background-position: 0 0; } to { background-position: 28px 0; } }
