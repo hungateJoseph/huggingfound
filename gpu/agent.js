@@ -45,7 +45,7 @@ const INDEX = "model_index.json";
 // Add-ons (IP-Adapters, LoRAs) live apart from models; they are applied to one.
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
-const VERSION = "4";
+const VERSION = "5";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -218,7 +218,7 @@ async function unloadWorker() {
 
 // ---- the image server --------------------------------------------------------
 
-const sd = { proc: null, file: null, ready: false, loading: null, errors: [], tail: "" };
+const sd = { proc: null, file: null, ready: false, loading: null, errors: [], tail: "", lastFailure: null };
 
 function stopServer() {
   if (sd.proc) {
@@ -245,12 +245,12 @@ function ensureLoaded(file) {
   sd.file = file;
   sd.errors = [];
   sd.tail = "";
-  const argv = ["-m", file, "--listen-ip", "127.0.0.1", "--listen-port", String(SD_PORT), "--vae-tiling"];
+  const argv = ["-m", file, "--listen-ip", "127.0.0.1", "--listen-port", String(SD_PORT), "--vae-tiling", "-v"];
   const proc = spawn(SD_SERVER, argv, { stdio: ["ignore", "pipe", "pipe"] });
   sd.proc = proc;
   const onData = (chunk) => {
-    sd.tail = (sd.tail + chunk.toString()).slice(-4000);
-    for (const line of chunk.toString().split(/\r?\n/)) if (/\[ERROR/.test(line)) sd.errors.push({ at: Date.now(), line: line.trim() });
+    sd.tail = (sd.tail + chunk.toString()).slice(-6000);
+    for (const line of chunk.toString().split(/\r?\n/)) if (/\[(ERROR|E)\]/.test(line)) sd.errors.push({ at: Date.now(), line: line.trim() });
   };
   proc.stdout.on("data", onData);
   proc.stderr.on("data", onData);
@@ -264,7 +264,10 @@ function ensureLoaded(file) {
   sd.loading = (async () => {
     await freed;
     for (let i = 0; i < 300; i++) {
-      if (sd.proc !== proc) throw new Error(`the image server stopped: ${lastLine()}`);
+      if (sd.proc !== proc) {
+        sd.lastFailure = { file: path.relative(MODELS_DIR, file).split(path.sep).join("/"), at: Date.now(), report: failureReport() };
+        throw new Error(`the image server stopped while loading the model. ${failureReport()}`);
+      }
       try {
         const res = await fetch(`${SD_URL}/sdapi/v1/sd-models`, { signal: AbortSignal.timeout(1000) });
         if (res.ok) {
@@ -284,6 +287,16 @@ function ensureLoaded(file) {
 }
 
 const lastLine = () => sd.tail.split("\n").filter(Boolean).pop() ?? "no output";
+
+// Why the server died: its error and warning lines, then its last lines,
+// so the person sees the cause (a truncated file, an unknown model format,
+// a CUDA problem) rather than only "failed".
+function failureReport() {
+  const lines = sd.tail.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const notable = lines.filter((l) => /\[(ERROR|E|WARN|W)\]|error|failed|unknown|cannot|unsupported|out of memory|CUDA/i.test(l));
+  const picked = [...new Set([...notable.slice(-6), ...lines.slice(-4)])];
+  return picked.length ? `The server said: ${picked.join(" | ")}` : "The server printed nothing.";
+}
 
 // ---- jobs ------------------------------------------------------------------------
 // One picture per job. The browser submits and polls; the agent loads the
@@ -480,16 +493,29 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
     const out = fs.createWriteStream(tmp);
     let received = 0;
     let lastPct = -1;
-    for await (const chunk of res.body) {
-      received += chunk.length;
-      if (!out.write(chunk)) await new Promise((r) => out.once("drain", r));
-      const pct = total ? Math.floor((received / total) * 100) : -1;
-      if (pct !== lastPct) {
-        lastPct = pct;
-        write({ status: `downloading ${file}`, total, completed: received, file });
+    const early = () => new Error(`the download of ${file} ended early (${(received / 1024 ** 3).toFixed(2)} of ${(total / 1024 ** 3).toFixed(2)} GB); try again`);
+    try {
+      try {
+        for await (const chunk of res.body) {
+          received += chunk.length;
+          if (!out.write(chunk)) await new Promise((r) => out.once("drain", r));
+          const pct = total ? Math.floor((received / total) * 100) : -1;
+          if (pct !== lastPct) {
+            lastPct = pct;
+            write({ status: `downloading ${file}`, total, completed: received, file });
+          }
+        }
+      } catch (err) {
+        // A connection that drops before the announced size is the usual cause.
+        throw total && received < total ? early() : err;
       }
+      await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
+      if (total && received !== total) throw early();
+    } catch (err) {
+      out.destroy();
+      fs.rmSync(tmp, { force: true });
+      throw err;
     }
-    await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
     fs.renameSync(tmp, dest);
     write({ status: "success" });
   } finally {
@@ -627,6 +653,9 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
+    // The image server's recent output and the Python side's, for a look
+    // when a picture fails.
+    if (req.method === "GET" && url.pathname === "/log") return send(res, 200, { sd: sd.tail, lastFailure: sd.lastFailure ?? null, python: py.tail, loaded: sd.file ? path.relative(MODELS_DIR, sd.file).split(path.sep).join("/") : null });
     if (req.method === "POST" && url.pathname === "/download") {
       const body = await readJson(req, 64 * 1024);
       const repo = String(body.repo ?? "");

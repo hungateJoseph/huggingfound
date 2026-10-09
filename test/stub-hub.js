@@ -192,6 +192,11 @@ export function startStubHub({ extraModels = [] } = {}) {
       if (!m) return json(res, 404, { error: "not found" });
       if (m.gated && !req.headers.authorization) return json(res, 401, { error: "gated" });
       // A diffusers index names the pipeline class, which says image or video.
+      // A file that announces more than it sends, as a dropped connection does.
+      if (/short\.bin$/.test(dl[2])) {
+        res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": 64 * 1024 });
+        return res.end(Buffer.alloc(16 * 1024, 1));
+      }
       const body = dl[2] === "model_index.json" ? Buffer.from(JSON.stringify({ _class_name: /wan|video/i.test(dl[1]) ? "WanPipeline" : "QwenImagePipeline", _diffusers_version: "0.33.0" })) : TINY_PARTS[dl[2]] ? tinySafetensors(TINY_PARTS[dl[2]]) : Buffer.alloc(64 * 1024, dl[2]);
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": body.length });
       return res.end(body);

@@ -17,6 +17,12 @@ const model = flag("-m");
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const jobs = new Map();
 if (process.env.FAKE_SD_FAIL_LOAD) process.exit(3);
+// A model named broken cannot be loaded, the way the real server says it.
+if (/broken/.test(model)) {
+  console.error("[WARN] unknown tensor 'foo' in model file");
+  console.error("[E] new_sd_ctx_t failed --- main.cpp:93");
+  process.exit(1);
+}
 
 const server = http.createServer((req, res) => {
   let body = "";

@@ -72,7 +72,7 @@ async function finish(id) {
 test("it answers health, and only the allowed origins may call it from a page", async () => {
   for (let i = 0; i < 40 && ((await (await get("/health")).json()).sdOk === null || (await (await get("/health")).json()).pyOk === null); i++) await new Promise((r) => setTimeout(r, 50));
   const h = await (await get("/health")).json();
-  assert.deepEqual(h, { ok: true, version: "4", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0 }, "both engines' startup checks passed");
+  assert.deepEqual(h, { ok: true, version: "5", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0 }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -255,6 +255,25 @@ test("an add-on is kept apart from the models and applied by the worker to a bas
   assert.equal((await (await get("/models")).json()).addons.length, 1);
   assert.equal((await del("/models", { repo: BASE, file: "sd-v1-5.safetensors" })).status, 200, "removing the base the worker holds");
   assert.equal((await (await get("/health")).json()).loaded, null);
+});
+
+test("a model the image server cannot load is explained with the server's own words, and a download that ends short is not kept", async () => {
+  const BAD = "someone/broken-model";
+  const file = path.join(modelsDir, "someone", "broken-model", "broken.safetensors");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "not a model");
+  const job = await (await post("/jobs", { repo: BAD, file: "broken.safetensors", prompt: "a cat" })).json();
+  const done = await finish(job.id);
+  assert.equal(done.status, "failed");
+  assert.match(done.error, /stopped while loading the model\. The server said: .*unknown tensor.*new_sd_ctx_t failed/);
+  const log = await (await get("/log")).json();
+  assert.equal(log.lastFailure.file, `${BAD}/broken.safetensors`);
+  assert.match(log.lastFailure.report, /new_sd_ctx_t failed/);
+  assert.match(log.sd, /new_sd_ctx_t failed/);
+  fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  const short = (await (await post("/download", { repo: REPO, file: "short.bin" })).text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.match(short.at(-1).error, /ended early \(0\.00 of 0\.00 GB\); try again/);
+  assert.ok(!fs.existsSync(path.join(modelsDir, "second-state", "stable-diffusion-v1-5-GGUF", "short.bin")), "nothing half-written is kept");
 });
 
 test("removing a model unloads it and frees the disk", async () => {
