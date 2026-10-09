@@ -23,7 +23,7 @@ const INTENTS = [
 // Words that name a kind of model rather than a model: a name that merely
 // contains one ("stable-video-diffusion") is not much of a match for
 // "video generation", where any video model is wanted.
-const GENERIC = /^(image|images|picture|pictures|photo|photos|photograph|video|videos|animation|animations|clip|clips|speech|audio|voice|text|chat|chatbot|assistant|model|models|generation|generator|generate|generating|generated|creation|create|creating|tool|tools|llm|ai|gguf|txt2img|text-to-image|text-to-video|diffusion)$/i;
+const GENERIC = /^(video-generation|image-generation|image|images|picture|pictures|photo|photos|photograph|video|videos|animation|animations|clip|clips|speech|audio|voice|text|chat|chatbot|assistant|model|models|generation|generator|generate|generating|generated|creation|create|creating|tool|tools|llm|ai|gguf|txt2img|text-to-image|text-to-video|diffusion)$/i;
 const STOP = new Set(["a", "an", "the", "for", "of", "to", "in", "on", "with", "and", "or", "that", "this", "is", "are", "be", "model", "models", "good", "best", "great", "at", "about", "knows", "know", "which", "what", "some", "any", "me", "my", "i", "want", "need", "find", "like", "can", "does", "do", "it", "its", "one", "open", "source", "local", "free", "ai", "llm"]);
 
 export function queryWords(q) {
@@ -71,6 +71,11 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {},
   // A search for a kind of output (video, pictures, speech) is answered by
   // models that make it; the rest follow, marked, however well they match.
   const kind = wantedKind(q);
+  // A search that only names a kind ("video generation", "pictures") is
+  // answered by capability and standing, not by which card happens to
+  // contain those words.
+  const kindOnly = Boolean(kind) && words.every((w) => GENERIC.test(w));
+  const relevanceWeight = kindOnly ? 0.25 : 1;
   const byId = new Map();
   const add = (m, source) => {
     const cur = byId.get(m.id);
@@ -103,14 +108,14 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {},
     const specific = words.filter((w) => !GENERIC.test(w));
     const nameHits = coverage(specific, m.id) + coverage(words.filter((w) => GENERIC.test(w)), m.id) * 0.2;
     if (nameHits) {
-      score += 1.5 * nameHits;
+      score += 1.5 * nameHits * relevanceWeight;
       why.push("name");
     }
     if (hubIndex != null && hubIndex >= 0) score += Math.max(0, 1 - hubIndex / 20);
     const said = summaryText(m);
     const { positive, negative } = saidHits(words, m);
     if (positive) {
-      score += 3.5 * positive;
+      score += 3.5 * positive * relevanceWeight;
       why.push("what people say");
     }
     if (negative) {
@@ -120,7 +125,7 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {},
     const notes = voiceText(voices[m.id]);
     const noteHits = notes ? coverage(words, notes) : 0;
     if (noteHits && !positive && !negative) {
-      score += 1.5 * noteHits;
+      score += 1.5 * noteHits * relevanceWeight;
       why.push("discussions");
     }
     const catHit = (m.categories ?? []).some((c) => intents.has(c));
@@ -146,7 +151,7 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {},
     // How capable the model is likely to be, from its size and family:
     // worth less than any relevance signal, so it orders equals.
     const quality = qualityScore(m);
-    score += quality * 0.6;
+    score += quality * (kindOnly ? 2 : 0.6);
     const fits = !kind || kindOf(m) === kind;
     if (kind && fits) why.push(`makes ${kind}`);
     ranked.push({ ...m, score: Math.round(score * 100) / 100, quality, fits, why });

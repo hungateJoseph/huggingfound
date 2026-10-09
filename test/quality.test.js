@@ -29,6 +29,15 @@ test("image and video models rank by family, speech models by size", () => {
   assert.ok(vid("c/HunyuanVideo") > vid("c/CogVideoX-5b"));
   assert.ok(vid("c/CogVideoX-5b") > vid("c/stable-video-diffusion-img2vid"));
   assert.ok(vid("c/Wan2.1-T2V-14B") > vid("c/Wan2.1-T2V-1.3B"), "the bigger of a family wins");
+  // A piece for a model is not a model: it sits under every full one.
+  assert.ok(vid("c/MiniMax-H3-Turbo-Lora") < vid("c/stable-video-diffusion-img2vid"));
+  assert.ok(vid("c/LTX-2.3-Workflows") < vid("c/stable-video-diffusion-img2vid"));
+  // A family nobody here has rated is judged by how liked and how new it is.
+  const fresh = new Date(Date.now() - 60 * 86400e3).toISOString();
+  const liked = qualityScore({ id: "c/Brand-New-Video", pipeline: "text-to-video", likes: 6000, createdAt: fresh });
+  const obscure = qualityScore({ id: "c/Brand-New-Video", pipeline: "text-to-video", likes: 12, createdAt: "2023-01-01T00:00:00.000Z" });
+  assert.ok(liked > vid("c/HunyuanVideo") && liked < vid("c/Wan2.2-T2V-A14B"), "a new family thousands like sits high, below the best known one");
+  assert.ok(obscure < vid("c/CogVideoX-5b") && obscure > vid("c/stable-video-diffusion-img2vid"), "an old unknown one sits low");
   const sp = (id) => qualityScore({ id, pipeline: "automatic-speech-recognition", categories: ["speech"], runner: { id: "whisper", easy: true } });
   assert.ok(sp("d/whisper-large-v3") > sp("d/whisper-medium"));
   assert.ok(sp("d/whisper-medium") > sp("d/whisper-tiny"));
@@ -45,4 +54,9 @@ test("in a search, relevance comes first and capability orders the rest", () => 
   ];
   const ranked = rankModels("video generation", { hub: vids, scanned: [], picks: [], voices: {} }).models;
   assert.equal(ranked[0].name, "Wan2.2-T2V-A14B", "the strongest video family leads a video search, likes notwithstanding");
+  // A search that only names a kind is answered by capability, not by a card that happens to say the words.
+  const talky = { id: "v/Prism", name: "Prism", author: "v", pipeline: "image-to-video", categories: [], runner: null, likes: 130, downloads: 500, createdAt: "2026-09-01T00:00:00.000Z", summary: { long: ["Users: great for video generation, say many."] } };
+  const kindOnly = rankModels("video generation", { hub: [talky, ...vids], scanned: [], picks: [], voices: {} }).models;
+  assert.equal(kindOnly[0].name, "Wan2.2-T2V-A14B", "what people say about a generic word does not outrank capability");
+  assert.ok(kindOnly.find((m) => m.name === "Prism").why.includes("what people say"), "the match is still noted");
 });

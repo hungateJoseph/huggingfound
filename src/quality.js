@@ -14,10 +14,28 @@ const IMAGE_FAMILIES = [
 ];
 const VIDEO_FAMILIES = [
   [/\bwan\b|\bwan2/i, 2.4],
+  [/\bltx-?2|\bltx[-_]?video[-_]?2/i, 2.2],
   [/\bhunyuan\s?video|\bhunyuanvideo/i, 2.1],
   [/\bltx|\bmochi|\bcogvideox/i, 1.6],
-  [/\bsvd|stable-video|animatediff|zeroscope|modelscope|text2video-zero/i, 0.6],
+  [/\bsvd|stable-video|animatediff|zeroscope|modelscope|text2video-zero|text-to-video-ms/i, 0.6],
 ];
+// Not a model but a piece for one: a LoRA, a VAE, a workflow file, a
+// repackaging for some tool. Shown, but under the models themselves.
+const ADDON = /\b(lora|loras|lycoris|vae|workflow|workflows|repackaged|embeddings?|textual[-_ ]inversion|controlnet|adapter|acc-loras|comfyui)\b/i;
+
+// For a family nobody here has rated: how liked and how recent it is. A new
+// family that thousands of people like is probably strong.
+function crowdGuess(m) {
+  const likes = Number(m.likes ?? 0);
+  const months = m.createdAt ? (Date.now() - new Date(m.createdAt).getTime()) / (30 * 86400e3) : null;
+  let x = 1.2;
+  if (likes >= 3000) x += 0.9;
+  else if (likes >= 1000) x += 0.6;
+  else if (likes >= 300) x += 0.3;
+  if (months != null && months <= 18) x += 0.3;
+  else if (months != null && months >= 36) x -= 0.3;
+  return x;
+}
 
 function params(m) {
   const named = paramSize(m.id);
@@ -58,9 +76,10 @@ export function qualityScore(m) {
   const runner = m.runner?.id ?? m.runner ?? "";
   const family = (table) => table.find(([re]) => re.test(name))?.[1] ?? null;
 
+  if (ADDON.test(name)) return 0.2;
   if (/video/.test(pipeline)) {
     // The family says most; within it, a bigger model is a little better.
-    const base = family(VIDEO_FAMILIES) ?? 1.2;
+    const base = family(VIDEO_FAMILIES) ?? crowdGuess(m);
     return clamp(base + Math.min(0.6, sizeBonus(params(m), 2, 8, 0.2)));
   }
   if (cats.includes("images") || cats.includes("nsfw-images") || runner === "sd" || /^(text-to-image|image-to-image|image-editing|inpainting)$/.test(pipeline)) {
