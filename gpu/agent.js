@@ -20,6 +20,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { convertDiffusersFolder } from "./convert.js";
 
 const PORT = Number(process.env.HF_AGENT_PORT || 7860);
 const HOST = process.env.HF_AGENT_HOST || "0.0.0.0";
@@ -29,10 +30,14 @@ const SD_PORT = Number(process.env.SD_PORT || 7861);
 const SD_URL = `http://127.0.0.1:${SD_PORT}`;
 const HUB = process.env.HF_HUB || "https://huggingface.co";
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
-const VERSION = "1";
+const VERSION = "2";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
+// A file up to two folders deep inside a repository (a diffusers layout's
+// unet/diffusion_pytorch_model.safetensors), no dot-segments.
+const SUBPATH_RE = /^(?!\.)[\w.+-]+(?:\/(?!\.)[\w.+-]+){0,2}$/;
+const PART_DIRS = ["unet", "vae", "text_encoder", "text_encoder_2"];
 const MAX_BODY = 12 * 1024 * 1024;
 const JOB_TTL = 30 * 60e3;
 
@@ -194,9 +199,9 @@ setInterval(() => {
 
 // ---- model files ---------------------------------------------------------------------
 
-function modelFile(repo, file) {
-  if (!REPO_RE.test(repo) || !FILE_RE.test(file)) throw new Error("Bad model name");
-  return path.join(MODELS_DIR, ...repo.split("/"), file);
+function modelFile(repo, file, deep = false) {
+  if (!REPO_RE.test(repo) || !(deep ? SUBPATH_RE : FILE_RE).test(file)) throw new Error("Bad model name");
+  return path.join(MODELS_DIR, ...repo.split("/"), ...file.split("/"));
 }
 
 function listModels() {
@@ -210,7 +215,10 @@ function listModels() {
       if (!fs.statSync(repoDir).isDirectory()) continue;
       for (const file of fs.readdirSync(repoDir)) {
         if (file.endsWith(".part")) continue;
-        out.push({ repo: `${owner}/${repo}`, file, gb: fs.statSync(path.join(repoDir, file)).size / 1024 ** 3 });
+        const full = path.join(repoDir, file);
+        // The parts of a folder-layout model are not models until merged.
+        if (!fs.statSync(full).isFile()) continue;
+        out.push({ repo: `${owner}/${repo}`, file, gb: fs.statSync(full).size / 1024 ** 3 });
       }
     }
   }
@@ -220,10 +228,12 @@ function listModels() {
 const downloading = new Set();
 
 // Streams a file from Hugging Face onto the disk, reporting progress as
-// lines of JSON in Ollama's style: status, total, completed.
-async function download(repo, file, token, write) {
-  const dest = modelFile(repo, file);
-  const key = `${repo}/${file}`;
+// lines of JSON in Ollama's style: status, total, completed. `saveAs` is
+// the path to keep it under when it differs (a half-precision variant
+// loses its .fp16 suffix so the merge finds it).
+async function download(repo, file, token, write, saveAs = file) {
+  const dest = modelFile(repo, saveAs, true);
+  const key = `${repo}/${saveAs}`;
   if (downloading.has(key)) throw new Error("that file is already being downloaded");
   if (fs.existsSync(dest)) {
     write({ status: "already here" });
@@ -251,7 +261,7 @@ async function download(repo, file, token, write) {
       const pct = total ? Math.floor((received / total) * 100) : -1;
       if (pct !== lastPct) {
         lastPct = pct;
-        write({ status: `downloading ${file}`, total, completed: received });
+        write({ status: `downloading ${file}`, total, completed: received, file });
       }
     }
     await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
@@ -260,6 +270,32 @@ async function download(repo, file, token, write) {
   } finally {
     downloading.delete(key);
   }
+}
+
+// A model published in the diffusers folder layout: its parts are fetched
+// one by one and merged into the single checkpoint sd-server loads, named
+// `into`; the parts are removed afterwards. The same merge HuggingFound
+// does on a person's own computer.
+async function downloadFolder(repo, files, into, token, write) {
+  const dest = modelFile(repo, into);
+  if (fs.existsSync(dest)) {
+    write({ status: "already here" });
+    write({ status: "success" });
+    return;
+  }
+  for (const [i, f] of files.entries()) {
+    write({ status: `file ${i + 1} of ${files.length}: ${f.from}` });
+    await download(repo, f.from, token, (line) => (line.status === "success" ? null : write(line)), f.to);
+  }
+  const dir = path.dirname(dest);
+  write({ status: "merging the parts into one checkpoint" });
+  await convertDiffusersFolder(dir, dest, (text) => write({ status: text }));
+  for (const f of files) fs.rmSync(modelFile(repo, f.to, true), { force: true });
+  for (const sub of PART_DIRS) {
+    const d = path.join(dir, sub);
+    if (fs.existsSync(d) && fs.readdirSync(d).length === 0) fs.rmdirSync(d);
+  }
+  write({ status: "success" });
 }
 
 // ---- HTTP ------------------------------------------------------------------------
@@ -338,6 +374,22 @@ const server = http.createServer(async (req, res) => {
       const write = (line) => res.write(`${JSON.stringify(line)}\n`);
       try {
         await download(repo, file, typeof body.token === "string" ? body.token : "", write);
+      } catch (err) {
+        write({ error: err.message });
+      }
+      return res.end();
+    }
+    if (req.method === "POST" && url.pathname === "/download-folder") {
+      const body = await readJson(req, 64 * 1024);
+      const repo = String(body.repo ?? "");
+      const into = String(body.into ?? "");
+      const files = Array.isArray(body.files) ? body.files.map((f) => ({ from: String(f?.from ?? ""), to: String(f?.to ?? f?.from ?? "") })) : [];
+      const partOk = (p) => SUBPATH_RE.test(p) && PART_DIRS.includes(p.split("/")[0]) && p.split("/").length === 2;
+      if (!REPO_RE.test(repo) || !FILE_RE.test(into) || !into.endsWith(".safetensors") || files.length === 0 || files.length > 8 || !files.every((f) => partOk(f.from) && partOk(f.to))) return send(res, 400, { error: "Bad model name" });
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      const write = (line) => res.write(`${JSON.stringify(line)}\n`);
+      try {
+        await downloadFolder(repo, files, into, typeof body.token === "string" ? body.token : "", write);
       } catch (err) {
         write({ error: err.message });
       }

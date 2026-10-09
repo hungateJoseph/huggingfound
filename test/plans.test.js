@@ -109,6 +109,15 @@ test("a repository without a loadable file says so", () => {
   assert.match(plan.reason, /no single checkpoint/);
 });
 
+test("an add-on such as an IP-Adapter is explained as a piece for a base model, not a model", () => {
+  const model = { ...summarize({ id: "h94/IP-Adapter-FaceID", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion"] }), files: [{ name: "ip-adapter-faceid_sd15.bin", gb: 0.1 }, { name: "ip-adapter-faceid_sdxl.bin", gb: 1 }] };
+  const plan = buildPlan({ model, files: model.files, machine, detected: nothing, hasToken: false });
+  assert.equal(plan.runnable, false);
+  assert.equal(plan.addon, true);
+  assert.match(plan.reason, /is an add-on, not a model/);
+  assert.equal(plan.link, model.url);
+});
+
 test("a diffusers folder plans one download of all its parts and loads as a folder", () => {
   const model = withFiles("John6666/pony-realism-v23-sdxl");
   const plan = buildPlan({ model, files: model.files, machine, detected: nothing(), hasToken: false });

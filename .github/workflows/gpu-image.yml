@@ -8,7 +8,7 @@ name: GPU machine image
 on:
   push:
     branches: [main]
-    paths: ["gpu/**", ".github/workflows/gpu-image.yml"]
+    paths: ["gpu/**", "src/convert.js", ".github/workflows/gpu-image.yml"]
   workflow_dispatch:
 
 permissions:
@@ -41,7 +41,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: gpu
+          context: .
+          file: gpu/Dockerfile
           push: true
           # Registry names are lowercase, whatever the account's spelling.
           tags: |

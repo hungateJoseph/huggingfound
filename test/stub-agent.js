@@ -49,6 +49,16 @@ export function startStubAgent() {
         state.files.push({ repo: data.repo, file: data.file, gb: 1.1 });
         return res.end();
       }
+      if (req.url === "/download-folder") {
+        state.downloads.push({ repo: data.repo, files: data.files, into: data.into, token: data.token ?? null });
+        const total = 1.3 * 1024 ** 3;
+        for (const line of [{ status: `file 1 of ${data.files.length}: ${data.files[0].from}` }, { status: `downloading ${data.files[0].from}`, total, completed: total, file: data.files[0].from }, { status: "merging the parts into one checkpoint" }, { status: "success" }]) {
+          res.write(`${JSON.stringify(line)}\n`);
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        state.files.push({ repo: data.repo, file: data.into, gb: 6.5 });
+        return res.end();
+      }
       if (req.url === "/jobs" && req.method === "POST") {
         const id = `${state.jobs.length + 1}`.padStart(16, "0");
         state.jobs.push({ id, ...data });

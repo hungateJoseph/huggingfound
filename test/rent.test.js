@@ -199,9 +199,31 @@ test("an image model's plan on the rented GPU is one download, done by the machi
   assert.equal(local.choice.where, "local");
   assert.ok(local.plan.steps.length >= 2);
   assert.equal(local.plan.remote, undefined);
-  // Gated and multi-part image models cannot be fetched by the machine.
+  // A gated model cannot be fetched by the machine.
   const gated = await json("/api/model?id=black-forest-labs/FLUX.1-dev");
   assert.equal(gated.plan.runnable, false);
+  // A folder-layout model is fetched in parts and merged on the machine into one checkpoint.
+  const PONY = "John6666/pony-realism-v23-sdxl";
+  const MERGED = "pony-realism-v23-sdxl.safetensors";
+  const folder = (await json(`/api/model?id=${PONY}`)).plan;
+  assert.equal(folder.runnable, true);
+  assert.equal(folder.steps.length, 1);
+  assert.equal(folder.steps[0].kind, "pull-image-folder");
+  assert.match(folder.steps[0].title, /4 files on the rented GPU and merge them \(6\.5 GB\)/);
+  assert.deepEqual(folder.steps[0].args.files.map((f) => f.to), ["unet/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.safetensors", "text_encoder/model.safetensors", "text_encoder_2/model.safetensors"]);
+  assert.equal(folder.steps[0].args.into, MERGED);
+  assert.deepEqual(folder.tryWith, { kind: "image", repo: PONY, file: MERGED, agent: agent.url });
+  assert.deepEqual(folder.remove, [{ kind: "gpu-file", repo: PONY, file: MERGED }]);
+  const merged = await post("/api/run", { kind: "pull-image-folder", args: folder.steps[0].args, where: "rented" });
+  assert.equal(merged.status, 200);
+  const mergeLog = await (await get(`/api/runs/${(await merged.json()).id}`)).text();
+  assert.match(mergeLog, /Downloading 4 files of John6666\/pony-realism-v23-sdxl on the rented GPU and merging them/);
+  assert.match(mergeLog, /100% of 1\.30 GB \(unet\/diffusion_pytorch_model\.fp16\.safetensors\)/);
+  assert.match(mergeLog, /merging the parts into one checkpoint/);
+  assert.match(mergeLog, /Done\./);
+  assert.equal(agent.state.downloads.at(-1).into, MERGED);
+  assert.equal((await json(`/api/model?id=${PONY}`)).plan.steps[0].done, true, "the merged checkpoint on the machine counts as done");
+  assert.equal((await post("/api/remove", { kind: "gpu-file", repo: PONY, file: MERGED })).status, 200);
   // The download runs on the machine with progress; afterwards the step is done, and the file can be removed there.
   const res = await post("/api/run", { kind: "pull-image-model", args: { repo: SD, file: FILE }, where: "rented" });
   assert.equal(res.status, 200);
@@ -209,10 +231,10 @@ test("an image model's plan on the rented GPU is one download, done by the machi
   assert.match(log, /Downloading stable-diffusion-v1-5-pruned-emaonly-Q8_0\.gguf on the rented GPU/);
   assert.match(log, /50% of 1\.10 GB/);
   assert.match(log, /Done\./);
-  assert.deepEqual(agent.state.downloads.map((d) => d.file), [FILE]);
+  assert.deepEqual(agent.state.downloads.filter((d) => d.file).map((d) => d.file), [FILE]);
   assert.equal((await json(`/api/model?id=${SD}`)).plan.steps[0].done, true);
   assert.equal((await post("/api/remove", { kind: "gpu-file", repo: SD, file: FILE })).status, 200);
-  assert.deepEqual(agent.state.deleted, [`${SD}/${FILE}`]);
+  assert.deepEqual(agent.state.deleted.at(-1), `${SD}/${FILE}`);
   assert.equal((await post("/api/remove", { kind: "gpu-file", repo: SD, file: FILE })).status, 400, "gone already");
   // A machine still starting: the plan says so.
   agent.state.down = true;

@@ -822,8 +822,20 @@ export async function removeAgentModel(repo, file, fetchImpl = fetch, agent = ""
 
 export function pullImageOnAgent(repo, file, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
   if (!REPO_RE.test(String(repo)) || !FILE_RE.test(String(file))) throw new Error("Bad model arguments");
+  return agentDownload(`Downloading ${file} on the rented GPU`, "/download", { repo, file, token: token || undefined }, fetchImpl, agent, owner);
+}
+
+// A folder-layout model: the agent fetches the parts and merges them into
+// one checkpoint named `into`, the way this computer would.
+export function pullImageFolderOnAgent(repo, files, into, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
+  const parts = Array.isArray(files) ? files.map((f) => ({ from: String(f?.from ?? ""), to: String(f?.to ?? f?.from ?? "") })) : [];
+  if (!REPO_RE.test(String(repo)) || !FILE_RE.test(String(into)) || !parts.length || parts.length > 8 || !parts.every((p) => SUBPATH_RE.test(p.from) && SUBPATH_RE.test(p.to))) throw new Error("Bad model arguments");
+  return agentDownload(`Downloading ${parts.length} files of ${repo} on the rented GPU and merging them`, "/download-folder", { repo, files: parts, into, token: token || undefined }, fetchImpl, agent, owner);
+}
+
+function agentDownload(title, route, body, fetchImpl, agent, owner) {
   if (!agent) throw new Error("No rented GPU");
-  return startCustomRun(`Downloading ${file} on the rented GPU`, async (emit, cancelled) => {
+  return startCustomRun(title, async (emit, cancelled) => {
     const started = Date.now();
     let said = false;
     for (;;) {
@@ -841,7 +853,7 @@ export function pullImageOnAgent(repo, file, fetchImpl = fetch, agent = "", { ow
     }
     if (said) emit("The machine is up.");
     const stop = new AbortController();
-    const res = await fetchImpl(`${agent}/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo, file, token: token || undefined }), signal: stop.signal });
+    const res = await fetchImpl(`${agent}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: stop.signal });
     if (!res.ok) throw new Error(`the rented GPU answered HTTP ${res.status}`);
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -861,7 +873,7 @@ export function pullImageOnAgent(repo, file, fetchImpl = fetch, agent = "", { ow
         if (!line.trim()) continue;
         const j = JSON.parse(line);
         if (j.error) throw new Error(j.error);
-        const text = j.total ? `${Math.floor(((j.completed ?? 0) / j.total) * 100)}% of ${(j.total / 1024 ** 3).toFixed(2)} GB` : String(j.status ?? "");
+        const text = j.total ? `${Math.floor(((j.completed ?? 0) / j.total) * 100)}% of ${(j.total / 1024 ** 3).toFixed(2)} GB${j.file && route !== "/download" ? ` (${j.file})` : ""}` : String(j.status ?? "");
         if (text && text !== last) emit(text);
         last = text;
       }

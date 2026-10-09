@@ -68,6 +68,12 @@ export function wantedKind(q) {
   return null;
 }
 
+// A LoRA, an adapter, a VAE or the like: a piece that changes a base
+// model, not a model that makes anything by itself.
+export function isAddon(name) {
+  return ADDON.test(String(name));
+}
+
 export function qualityScore(m) {
   const id = String(m.id ?? "");
   const name = id.split("/").pop() ?? "";

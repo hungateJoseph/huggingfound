@@ -36,7 +36,9 @@ COPY --from=build /out/lib/ /opt/huggingfound/lib/
 # library, which only a machine with a GPU has and the host supplies.
 RUN LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli \
  && ! (LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli | grep "not found" | grep -v "libcuda.so.1")
-COPY agent.js start.sh /opt/huggingfound/
+# Built from the repository root (docker build -f gpu/Dockerfile .) so the
+# agent can take the folder-layout merge from src/ rather than a copy.
+COPY gpu/agent.js gpu/start.sh src/convert.js /opt/huggingfound/
 RUN chmod +x /opt/huggingfound/start.sh /opt/huggingfound/bin/sd-cli /opt/huggingfound/bin/sd-server
 
 ENV PATH=/opt/node/bin:/opt/huggingfound/bin:$PATH \

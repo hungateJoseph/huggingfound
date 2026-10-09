@@ -139,15 +139,15 @@ not survive a restart.
 - Save an Anthropic key so Claude's checks and revisions need no retyping.
   A visitor who is not signed in can still type a key into "Check an answer".
 
-Image and speech models still run only in HuggingFound on a person's own
-computer: a rented machine runs Ollama, which is chat models.
+Speech models still run only in HuggingFound on a person's own computer.
 
 ## Phase 6: The machine image (you, once)
 
 Rented machines run `ghcr.io/hungatejoseph/huggingfound-gpu`, built by the
-GitHub Actions workflow `.github/workflows/gpu-image.yml` from `gpu/`
-whenever that folder changes (the first build compiles stable-diffusion.cpp
-with CUDA and takes up to an hour). RunPod pulls it without credentials
+GitHub Actions workflow `.github/workflows/gpu-image.yml` (from the
+repository root with `gpu/Dockerfile`, so the agent shares the folder-merge
+code in `src/convert.js`) whenever `gpu/` or that file changes (the first
+build compiles stable-diffusion.cpp with CUDA and takes up to an hour). RunPod pulls it without credentials
 only if the package is public:
 
 1. On GitHub, open your profile's **Packages**, then `huggingfound-gpu`,

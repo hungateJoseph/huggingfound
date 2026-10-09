@@ -2,6 +2,7 @@ import { chooseFile, quantTag } from "./hf.js";
 import { fitFor, platformName } from "./machine.js";
 import { imageSettings } from "./runners.js";
 import { estimate, measuredText } from "./speed.js";
+import { isAddon } from "./quality.js";
 
 // Turns "I want to try this model" into the ordered steps this computer
 // needs, with the ones already done marked so the page can skip them.
@@ -27,6 +28,15 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
     };
   }
   const file = (preferredFile && files.find((f) => f.name === preferredFile)) || chooseFile(files, runner.id);
+  if (!file && isAddon(model.name)) {
+    return {
+      runnable: false,
+      addon: true,
+      reason: `${model.name} is an add-on, not a model: a piece that changes how a base model such as Stable Diffusion 1.5 or SDXL draws (a LoRA, an adapter, a VAE). It makes nothing by itself, and HuggingFound does not apply add-ons yet. Pick a full model from the Easy to set up list, or one that says Makes images.`,
+      steps: [],
+      link: model.url,
+    };
+  }
   if (!file) {
     return {
       runnable: false,
@@ -160,8 +170,19 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       if (model.gated) {
         return { runnable: false, gated: true, reason: `${model.name} is gated, and the rented GPU fetches files without your Hugging Face token. Run it on this computer instead, or pick an open model.`, steps: [], link: model.url };
       }
+      // A folder-layout model: the machine fetches the parts and merges
+      // them into one checkpoint, as this computer would.
       if (file.folder) {
-        return { runnable: false, reason: `${model.name} is published as several files that HuggingFound merges on this computer; the rented GPU runs image models that come as one file. Run it on this computer, or pick a single-file version.`, steps: [], link: model.url };
+        const done = detected.gpu.files.includes(`${model.id}/${mergedName}`);
+        steps.push({
+          kind: "pull-image-folder",
+          args: { repo: model.id, files: file.parts.map((part) => ({ from: part.from, to: part.to })), into: mergedName },
+          title: `Download the model's ${file.parts.length} files on the rented GPU and merge them (${file.gb ? file.gb.toFixed(1) + " GB" : "size unknown"})`,
+          text: `The machine fetches the parts (the image network, the text encoders and the decoder) straight from Hugging Face onto its own disk and merges them into one checkpoint; nothing comes to this computer. ${fit.text}.${detected.gpu.running ? "" : ` ${serverDownNote(detected.gpu.rented)}`}`,
+          done,
+          command: `download ${file.parts.map((part) => part.from).join(", ")} onto the rented GPU and merge into ${mergedName}`,
+        });
+        return { runnable: true, runner: runner.id, file, fit, speed, measured: "", steps, qualities, fast, style, remote: detected.gpu.url, tryWith: { kind: "image", repo: model.id, file: mergedName, agent: detected.gpu.url }, remove: [{ kind: "gpu-file", repo: model.id, file: mergedName }] };
       }
       const key = `${model.id}/${file.name}`;
       const done = detected.gpu.files.includes(key);

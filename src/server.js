@@ -10,7 +10,8 @@ import { createHub } from "./hf.js";
 import { chatServerMachine, describeMachine, hostedMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeAgentModel, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullImageOnAgent, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
+import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeAgentModel, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullImageOnAgent,
+  pullImageFolderOnAgent, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
@@ -668,11 +669,15 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         // The page says where a step belongs; a rented machine is the
         // default while there is one, this computer otherwise.
         const where = body.where || (remote || agent ? "rented" : "local");
-        if (hosted && !(where === "rented" && ((remote && body.kind === "pull-model") || (agent && body.kind === "pull-image-model")))) return send(res, 403, { error: "On this site the only step that runs is a download onto your rented GPU. Everything else runs in HuggingFound on your own computer." });
-        if (where === "rented" && body.kind === "pull-image-model") {
+        const agentKinds = ["pull-image-model", "pull-image-folder"];
+        if (hosted && !(where === "rented" && ((remote && body.kind === "pull-model") || (agent && agentKinds.includes(body.kind))))) return send(res, 403, { error: "On this site the only step that runs is a download onto your rented GPU. Everything else runs in HuggingFound on your own computer." });
+        if (where === "rented" && agentKinds.includes(body.kind)) {
           if (!agent) return send(res, 400, { error: "No GPU is rented. Rent one in Settings, or run the model on this computer." });
           const release = ctx.rental?.hold() ?? (() => {});
-          const run = pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner: ctx.user?.id ?? null });
+          const owner = ctx.user?.id ?? null;
+          const run = body.kind === "pull-image-folder"
+            ? pullImageFolderOnAgent(String(args.repo ?? ""), args.files, String(args.into ?? ""), fetchImpl, agent, { owner })
+            : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner });
           run.finished.then(release);
           return send(res, 200, { id: run.id });
         }

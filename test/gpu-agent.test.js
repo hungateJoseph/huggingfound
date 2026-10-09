@@ -70,7 +70,7 @@ async function finish(id) {
 test("it answers health, and only the allowed origins may call it from a page", async () => {
   for (let i = 0; i < 20 && (await (await get("/health")).json()).sdOk === null; i++) await new Promise((r) => setTimeout(r, 50));
   const h = await (await get("/health")).json();
-  assert.deepEqual(h, { ok: true, version: "1", sdOk: true, sdProblem: "", loaded: null, ready: false, loading: false, models: 0 }, "the image server's startup check passed");
+  assert.deepEqual(h, { ok: true, version: "2", sdOk: true, sdProblem: "", loaded: null, ready: false, loading: false, models: 0 }, "the image server's startup check passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -97,6 +97,32 @@ test("it downloads a model file from the Hub onto the disk with progress, and li
   const gated = (await (await post("/download", { repo: "black-forest-labs/FLUX.1-dev", file: "flux1-dev.safetensors" })).text()).trim().split("\n").map((l) => JSON.parse(l));
   assert.match(gated.at(-1).error, /gated/);
   assert.ok(!fs.existsSync(path.join(modelsDir, "black-forest-labs")));
+});
+
+test("a folder-layout model is fetched in parts and merged into one checkpoint; the parts are removed", async () => {
+  const PONY = "John6666/pony-realism-v23-sdxl";
+  const files = [
+    { from: "unet/diffusion_pytorch_model.fp16.safetensors", to: "unet/diffusion_pytorch_model.safetensors" },
+    { from: "vae/diffusion_pytorch_model.fp16.safetensors", to: "vae/diffusion_pytorch_model.safetensors" },
+    { from: "text_encoder/model.fp16.safetensors", to: "text_encoder/model.safetensors" },
+    { from: "text_encoder_2/model.fp16.safetensors", to: "text_encoder_2/model.safetensors" },
+  ];
+  assert.equal((await post("/download-folder", { repo: PONY, files: [{ from: "../etc/passwd" }], into: "x.safetensors" })).status, 400);
+  assert.equal((await post("/download-folder", { repo: PONY, files, into: "x.gguf" })).status, 400, "the merge is a safetensors checkpoint");
+  const res = await post("/download-folder", { repo: PONY, files, into: "pony-realism-v23-sdxl.safetensors" });
+  assert.equal(res.status, 200);
+  const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines[0].status, "file 1 of 4: unet/diffusion_pytorch_model.fp16.safetensors");
+  assert.ok(lines.some((l) => /^Merging unet/.test(l.status)), "the converter reports what it merges");
+  assert.equal(lines.at(-1).status, "success", JSON.stringify(lines.at(-1)));
+  const dir = path.join(modelsDir, "John6666", "pony-realism-v23-sdxl");
+  assert.ok(fs.existsSync(path.join(dir, "pony-realism-v23-sdxl.safetensors")));
+  assert.ok(!fs.existsSync(path.join(dir, "unet")), "the parts are gone once merged");
+  const { models } = await (await get("/models")).json();
+  assert.ok(models.some((m) => m.repo === PONY && m.file === "pony-realism-v23-sdxl.safetensors"));
+  const again = (await (await post("/download-folder", { repo: PONY, files, into: "pony-realism-v23-sdxl.safetensors" })).text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(again[0].status, "already here");
+  assert.equal((await del("/models", { repo: PONY, file: "pony-realism-v23-sdxl.safetensors" })).status, 200);
 });
 
 test("a picture job loads the model, hands the request to sd-server and returns the picture", async () => {
