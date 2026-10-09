@@ -72,7 +72,7 @@ async function finish(id) {
 test("it answers health, and only the allowed origins may call it from a page", async () => {
   for (let i = 0; i < 40 && ((await (await get("/health")).json()).sdOk === null || (await (await get("/health")).json()).pyOk === null); i++) await new Promise((r) => setTimeout(r, 50));
   const h = await (await get("/health")).json();
-  assert.deepEqual(h, { ok: true, version: "3", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0 }, "both engines' startup checks passed");
+  assert.deepEqual(h, { ok: true, version: "4", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0 }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -217,6 +217,44 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   assert.equal((await del("/models", { repo: QWEN, file: "model_index.json" })).status, 200);
   assert.ok(!fs.existsSync(dir));
   assert.equal((await del("/models", { repo: WAN, file: "model_index.json" })).status, 200);
+});
+
+test("an add-on is kept apart from the models and applied by the worker to a base checkpoint with a reference picture", async () => {
+  const ADDON = "h94/IP-Adapter-FaceID";
+  const files = ["ip-adapter-faceid_sd15.bin", "ip-adapter-faceid_sd15_lora.safetensors"];
+  assert.equal((await post("/download-addon", { repo: ADDON, files: ["../x"] })).status, 400);
+  const res = await post("/download-addon", { repo: ADDON, files });
+  assert.equal(res.status, 200);
+  const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines.at(-1).status, "success", JSON.stringify(lines.at(-1)));
+  const listed = await (await get("/models")).json();
+  assert.deepEqual(listed.addons.map((a) => [a.repo, a.file]), files.map((f) => [ADDON, f]));
+  assert.ok(!listed.models.some((m) => m.repo === ADDON), "an add-on is not a model");
+  // A base checkpoint to apply it to, as a single file the worker loads.
+  const BASE = "someone/sd-base";
+  const basePath = path.join(modelsDir, "someone", "sd-base", "sd-v1-5.safetensors");
+  fs.mkdirSync(path.dirname(basePath), { recursive: true });
+  fs.writeFileSync(basePath, "fake checkpoint");
+  assert.equal((await post("/jobs", { repo: REPO, file: FILE, prompt: "x", addon: { repo: ADDON, file: files[0] } })).status, 400, "not onto a GGUF");
+  const ref = `data:image/png;base64,${"B".repeat(200)}`;
+  const job = await (await post("/jobs", { repo: BASE, file: "sd-v1-5.safetensors", prompt: "a portrait", addon: { kind: "ip-adapter", repo: ADDON, file: files[0], lora: files[1], scale: 0.7 }, ipImage: ref, width: 512, height: 512, steps: 25 })).json();
+  const done = await finish(job.id);
+  assert.equal(done.status, "completed", done.error);
+  const asked = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const load = asked.filter((r) => r.op === "load").at(-1);
+  assert.equal(load.file, basePath, "the base is loaded from its single file");
+  assert.deepEqual(load.adapters.map((a) => [a.kind, path.basename(a.path), path.basename(a.lora), a.scale, a.faceid, a.plus, a.xl]), [["ip-adapter", files[0], files[1], 0.7, true, false, false]]);
+  const gen = asked.at(-1);
+  assert.equal(gen.ipImage, "200 chars");
+  assert.equal((await (await get("/health")).json()).loaded, `${BASE}/sd-v1-5.safetensors`);
+  // Without the reference picture the worker says so.
+  const bare = await (await post("/jobs", { repo: BASE, file: "sd-v1-5.safetensors", prompt: "a portrait", addon: { repo: ADDON, file: files[0] } })).json();
+  assert.match((await finish(bare.id)).error, /needs a reference picture/);
+  assert.equal((await del("/models", { repo: ADDON, file: files[0], addon: true })).status, 200);
+  assert.equal((await del("/models", { repo: ADDON, file: files[0], addon: true })).status, 404);
+  assert.equal((await (await get("/models")).json()).addons.length, 1);
+  assert.equal((await del("/models", { repo: BASE, file: "sd-v1-5.safetensors" })).status, 200, "removing the base the worker holds");
+  assert.equal((await (await get("/health")).json()).loaded, null);
 });
 
 test("removing a model unloads it and frees the disk", async () => {

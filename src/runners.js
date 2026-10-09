@@ -841,6 +841,32 @@ export function pullImageRepoOnAgent(repo, files, fetchImpl = fetch, agent = "",
   return agentDownload(`Downloading ${list.length} files of ${repo} on the rented GPU`, "/download-repo", { repo, files: list, token: token || undefined }, fetchImpl, agent, owner);
 }
 
+export function pullAddonOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
+  const list = Array.isArray(files) ? files.map((f) => String(f ?? "")) : [];
+  if (!REPO_RE.test(String(repo)) || !list.length || list.length > 40 || !list.every((f) => SUBPATH_RE.test(f))) throw new Error("Bad add-on arguments");
+  return agentDownload(`Downloading the add-on ${repo} on the rented GPU`, "/download-addon", { repo, files: list, token: token || undefined }, fetchImpl, agent, owner);
+}
+
+export async function removeAgentAddon(repo, file, fetchImpl = fetch, agent = "") {
+  if (!REPO_RE.test(String(repo)) || !SUBPATH_RE.test(String(file))) throw new Error("Bad add-on arguments");
+  if (!agent) throw new Error("No rented GPU");
+  let res;
+  try {
+    res = await fetchImpl(`${agent}/models`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo, file, addon: true }) });
+  } catch {
+    throw new Error("The rented GPU is not answering, so its add-ons cannot be removed right now");
+  }
+  if (res.status === 404) throw new Error("The rented GPU does not have that add-on");
+  if (!res.ok) throw new Error(`The rented GPU replied HTTP ${res.status}`);
+}
+
+// Every add-on file on the agent, as "owner/repo/path".
+export async function agentAddons(agent, fetchImpl = fetch) {
+  const res = await fetchImpl(`${agent}/models`, { signal: AbortSignal.timeout(4000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return ((await res.json()).addons ?? []).map((a) => `${a.repo}/${a.file}`);
+}
+
 function agentDownload(title, route, body, fetchImpl, agent, owner) {
   if (!agent) throw new Error("No rented GPU");
   return startCustomRun(title, async (emit, cancelled) => {

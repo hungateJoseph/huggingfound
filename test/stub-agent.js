@@ -8,7 +8,7 @@ import http from "node:http";
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 export function startStubAgent() {
-  const state = { files: [], downloads: [], jobs: [], deleted: [], origins: [], down: false, loaded: null };
+  const state = { files: [], addons: [], downloads: [], jobs: [], deleted: [], origins: [], down: false, loaded: null };
   const polls = new Map();
   const server = http.createServer((req, res) => {
     let body = "";
@@ -31,7 +31,14 @@ export function startStubAgent() {
       const data = body ? JSON.parse(body) : {};
       res.setHeader("Content-Type", "application/json");
       if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: "1", loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
-      if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files }));
+      if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files, addons: state.addons }));
+      if (req.url === "/models" && req.method === "DELETE" && data.addon) {
+        const before = state.addons.length;
+        state.addons = state.addons.filter((f) => !(f.repo === data.repo && f.file === data.file));
+        state.deleted.push(`addon:${data.repo}/${data.file}`);
+        if (state.addons.length === before) res.statusCode = 404;
+        return res.end("{}");
+      }
       if (req.url === "/models" && req.method === "DELETE") {
         const before = state.files.length;
         state.files = state.files.filter((f) => !(f.repo === data.repo && f.file === data.file));
@@ -47,6 +54,15 @@ export function startStubAgent() {
           await new Promise((r) => setTimeout(r, 5));
         }
         state.files.push({ repo: data.repo, file: data.file, gb: 1.1 });
+        return res.end();
+      }
+      if (req.url === "/download-addon") {
+        state.downloads.push({ repo: data.repo, files: data.files, addon: true, token: data.token ?? null });
+        for (const line of [{ status: `file 1 of ${data.files.length}: ${data.files[0]}` }, { status: "success" }]) {
+          res.write(`${JSON.stringify(line)}\n`);
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        for (const f of data.files) if (!state.addons.some((a) => a.repo === data.repo && a.file === f)) state.addons.push({ repo: data.repo, file: f, gb: 0.1 });
         return res.end();
       }
       if (req.url === "/download-repo") {

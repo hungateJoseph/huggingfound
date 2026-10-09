@@ -42,8 +42,10 @@ const HUB = process.env.HF_HUB || "https://huggingface.co";
 const PYTHON = process.env.HF_PYTHON || "/opt/huggingfound/py/bin/python3";
 const WORKER = process.env.HF_WORKER || path.join(path.dirname(fileURLToPath(import.meta.url)), "worker.py");
 const INDEX = "model_index.json";
+// Add-ons (IP-Adapters, LoRAs) live apart from models; they are applied to one.
+const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
-const VERSION = "3";
+const VERSION = "4";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -55,6 +57,7 @@ const MAX_BODY = 12 * 1024 * 1024;
 const JOB_TTL = 30 * 60e3;
 
 fs.mkdirSync(MODELS_DIR, { recursive: true });
+fs.mkdirSync(ADDONS_DIR, { recursive: true });
 
 // Whether the image server can start at all on this machine, checked once
 // at startup so a broken binary shows in the machine's status rather than
@@ -109,7 +112,7 @@ checkWorker();
 // One long-lived process; requests go one at a time, each a line in and a
 // line out, with progress lines in between.
 
-const py = { proc: null, dir: null, kind: null, pending: null, chain: Promise.resolve(), tail: "" };
+const py = { proc: null, dir: null, key: null, kind: null, pending: null, chain: Promise.resolve(), tail: "" };
 
 function stopWorker() {
   if (py.proc) {
@@ -191,12 +194,17 @@ function askWorker(req, onProgress = null, timeoutMs = 60 * 60e3) {
 
 // Loads a folder model into the worker, replacing whatever either engine
 // had: the two cannot share the card.
-async function ensureWorkerLoaded(dir) {
-  if (py.proc && py.dir === dir) return;
+async function ensureWorkerLoaded(target, adapters = []) {
+  const key = JSON.stringify([target, adapters]);
+  if (py.proc && py.dir && py.key === key) return;
   stopServer();
-  const answer = await askWorker({ op: "load", dir }, null, 30 * 60e3);
+  const req = { op: "load", adapters };
+  if (target.endsWith(`/${INDEX}`)) req.dir = path.dirname(target);
+  else req.file = target;
+  const answer = await askWorker(req, null, 30 * 60e3);
   if (!answer.ok) throw new Error(answer.error || "the model did not load");
-  py.dir = dir;
+  py.dir = req.dir ?? req.file;
+  py.key = key;
   py.kind = answer.kind ?? "image";
 }
 
@@ -204,6 +212,7 @@ async function unloadWorker() {
   if (!py.proc) return;
   if (py.dir) await askWorker({ op: "unload" });
   py.dir = null;
+  py.key = null;
   py.kind = null;
 }
 
@@ -290,11 +299,21 @@ function startJob(input) {
     try {
       const file = modelFile(input.repo, input.file);
       if (!fs.existsSync(file)) throw new Error("that model is not on this machine yet");
-      if (input.file === INDEX) {
-        await ensureWorkerLoaded(path.dirname(file));
+      if (input.file === INDEX || input.addon) {
+        // An add-on is applied by the Python side to a base it loads itself,
+        // a folder or a single checkpoint.
+        const adapters = [];
+        if (input.addon) {
+          const main = addonFile(input.addon.repo, input.addon.file);
+          if (!fs.existsSync(main)) throw new Error("that add-on is not on this machine yet");
+          const lora = input.addon.lora ? addonFile(input.addon.repo, input.addon.lora) : null;
+          if (lora && !fs.existsSync(lora)) throw new Error("the add-on's LoRA is not on this machine yet");
+          adapters.push({ kind: input.addon.kind, path: main, lora, scale: input.addon.scale, faceid: /faceid/i.test(input.addon.file), plus: /plus/i.test(input.addon.file), xl: /sdxl/i.test(input.addon.file) });
+        }
+        await ensureWorkerLoaded(file, adapters);
         job.kind = py.kind;
         job.status = "generating";
-        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, strength: input.init ? input.strength : undefined };
+        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined };
         const answer = await askWorker(req, (p) => (job.progress = p));
         if (!answer.ok) throw new Error(answer.error || "the worker made nothing");
         if (answer.video) {
@@ -368,6 +387,34 @@ function modelFile(repo, file, deep = false) {
   return path.join(MODELS_DIR, ...repo.split("/"), ...file.split("/"));
 }
 
+function addonFile(repo, file) {
+  if (!REPO_RE.test(repo) || !SUBPATH_RE.test(file)) throw new Error("Bad add-on name");
+  return path.join(ADDONS_DIR, ...repo.split("/"), ...file.split("/"));
+}
+
+// Every add-on file on the machine, by repository and path within it.
+function listAddons() {
+  const out = [];
+  const walk = (dir, repo, rel) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const sub = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(full, repo, sub);
+      else if (entry.isFile() && !entry.name.endsWith(".part")) out.push({ repo, file: sub, gb: fs.statSync(full).size / 1024 ** 3 });
+    }
+  };
+  if (!fs.existsSync(ADDONS_DIR)) return out;
+  for (const owner of fs.readdirSync(ADDONS_DIR)) {
+    const ownerDir = path.join(ADDONS_DIR, owner);
+    if (!fs.statSync(ownerDir).isDirectory()) continue;
+    for (const repo of fs.readdirSync(ownerDir)) {
+      const repoDir = path.join(ownerDir, repo);
+      if (fs.statSync(repoDir).isDirectory()) walk(repoDir, `${owner}/${repo}`, "");
+    }
+  }
+  return out;
+}
+
 function listModels() {
   const out = [];
   if (!fs.existsSync(MODELS_DIR)) return out;
@@ -410,9 +457,8 @@ const downloading = new Set();
 // lines of JSON in Ollama's style: status, total, completed. `saveAs` is
 // the path to keep it under when it differs (a half-precision variant
 // loses its .fp16 suffix so the merge finds it).
-async function download(repo, file, token, write, saveAs = file) {
-  const dest = modelFile(repo, saveAs, true);
-  const key = `${repo}/${saveAs}`;
+async function download(repo, file, token, write, saveAs = file, dest = modelFile(repo, saveAs, true)) {
+  const key = dest;
   if (downloading.has(key)) throw new Error("that file is already being downloaded");
   if (fs.existsSync(dest)) {
     write({ status: "already here" });
@@ -467,6 +513,22 @@ async function downloadRepo(repo, files, token, write) {
     await download(repo, f, token, (line) => (line.status === "success" ? null : write(line)));
   }
   if (!fs.existsSync(modelFile(repo, INDEX))) throw new Error("the download has no model_index.json, so the model cannot be loaded");
+  write({ status: "success" });
+}
+
+// An add-on's files, kept apart from the models.
+async function downloadAddon(repo, files, token, write) {
+  const missing = files.filter((f) => !fs.existsSync(addonFile(repo, f)));
+  if (!missing.length) {
+    write({ status: "already here" });
+    write({ status: "success" });
+    return;
+  }
+  for (const [i, f] of files.entries()) {
+    if (fs.existsSync(addonFile(repo, f))) continue;
+    write({ status: `file ${i + 1} of ${files.length}: ${f}` });
+    await download(repo, f, token, (line) => (line.status === "success" ? null : write(line)), f, addonFile(repo, f));
+  }
   write({ status: "success" });
 }
 
@@ -561,10 +623,10 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/health") {
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
-      const loaded = sd.file ? rel(sd.file) : py.dir ? `${rel(py.dir)}/${INDEX}` : null;
+      const loaded = sd.file ? rel(sd.file) : py.dir ? (py.dir.endsWith(".safetensors") || py.dir.endsWith(".ckpt") ? rel(py.dir) : `${rel(py.dir)}/${INDEX}`) : null;
       return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length });
     }
-    if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels() });
+    if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
     if (req.method === "POST" && url.pathname === "/download") {
       const body = await readJson(req, 64 * 1024);
       const repo = String(body.repo ?? "");
@@ -574,6 +636,20 @@ const server = http.createServer(async (req, res) => {
       const write = (line) => res.write(`${JSON.stringify(line)}\n`);
       try {
         await download(repo, file, typeof body.token === "string" ? body.token : "", write);
+      } catch (err) {
+        write({ error: err.message });
+      }
+      return res.end();
+    }
+    if (req.method === "POST" && url.pathname === "/download-addon") {
+      const body = await readJson(req, 64 * 1024);
+      const repo = String(body.repo ?? "");
+      const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
+      if (!REPO_RE.test(repo) || files.length === 0 || files.length > 40 || !files.every((f) => SUBPATH_RE.test(f))) return send(res, 400, { error: "Bad add-on name" });
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      const write = (line) => res.write(`${JSON.stringify(line)}\n`);
+      try {
+        await downloadAddon(repo, files, typeof body.token === "string" ? body.token : "", write);
       } catch (err) {
         write({ error: err.message });
       }
@@ -611,6 +687,23 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "DELETE" && url.pathname === "/models") {
       const body = await readJson(req, 64 * 1024);
+      if (body.addon) {
+        let f;
+        try {
+          f = addonFile(String(body.repo ?? ""), String(body.file ?? ""));
+        } catch (err) {
+          return send(res, 400, { error: err.message });
+        }
+        if (!fs.existsSync(f)) return send(res, 404, { error: "Not on this machine" });
+        if (py.key?.includes(f)) await unloadWorker().catch(() => {});
+        fs.rmSync(f, { force: true });
+        let d = path.dirname(f);
+        while (d.startsWith(ADDONS_DIR) && d !== ADDONS_DIR && fs.existsSync(d) && fs.readdirSync(d).length === 0) {
+          fs.rmdirSync(d);
+          d = path.dirname(d);
+        }
+        return send(res, 200, { ok: true });
+      }
       let file;
       try {
         file = modelFile(String(body.repo ?? ""), String(body.file ?? ""));
@@ -618,6 +711,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 400, { error: err.message });
       }
       if (sd.file === file) stopServer();
+      if (py.dir === file) await unloadWorker().catch(() => {});
       if (!fs.existsSync(file)) return send(res, 404, { error: "Not on this machine" });
       if (path.basename(file) === INDEX) {
         // The index stands for the whole folder.
@@ -638,7 +732,21 @@ const server = http.createServer(async (req, res) => {
       const prompt = String(body.prompt ?? "").slice(0, 2000);
       if (!REPO_RE.test(repo) || !FILE_RE.test(file)) return send(res, 400, { error: "Bad model name" });
       if (!prompt.trim()) return send(res, 400, { error: "Say what the picture should show" });
-      const diffusers = file === INDEX;
+      let addon = null;
+      if (body.addon && typeof body.addon === "object") {
+        const a = body.addon;
+        const kind = a.kind === "lora" ? "lora" : "ip-adapter";
+        if (!REPO_RE.test(String(a.repo ?? "")) || !SUBPATH_RE.test(String(a.file ?? "")) || (a.lora && !SUBPATH_RE.test(String(a.lora)))) return send(res, 400, { error: "Bad add-on name" });
+        if (!/\.(safetensors|ckpt)$/i.test(file) && file !== INDEX) return send(res, 400, { error: "An add-on applies to a checkpoint or a folder model, not to a GGUF file" });
+        addon = { kind, repo: String(a.repo), file: String(a.file), lora: a.lora ? String(a.lora) : null, scale: Math.min(2, Math.max(0, Number(a.scale) || (kind === "lora" ? 0.8 : 0.6))) };
+      }
+      let ipImage = null;
+      if (body.ipImage) {
+        const data = String(body.ipImage).replace(/^data:image\/\w+;base64,/, "");
+        if (!/^[A-Za-z0-9+/]+=*$/.test(data) || data.length > 11 * 1024 * 1024) return send(res, 400, { error: "The reference picture did not arrive intact" });
+        ipImage = data;
+      }
+      const diffusers = file === INDEX || Boolean(addon);
       // sd-server wants multiples of 64; the diffusers families take 16.
       const grain = diffusers ? 16 : 64;
       const size = (n, fallback) => (Number.isInteger(n) && n >= 256 && n <= 2048 && n % grain === 0 ? n : fallback);
@@ -656,7 +764,7 @@ const server = http.createServer(async (req, res) => {
         init = data;
         strength = Math.min(0.95, Math.max(0.1, Number(body.strength) || 0.55));
       }
-      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps });
+      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage });
       return send(res, 202, { id: job.id, status: job.status });
     }
     const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})$/);

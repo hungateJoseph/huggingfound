@@ -414,3 +414,6 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 #machine-line { margin: 4px 0 0; }
 .picture-note { justify-self: stretch; max-width: 100%; margin: 4px 0; }
 .picture-note .tools-row { margin-top: 8px; }
+.addon-setup { display: grid; gap: 10px; margin: 8px 0 14px; }
+.addon-setup select, .addon-setup input[type="file"] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); max-width: 100%; }
+.addon-setup output { font-weight: 500; }

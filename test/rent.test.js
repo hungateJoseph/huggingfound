@@ -277,6 +277,25 @@ test("a diffusers-family model is fetched as a folder on the rented GPU, and a v
   assert.equal((await post("/api/remove", { kind: "gpu-file", repo: QWEN_IMAGE, file: "model_index.json" })).status, 200);
 });
 
+test("an add-on is downloaded onto the rented GPU and applied there to a base model", async () => {
+  const ADDON = "h94/IP-Adapter-FaceID";
+  const { plan, choice } = await json(`/api/model?id=${ADDON}`);
+  assert.equal(choice.gpuOnly, true);
+  assert.equal(choice.where, "rented");
+  assert.equal(plan.runnable, true, plan.reason);
+  assert.equal(plan.steps[0].kind, "pull-addon");
+  const res = await post("/api/run", { kind: "pull-addon", args: plan.steps[0].args, where: "rented" });
+  assert.equal(res.status, 200);
+  const log = await (await get(`/api/runs/${(await res.json()).id}`)).text();
+  assert.match(log, /Downloading the add-on h94\/IP-Adapter-FaceID on the rented GPU/);
+  assert.match(log, /Done\./);
+  assert.equal(agent.state.downloads.at(-1).addon, true);
+  assert.equal((await json(`/api/model?id=${ADDON}`)).plan.steps[0].done, true);
+  assert.equal((await post("/api/remove", { kind: "gpu-addon", repo: ADDON, file: "ip-adapter-faceid_sd15.bin" })).status, 200);
+  assert.equal(agent.state.deleted.at(-1), `addon:${ADDON}/ip-adapter-faceid_sd15.bin`);
+  assert.equal((await json(`/api/model?id=${ADDON}`)).plan.steps[0].done, false, "a missing file makes the step pending again");
+});
+
 test("everything on the machine is listed in one place: chat models with the loaded one, image models with the one in the GPU", async () => {
   const SD = "second-state/stable-diffusion-v1-5-GGUF";
   const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";

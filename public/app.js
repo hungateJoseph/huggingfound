@@ -475,14 +475,16 @@ function makesOf(m) {
   const cats = m.categories ?? [];
   const runner = m.runner?.id ?? m.runner ?? "";
   let kind;
-  if (/video/.test(pipeline)) kind = "video";
+  // An add-on makes nothing by itself; it is applied to an image model.
+  if (/\b(lora|loras|lycoris|vae|ip[-_]?adapter|adapter|controlnet|embeddings?|textual[-_ ]inversion)\b/i.test(String(m.id ?? "").split("/").pop() ?? "")) kind = "addon";
+  else if (/video/.test(pipeline)) kind = "video";
   else if (cats.includes("images") || cats.includes("nsfw-images") || runner === "sd" || /^(text-to-image|image-to-image|image-editing|inpainting|unconditional-image-generation)$/.test(pipeline)) kind = "images";
   else if (cats.includes("speech") || runner === "whisper" || pipeline === "automatic-speech-recognition") kind = "speech";
   else if (pipeline === "text-to-speech" || pipeline === "text-to-audio") kind = "audio";
   else if (cats.includes("vision") || pipeline === "image-text-to-text") kind = "vision";
   else if (runner === "ollama" || pipeline === "text-generation" || cats.some((c) => ["chat", "coding", "math", "nsfw-writing"].includes(c))) kind = "text";
   else kind = "other";
-  const text = { video: "Makes video", images: "Makes images", speech: "Transcribes speech", audio: "Makes sound", vision: "Text, understands images", text: "Text only, no pictures", other: pipeline ? pipeline.replace(/-/g, " ") : "Other" }[kind];
+  const text = { addon: "Add-on for image models", video: "Makes video", images: "Makes images", speech: "Transcribes speech", audio: "Makes sound", vision: "Text, understands images", text: "Text only, no pictures", other: pipeline ? pipeline.replace(/-/g, " ") : "Other" }[kind];
   return { kind, text, fits: (want) => (want === "images" ? kind === "images" : want === "video" ? kind === "video" : true) };
 }
 
@@ -637,7 +639,7 @@ function renderModel(model, plan, choice = null) {
   parts.push(`<div class="facts">
     <span class="pill makes">${esc(makesOf(model).text)}</span>
     <span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span>
-    <span class="fact" title="${esc(plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : plan.file.repo ? `${plan.file.files.length} files, loaded as a folder by the diffusers library` : plan.file.name)}">${plan.file.folder ? `${plan.file.parts.length} files` : plan.file.repo ? `${plan.file.files.length} files` : esc(plan.file.name)}${plan.file.gb ? `, ${plan.file.gb.toFixed(1)} GB` : ""}</span>
+    <span class="fact" title="${esc(plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : plan.file.repo ? `${plan.file.files.length} files, loaded as a folder by the diffusers library` : plan.file.name)}">${plan.file.folder ? `${plan.file.parts.length} files` : plan.file.repo ? `${plan.file.files.length} files` : esc(plan.file.name)}${plan.file.gb ? `, ${plan.file.gb.toFixed(plan.file.gb < 1 ? 2 : 1)} GB` : ""}</span>
     <span class="fact">${plan.measured ? esc(plan.measured) : esc(plan.speed?.text ?? "")}</span>
   </div>
   ${onMachine ? `<p class="muted small">Runs on your rented GPU; your browser talks to the machine directly and nothing passes through ${state.hosted ? "this site" : "the app"}.</p>` : plan.measured ? "" : `<p class="muted small">${state.hosted ? "Speed is a guess for a typical laptop without a separate GPU." : "Speed is a guess for this computer until a real run measures it."}</p>`}`);
@@ -1911,9 +1913,19 @@ function renderImage(box, t) {
   const loaded = plan?.keepsLoaded && !t.remote && !t.agent ? `<p class="muted small loaded-note"><span>After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.</span><button class="ghost" id="unload-model">Unload now</button></p>` : "";
   const style = plan?.style ? `<p class="muted small style-note"><b>${plan.style.kind === "anime" ? "Anime model." : "Realistic model."}</b> ${esc(plan.style.text)}</p>` : "";
   const video = t.kind === "video";
+  const addon = t.engine === "addon";
+  const bases = addon ? t.bases ?? [] : [];
+  const variants = addon ? t.variants ?? [] : [];
+  const addonHtml = addon ? `<div class="addon-setup">
+      ${bases.length ? `<label class="field"><span>Base model on the rented GPU</span><select id="addon-base">${bases.map((b, i) => `<option value="${i}">${esc(b.label)}${b.xl ? " · SDXL" : " · SD 1.5"}</option>`).join("")}</select></label>` : `<div class="notice warn">No base model is on the rented GPU yet. Open a Stable Diffusion 1.5 or SDXL model from the Easy to set up list, download it on the rented GPU, then come back here.</div>`}
+      <label class="field"><span>Variant</span><select id="addon-variant">${variants.map((v, i) => `<option value="${i}">${esc(v.label)}${v.gb ? `, ${v.gb.toFixed(2)} GB` : ""}</option>`).join("")}</select><small class="muted">Pick the variant made for the base's family: SD 1.5 variants for SD 1.5 bases, SDXL for SDXL.</small></label>
+      ${t.addonKind === "ip-adapter" ? `<label class="field"><span>Reference picture</span><input type="file" id="addon-ref" accept="image/*"><small class="muted">${variants.some((v) => v.faceid) ? "A clear photo of the face to keep." : "The picture whose subject or style to carry over."}</small></label>` : ""}
+      <label class="field"><span>Strength <output id="addon-scale-out">${t.addonKind === "lora" ? "0.8" : "0.6"}</output></span><input type="range" id="addon-scale" min="0.1" max="1.5" step="0.05" value="${t.addonKind === "lora" ? "0.8" : "0.6"}"></label>
+    </div>` : "";
   box.innerHTML = `<h3>Try it</h3>
     ${remote}
     ${style}
+    ${addonHtml}
     <div class="effort-title">Effort</div>
     <div class="quality" id="quality">${options}</div>
     <div class="prompt-input">
@@ -1932,6 +1944,7 @@ function renderImage(box, t) {
     await api.post("/api/unload", {});
     notice("The image model was unloaded from memory.", "ok");
   });
+  box.querySelector("#addon-scale")?.addEventListener("input", (e) => (box.querySelector("#addon-scale-out").value = e.target.value));
   $("#image-go").addEventListener("click", async () => {
     const prompt = $("#image-prompt").value.trim();
     if (!prompt) return;
@@ -1950,13 +1963,31 @@ function renderImage(box, t) {
       if (t.agent) {
         // The rented GPU makes the picture; the browser asks it directly and
         // keeps the result, which is saved only when downloaded.
-        const job = await agentJob(t.agent, { repo: t.repo, file: t.file, prompt, negative, quality: plan?.qualities?.[quality], video }, (line) => {
+        let target = { repo: t.repo, file: t.file };
+        let extra = {};
+        if (addon) {
+          const base = bases[Number(box.querySelector("#addon-base")?.value ?? -1)];
+          if (!base) throw new Error("no base model on the rented GPU yet");
+          const variant = variants[Number(box.querySelector("#addon-variant").value)];
+          if (variant.xl !== base.xl) throw new Error(`${variant.label} is for ${variant.xl ? "SDXL" : "SD 1.5"} bases; pick a matching variant or base`);
+          const refFile = box.querySelector("#addon-ref")?.files[0];
+          if (t.addonKind === "ip-adapter" && !refFile) throw new Error("pick a reference picture first");
+          const ipImage = refFile ? await new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(String(r.result));
+            r.onerror = () => reject(new Error("could not read the picture"));
+            r.readAsDataURL(refFile);
+          }) : null;
+          target = base;
+          extra = { addon: { kind: t.addonKind, repo: t.repo, file: variant.file, lora: variant.lora, scale: Number(box.querySelector("#addon-scale").value) }, ipImage, xl: base.xl };
+        }
+        const job = await agentJob(t.agent, { ...target, prompt, negative, quality: plan?.qualities?.[quality], video, ...extra }, (line) => {
           log.textContent += line + "\n";
           log.scrollTop = log.scrollHeight;
         });
         $("#image-out").innerHTML = "";
         if (job.video) showClip($("#image-out"), { data: job.video, prompt });
-        else showPicture($("#image-out"), { data: job.image, prompt, negative, model: t.repo, madeBy: t.file, agent: t.agent, repo: t.repo, modelFile: t.file, chain: [] });
+        else showPicture($("#image-out"), { data: job.image, prompt, negative, model: t.repo, madeBy: addon ? `${t.repo.split("/").pop()} on ${target.repo.split("/").pop()}` : t.file, agent: t.agent, repo: target.repo, modelFile: target.file, chain: [] });
         return;
       }
       const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt, negative, quality } });
@@ -2025,12 +2056,17 @@ async function agentPicture(agent, args, onLine = () => {}) {
 
 // A job on the rented GPU: a picture, or a clip from a video family. The
 // browser asks the machine directly and keeps the result in the page.
-async function agentJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false }, onLine = () => {}) {
+async function agentJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false }, onLine = () => {}) {
   api.post("/api/rent/touch", {}).catch(() => {});
   const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
-  const width = q.width ?? q.size;
-  const height = q.height ?? q.size;
+  // An add-on on an SDXL base draws at SDXL's size.
+  const width = addon && xl ? 1024 : (q.width ?? q.size);
+  const height = addon && xl ? 1024 : (q.height ?? q.size);
   const body = { repo, file, prompt, negative, steps: q.steps, width, height, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler };
+  if (addon) {
+    body.addon = addon;
+    if (ipImage) body.ipImage = ipImage;
+  }
   if (video) {
     body.frames = q.frames;
     body.fps = q.fps;

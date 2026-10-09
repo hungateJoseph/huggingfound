@@ -11,6 +11,7 @@ import { isAddon } from "./quality.js";
 export function buildPlan({ model, files, machine, detected, hasToken, preferredFile, timings = {}, imageServer = null }) {
   const runner = model.runner;
   if (!runner) return { runnable: false, reason: "This kind of model has no local runner in HuggingFound yet.", steps: [] };
+  if (isAddon(model.name) && (runner.id === "sd" || runner.id === "diffusers")) return addonPlan({ model, files, detected });
   if (runner.id === "diffusers") return diffusersPlan({ model, files, machine, detected });
   if (!runner.easy) {
     return {
@@ -238,6 +239,92 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
   return { runnable: false, reason: "Unsupported runner.", steps: [] };
 }
 
+// An add-on (an IP-Adapter, a LoRA) is applied on the rented GPU to a base
+// model that is already there: the machine fetches the add-on's files and
+// its Python side loads the base with the add-on on top. An IP-Adapter
+// steers the picture with a reference image; a LoRA changes the style.
+export function addonVariants(files) {
+  const names = files.map((f) => f.name);
+  const weights = files.filter((f) => /\.(bin|safetensors)$/i.test(f.name) && !/image_encoder/i.test(f.name) && !/\.safetensors\.index\.json$/i.test(f.name));
+  const ip = weights.filter((f) => /ip[-_]?adapter/i.test(f.name) && !/_lora\.safetensors$/i.test(f.name));
+  const kind = ip.length ? "ip-adapter" : "lora";
+  const pool = kind === "ip-adapter" ? ip : weights.filter((f) => /lora|lycoris/i.test(f.name) || /\.safetensors$/i.test(f.name));
+  // Where a file comes as .bin and .safetensors, one copy is enough.
+  const seen = new Set();
+  const variants = [];
+  for (const f of pool.sort((a, b) => (/\.safetensors$/i.test(a.name) ? -1 : 1) - (/\.safetensors$/i.test(b.name) ? -1 : 1))) {
+    const stem = f.name.replace(/\.(bin|safetensors)$/i, "");
+    if (seen.has(stem)) continue;
+    seen.add(stem);
+    const lora = kind === "ip-adapter" ? names.find((n) => n === `${stem}_lora.safetensors`) ?? null : null;
+    const xl = /sdxl|xl/i.test(stem);
+    const label = stem.split("/").pop().replace(/^ip[-_]?adapter[-_]?/i, "").replace(/[-_]/g, " ") || stem;
+    variants.push({ file: f.name, lora, xl, gb: (f.gb ?? 0) + (lora ? files.find((x) => x.name === lora)?.gb ?? 0 : 0), label: `${label} (${xl ? "SDXL" : "SD 1.5"})`, faceid: /faceid/i.test(stem) });
+  }
+  const encoders = files.filter((f) => /image_encoder\/(config\.json|model\.safetensors)$/i.test(f.name)).map((f) => f.name);
+  return { kind, variants, encoders };
+}
+
+function addonPlan({ model, files, detected }) {
+  const { kind, variants, encoders } = addonVariants(files);
+  const what = kind === "ip-adapter" ? "an IP-Adapter: it steers a base model's picture with a reference image (a face, a style, a subject)" : "a LoRA: it changes how a base model draws";
+  if (!variants.length) {
+    return { runnable: false, addon: true, reason: `${model.name} is an add-on with no weights HuggingFound recognises. It makes nothing by itself.`, steps: [], link: model.url };
+  }
+  if (!detected.gpu?.url) {
+    return {
+      runnable: false,
+      addon: true,
+      needsGpu: true,
+      reason: `${model.name} is ${what}. Add-ons are applied on a rented GPU, to a Stable Diffusion 1.5 or SDXL model downloaded there. Rent one by the hour and the machine does the rest.`,
+      steps: [],
+      link: model.url,
+    };
+  }
+  const download = [...variants.map((v) => v.file), ...variants.map((v) => v.lora).filter(Boolean), ...encoders];
+  const have = new Set(detected.gpu.addons ?? []);
+  const done = download.every((f) => have.has(`${model.id}/${f}`));
+  const gb = variants.reduce((t, v) => t + v.gb, 0) + encoders.reduce((t, n) => t + (files.find((f) => f.name === n)?.gb ?? 0), 0);
+  // Bases: the checkpoints and Stable Diffusion folders already on the machine.
+  const bases = (detected.gpu.files ?? [])
+    .filter((key) => /\.(safetensors|ckpt)$/i.test(key) || key.endsWith("/model_index.json"))
+    .map((key) => {
+      const i = key.indexOf("/", key.indexOf("/") + 1);
+      const repo = key.slice(0, i);
+      const file = key.slice(i + 1);
+      return { repo, file, xl: /xl/i.test(key), label: `${repo.split("/").pop()}${file === "model_index.json" ? "" : ` (${file})`}` };
+    });
+  const steps = [{
+    kind: "pull-addon",
+    args: { repo: model.id, files: download },
+    title: `Download the add-on on the rented GPU (${gb ? gb.toFixed(1) + " GB" : "size unknown"})`,
+    text: `The machine fetches ${model.name}'s ${download.length} file${download.length === 1 ? "" : "s"} straight from Hugging Face; nothing comes to this computer.${detected.gpu.running ? "" : ` ${serverDownNote(detected.gpu.rented)}`}`,
+    done,
+    command: `download ${download.length} files of ${model.id} onto the rented GPU`,
+  }];
+  const qualities = {
+    fast: { steps: 15, size: 512, cfg: 6, text: "fewer steps" },
+    default: { steps: 25, size: 512, cfg: 6, text: "the standard settings" },
+    max: { steps: 40, size: 512, cfg: 6, text: "more steps" },
+  };
+  return {
+    runnable: true,
+    runner: "addon",
+    addon: true,
+    file: { name: `${variants.length} variant${variants.length === 1 ? "" : "s"}`, gb: gb || null, variants: variants.length },
+    fit: { level: "good", text: `${what.split(":")[0]}` },
+    speed: { text: bases.length ? `Applied to a base model on the rented GPU; ${bases.length} there now.` : "Needs a Stable Diffusion 1.5 or SDXL model on the rented GPU first: download one there from the Easy to set up list.", seconds: null },
+    measured: "",
+    steps,
+    qualities,
+    fast: false,
+    style: null,
+    remote: detected.gpu.url,
+    tryWith: { kind: "image", engine: "addon", addonKind: kind, repo: model.id, agent: detected.gpu.url, variants, bases },
+    remove: download.map((f) => ({ kind: "gpu-addon", repo: model.id, file: f })),
+  };
+}
+
 // A model only the diffusers library loads (FLUX, Qwen-Image, Wan and the
 // other folder-layout families, video included): it runs on a rented GPU,
 // where the machine fetches the folder and its Python side makes the
@@ -253,9 +340,6 @@ function diffusersPlan({ model, files, machine, detected }) {
       steps: [],
       link: `https://huggingface.co/models?search=${encodeURIComponent(model.name.replace(/-?gguf/i, ""))}%20diffusers`,
     };
-  }
-  if (isAddon(model.name)) {
-    return { runnable: false, addon: true, reason: `${model.name} is an add-on, not a model: a piece that changes how a base model draws. It makes nothing by itself, and HuggingFound does not apply add-ons yet.`, steps: [], link: model.url };
   }
   if (!detected.gpu?.url) {
     return {

@@ -26,7 +26,7 @@ RUN mkdir -p /out/lib \
  && ls -la /out/lib
 
 FROM ollama/ollama:latest
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils libgomp1 python3 python3-venv ffmpeg && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils libgomp1 python3 python3-venv python3-dev build-essential ffmpeg libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz | tar -xJ -C /opt \
  && mv /opt/node-v22.23.3-linux-x64 /opt/node
 # The Python side: torch for CUDA 12.4 and the diffusers library, for the
@@ -37,6 +37,11 @@ RUN python3 -m venv /opt/huggingfound/py \
  && /opt/huggingfound/py/bin/pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 \
  && /opt/huggingfound/py/bin/pip install --no-cache-dir diffusers transformers accelerate safetensors sentencepiece protobuf pillow imageio imageio-ffmpeg ftfy gguf \
  && /opt/huggingfound/py/bin/python3 -c "import torch, diffusers, transformers; print(torch.__version__, diffusers.__version__, transformers.__version__)"
+# Face embeddings for the FaceID adapters. Built from source, so a failure
+# here must not sink the whole image; the worker says so at run time instead.
+RUN /opt/huggingfound/py/bin/pip install --no-cache-dir insightface onnxruntime-gpu opencv-python-headless \
+ && /opt/huggingfound/py/bin/python3 -c "import insightface, onnxruntime; print('insightface', insightface.__version__)" \
+ || echo "insightface could not be installed; FaceID add-ons will say so"
 COPY --from=build /src/build/bin/sd-cli /src/build/bin/sd-server /opt/huggingfound/bin/
 COPY --from=build /out/lib/ /opt/huggingfound/lib/
 # Every library must resolve here, or the build fails now rather than on a

@@ -143,13 +143,34 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.match(pieces.reason, /loose pieces/);
 });
 
-test("an add-on such as an IP-Adapter is explained as a piece for a base model, not a model", () => {
-  const model = { ...summarize({ id: "h94/IP-Adapter-FaceID", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion"] }), files: [{ name: "ip-adapter-faceid_sd15.bin", gb: 0.1 }, { name: "ip-adapter-faceid_sdxl.bin", gb: 1 }] };
-  const plan = buildPlan({ model, files: model.files, machine, detected: nothing, hasToken: false });
-  assert.equal(plan.runnable, false);
-  assert.equal(plan.addon, true);
-  assert.match(plan.reason, /is an add-on, not a model/);
-  assert.equal(plan.link, model.url);
+test("an add-on such as an IP-Adapter asks for a rented GPU, then is applied there to a base model already on the machine", () => {
+  const files = [{ name: "README.md", gb: 0 }, { name: "ip-adapter-faceid.jpg", gb: 0 }, { name: "ip-adapter-faceid_sd15.bin", gb: 0.09 }, { name: "ip-adapter-faceid_sd15_lora.safetensors", gb: 0.05 }, { name: "ip-adapter-faceid-plusv2_sd15.bin", gb: 0.15 }, { name: "ip-adapter-faceid-plusv2_sd15_lora.safetensors", gb: 0.05 }, { name: "ip-adapter-faceid_sdxl.bin", gb: 1 }, { name: "ip-adapter-faceid_sdxl_lora.safetensors", gb: 0.35 }];
+  const model = { ...summarize({ id: "h94/IP-Adapter-FaceID", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion"] }), files };
+  const without = buildPlan({ model, files, machine, detected: nothing(), hasToken: false });
+  assert.equal(without.runnable, false);
+  assert.equal(without.addon, true);
+  assert.equal(without.needsGpu, true);
+  assert.match(without.reason, /is an IP-Adapter[\s\S]*applied on a rented GPU/);
+  const gpu = { ...nothing(), gpu: { url: "http://agent", running: true, files: ["second-state/stable-diffusion-v1-5-GGUF/sd-v1-5.safetensors", "x/some-xl/model_index.json", "y/quant/model-Q8_0.gguf"], addons: [] } };
+  const plan = buildPlan({ model, files, machine, detected: gpu, hasToken: false });
+  assert.equal(plan.runnable, true);
+  assert.equal(plan.runner, "addon");
+  assert.equal(plan.steps.length, 1);
+  assert.equal(plan.steps[0].kind, "pull-addon");
+  assert.deepEqual(plan.steps[0].args.files, ["ip-adapter-faceid_sd15.bin", "ip-adapter-faceid-plusv2_sd15.bin", "ip-adapter-faceid_sdxl.bin", "ip-adapter-faceid_sd15_lora.safetensors", "ip-adapter-faceid-plusv2_sd15_lora.safetensors", "ip-adapter-faceid_sdxl_lora.safetensors"], "the adapters and their LoRAs, no pictures or card");
+  assert.equal(plan.tryWith.engine, "addon");
+  assert.equal(plan.tryWith.addonKind, "ip-adapter");
+  assert.deepEqual(plan.tryWith.variants.map((v) => [v.file, v.lora, v.xl, v.faceid]), [["ip-adapter-faceid_sd15.bin", "ip-adapter-faceid_sd15_lora.safetensors", false, true], ["ip-adapter-faceid-plusv2_sd15.bin", "ip-adapter-faceid-plusv2_sd15_lora.safetensors", false, true], ["ip-adapter-faceid_sdxl.bin", "ip-adapter-faceid_sdxl_lora.safetensors", true, true]]);
+  assert.deepEqual(plan.tryWith.bases.map((b) => [b.repo, b.file, b.xl]), [["second-state/stable-diffusion-v1-5-GGUF", "sd-v1-5.safetensors", false], ["x/some-xl", "model_index.json", true]], "checkpoints and folders on the machine, never a GGUF");
+  assert.equal(plan.steps[0].done, false);
+  const done = buildPlan({ model, files, machine, detected: { ...gpu, gpu: { ...gpu.gpu, addons: plan.steps[0].args.files.map((f) => `h94/IP-Adapter-FaceID/${f}`) } }, hasToken: false });
+  assert.equal(done.steps[0].done, true);
+  assert.equal(plan.remove.length, 6);
+  // A plain IP-Adapter brings its image encoder along.
+  const plain = { ...summarize({ id: "h94/IP-Adapter", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers"] }), files: [{ name: "models/ip-adapter_sd15.bin", gb: 0.04 }, { name: "models/ip-adapter_sd15.safetensors", gb: 0.04 }, { name: "models/image_encoder/config.json", gb: 0 }, { name: "models/image_encoder/model.safetensors", gb: 2.35 }, { name: "models/image_encoder/pytorch_model.bin", gb: 2.35 }] };
+  const plainPlan = buildPlan({ model: plain, files: plain.files, machine, detected: gpu, hasToken: false });
+  assert.deepEqual(plainPlan.steps[0].args.files, ["models/ip-adapter_sd15.safetensors", "models/image_encoder/config.json", "models/image_encoder/model.safetensors"], "one copy of the adapter, the encoder's config and safetensors");
+  assert.equal(plainPlan.tryWith.variants[0].faceid, false);
 });
 
 test("a diffusers folder plans one download of all its parts and loads as a folder", () => {

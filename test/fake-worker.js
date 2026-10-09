@@ -23,6 +23,12 @@ rl.on("line", (line) => {
   const req = JSON.parse(line);
   if (req.op === "check") return say({ ok: true, cuda: true });
   if (req.op === "load") {
+    if (process.env.FAKE_WORKER_LOG) fs.appendFileSync(process.env.FAKE_WORKER_LOG, JSON.stringify(req) + "\n");
+    if (req.file) {
+      if (!fs.existsSync(req.file)) return say({ ok: false, error: "FileNotFoundError: no such checkpoint" });
+      loaded = { file: req.file, kind: "image", adapters: req.adapters ?? [] };
+      return say({ ok: true, kind: "image", offloaded: false, weightsGb: 2, vramGb: 48 });
+    }
     const index = path.join(req.dir, "model_index.json");
     if (!fs.existsSync(index)) return say({ ok: false, error: "ValueError: that folder has no model_index.json; it is not a diffusers model" });
     const cls = JSON.parse(fs.readFileSync(index, "utf8"))._class_name ?? "";
@@ -31,7 +37,8 @@ rl.on("line", (line) => {
   }
   if (req.op === "generate") {
     if (!loaded) return say({ ok: false, error: "ValueError: no model is loaded" });
-    if (process.env.FAKE_WORKER_LOG) fs.appendFileSync(process.env.FAKE_WORKER_LOG, JSON.stringify({ ...req, init: req.init ? `${req.init.length} chars` : null }) + "\n");
+    if (process.env.FAKE_WORKER_LOG) fs.appendFileSync(process.env.FAKE_WORKER_LOG, JSON.stringify({ ...req, init: req.init ? `${req.init.length} chars` : null, ipImage: req.ipImage ? `${req.ipImage.length} chars` : null }) + "\n");
+    if ((loaded.adapters ?? []).some((a) => a.kind !== "lora") && !req.ipImage) return say({ ok: false, error: "ValueError: this add-on needs a reference picture" });
     if (/fail please/.test(req.prompt)) return say({ ok: false, error: "RuntimeError: the model choked" });
     say({ progress: 0.5 });
     if (loaded.kind === "video") return say({ ok: true, video: MP4, frames: req.frames ?? 33, fps: 16 });

@@ -34,7 +34,7 @@ def say(obj):
     _out.flush()
 
 
-state = {"pipe": None, "dir": None, "kind": None, "offloaded": False}
+state = {"pipe": None, "dir": None, "key": None, "kind": None, "offloaded": False, "adapters": [], "faces": None}
 
 
 def check():
@@ -65,7 +65,9 @@ def folder_gb(path):
 def unload():
     state["pipe"] = None
     state["dir"] = None
+    state["key"] = None
     state["kind"] = None
+    state["adapters"] = []
     gc.collect()
     with contextlib.suppress(Exception):
         import torch
@@ -73,28 +75,44 @@ def unload():
         torch.cuda.empty_cache()
 
 
-def load(model_dir):
+def load(req):
     import torch
     from diffusers import DiffusionPipeline
 
-    if not os.path.isfile(os.path.join(model_dir, "model_index.json")):
-        raise ValueError("that folder has no model_index.json; it is not a diffusers model")
-    if state["dir"] == model_dir and state["pipe"] is not None:
+    model_dir = str(req.get("dir") or "")
+    single = str(req.get("file") or "")
+    adapters = req.get("adapters") or []
+    key = json.dumps([model_dir or single, adapters], sort_keys=True)
+    if state.get("key") == key and state["pipe"] is not None:
         return {"ok": True, "kind": state["kind"], "already": True}
     unload()
-    with open(os.path.join(model_dir, "model_index.json"), encoding="utf-8") as f:
-        index = json.load(f)
-    cls = str(index.get("_class_name", ""))
-    # Wan, LTX, Mochi and CogVideoX name their pipelines after themselves.
-    kind = "video" if any(w in cls for w in ("Video", "Wan", "LTX", "Mochi", "CogVideoX", "Allegro", "Latte", "SkyReels", "Hunyuan")) else "image"
     dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
-    pipe = DiffusionPipeline.from_pretrained(model_dir, torch_dtype=dtype, local_files_only=True)
+    if single:
+        # A single checkpoint of the Stable Diffusion families, as an add-on's base.
+        from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
+
+        xl = bool(req.get("xl")) or "xl" in os.path.basename(single).lower() or os.path.getsize(single) > 5 * 1024**3
+        cls_single = StableDiffusionXLPipeline if xl else StableDiffusionPipeline
+        pipe = cls_single.from_single_file(single, torch_dtype=dtype)
+        kind = "image"
+        weights = os.path.getsize(single) / 1024**3
+    else:
+        if not os.path.isfile(os.path.join(model_dir, "model_index.json")):
+            raise ValueError("that folder has no model_index.json; it is not a diffusers model")
+        with open(os.path.join(model_dir, "model_index.json"), encoding="utf-8") as f:
+            index = json.load(f)
+        cls = str(index.get("_class_name", ""))
+        # Wan, LTX, Mochi and CogVideoX name their pipelines after themselves.
+        kind = "video" if any(w in cls for w in ("Video", "Wan", "LTX", "Mochi", "CogVideoX", "Allegro", "Latte", "SkyReels", "Hunyuan")) else "image"
+        pipe = DiffusionPipeline.from_pretrained(model_dir, torch_dtype=dtype, local_files_only=True)
+        weights = folder_gb(model_dir)
     with contextlib.suppress(Exception):
         pipe.set_progress_bar_config(disable=True)
+    for adapter in adapters:
+        apply_adapter(pipe, adapter, dtype)
     # A model that fits the card goes onto it whole; a bigger one streams
     # its parts through the card as they are needed, slower but it runs.
     vram = torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0
-    weights = folder_gb(model_dir)
     offloaded = False
     if torch.cuda.is_available():
         if weights * 1.15 < vram:
@@ -104,8 +122,82 @@ def load(model_dir):
             offloaded = True
     with contextlib.suppress(Exception):
         pipe.vae.enable_tiling()
-    state.update(pipe=pipe, dir=model_dir, kind=kind, offloaded=offloaded)
+    state.update(pipe=pipe, dir=model_dir or single, key=key, kind=kind, offloaded=offloaded, adapters=adapters)
     return {"ok": True, "kind": kind, "offloaded": offloaded, "weightsGb": round(weights, 1), "vramGb": round(vram, 1)}
+
+
+# ---- add-ons -----------------------------------------------------------------------
+# An IP-Adapter steers the picture with a reference image: the plain ones
+# through a CLIP image encoder, the FaceID ones through a face embedding
+# from insightface (with a CLIP encoder as well for the "plus" variants).
+# A LoRA just changes the weights by a scale.
+
+
+def apply_adapter(pipe, adapter, dtype):
+    kind = adapter.get("kind") or "ip-adapter"
+    path = str(adapter.get("path") or "")
+    if not os.path.isfile(path):
+        raise ValueError(f"add-on file missing: {path}")
+    folder, name = os.path.split(path)
+    scale = float(adapter.get("scale") or (0.8 if kind == "lora" else 0.6))
+    if kind == "lora":
+        pipe.load_lora_weights(folder, weight_name=name, adapter_name="addon")
+        pipe.set_adapters(["addon"], adapter_weights=[scale])
+        return
+    faceid = bool(adapter.get("faceid"))
+    plus = bool(adapter.get("plus"))
+    if faceid:
+        pipe.load_ip_adapter(folder, subfolder="", weight_name=name, image_encoder_folder=None)
+        if plus:
+            from transformers import CLIPVisionModelWithProjection
+
+            pipe.image_encoder = CLIPVisionModelWithProjection.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K", torch_dtype=dtype)
+    else:
+        # The plain adapters ship with their image encoder next to them
+        # (models/image_encoder or sdxl_models/image_encoder).
+        pipe.load_ip_adapter(os.path.dirname(folder), subfolder=os.path.basename(folder), weight_name=name)
+    pipe.set_ip_adapter_scale(scale)
+    lora = adapter.get("lora")
+    if lora and os.path.isfile(str(lora)):
+        lfolder, lname = os.path.split(str(lora))
+        pipe.load_lora_weights(lfolder, weight_name=lname, adapter_name="faceid")
+        pipe.set_adapters(["faceid"], adapter_weights=[0.7])
+
+
+def face_embeds(pipe, image, adapter, dtype):
+    """The insightface embedding of the first face in the picture, in the
+    form the FaceID adapters take, plus the aligned crop the plus variants
+    also want."""
+    import numpy as np
+    import torch
+
+    try:
+        from insightface.app import FaceAnalysis
+        from insightface.utils import face_align
+    except ImportError as err:
+        raise ValueError("FaceID add-ons need the insightface library, which this machine image lacks; the plain IP-Adapter (h94/IP-Adapter) works without it") from err
+    app = state.get("faces")
+    if app is None:
+        app = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+        app.prepare(ctx_id=0, det_size=(640, 640))
+        state["faces"] = app
+    bgr = np.array(image)[:, :, ::-1]
+    faces = app.get(bgr)
+    if not faces:
+        raise ValueError("no face was found in the reference picture")
+    face = faces[0]
+    ref = torch.from_numpy(face.normed_embedding).unsqueeze(0).unsqueeze(0)
+    ids = torch.cat([torch.zeros_like(ref), ref]).to(dtype=dtype, device=pipe.device)
+    if adapter.get("plus"):
+        from PIL import Image
+
+        crop = face_align.norm_crop(bgr, landmark=face.kps, image_size=224)
+        crop_img = Image.fromarray(crop[:, :, ::-1])
+        clip = pipe.prepare_ip_adapter_image_embeds([crop_img], None, torch.device(pipe.device), 1, True)[0]
+        layer = pipe.unet.encoder_hid_proj.image_projection_layers[0]
+        layer.clip_embeds = clip.to(dtype=dtype)
+        layer.shortcut = "plusv2" in os.path.basename(str(adapter.get("path", ""))).lower()
+    return [ids]
 
 
 def accepted(pipe):
@@ -139,6 +231,20 @@ def generate(req):
     seed = req.get("seed")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     kwargs["generator"] = torch.Generator(device=device).manual_seed(int(seed)) if seed is not None else None
+
+    # A reference picture for an IP-Adapter.
+    ip_image = req.get("ipImage")
+    adapters = state.get("adapters") or []
+    ip_adapter = next((a for a in adapters if (a.get("kind") or "ip-adapter") == "ip-adapter"), None)
+    if ip_adapter:
+        if not ip_image:
+            raise ValueError("this add-on needs a reference picture")
+        reference = Image.open(io.BytesIO(base64.b64decode(ip_image))).convert("RGB")
+        dtype = pipe.unet.dtype if hasattr(pipe, "unet") else torch.float16
+        if ip_adapter.get("faceid"):
+            kwargs["ip_adapter_image_embeds"] = face_embeds(pipe, reference, ip_adapter, dtype)
+        else:
+            kwargs["ip_adapter_image"] = reference
 
     init = req.get("init")
     if init:
@@ -209,7 +315,7 @@ def main():
             if op == "check":
                 say(check())
             elif op == "load":
-                say(load(str(req.get("dir", ""))))
+                say(load(req))
             elif op == "generate":
                 say(generate(req))
             elif op == "unload":
