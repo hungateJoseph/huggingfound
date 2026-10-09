@@ -420,6 +420,13 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
           forget(id);
           return { rented: false, gone: true };
         }
+        // A stopped machine's disk lives on one host; starting needs a free
+        // card of its kind on that very host, which RunPod may not have.
+        if (/not enough free GPUs|no free GPU|insufficient.*GPU/i.test(err.message)) {
+          const e = new RentError("No free GPU on this machine's host right now: a stopped machine's disk is pinned to one host, and its card is taken. Try Start again in a while, or replace the machine with a fresh one of the same size; its models download again.", 503);
+          e.noGpu = true;
+          throw e;
+        }
         if (!/HTTP 409/.test(err.message)) throw err;
       }
       point(id, Number(env().RUNPOD_POD_GB) || 24);

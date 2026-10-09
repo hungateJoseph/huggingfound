@@ -628,7 +628,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (req.method === "POST" && action === "delete") return send(res, 200, await mine.remove());
         return send(res, 404, { error: "Not found" });
       } catch (err) {
-        return send(res, err instanceof RentError ? err.status : 500, { error: err.message });
+        return send(res, err instanceof RentError ? err.status : 500, { error: err.message, ...(err.noGpu ? { noGpu: true } : {}) });
       }
     }
     // Whether the chat server answers, and what it holds.

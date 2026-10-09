@@ -258,6 +258,14 @@ test("stopping ends the charge and frees the chat server; starting brings both b
   assert.ok(plan.steps.length >= 3, "the local plan again");
   // Stopping twice is harmless.
   assert.equal((await post("/api/rent/stop", {})).status, 200);
+  // A stopped machine whose host has no free card says so, with the way out.
+  runpod.state.noGpu = true;
+  const busy = await post("/api/rent/start", {});
+  assert.equal(busy.status, 503);
+  const why = await busy.json();
+  assert.match(why.error, /No free GPU on this machine's host right now/);
+  assert.equal(why.noGpu, true);
+  runpod.state.noGpu = false;
   const started = await (await post("/api/rent/start", {})).json();
   assert.ok(["STARTING", "RUNNING"].includes(started.status), started.status);
   assert.deepEqual(runpod.state.actions.slice(-1), [`${stopped.id}:start`]);

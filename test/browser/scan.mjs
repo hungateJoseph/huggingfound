@@ -682,7 +682,13 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click('.where-opt[data-where="rented"]');
   await page.waitForSelector("#ask-start");
   assert.match(await page.locator(".rent-ask").innerText(), /Your rented GPU \(NVIDIA A40, 48 GB\) is stopped/);
+  // When the machine's host has no free card, the panel says so and offers a fresh machine instead of a raw error.
+  runpod.state.noGpu = true;
   await page.click("#ask-start");
+  await page.waitForSelector("#rent-replace");
+  assert.match(await page.locator("#rent-panel .notice").innerText(), /No free GPU on this machine's host right now/);
+  runpod.state.noGpu = false;
+  await page.click("#rent-start");
   await page.waitForFunction(() => /starting|ready/.test(document.querySelector("#rent-bar").textContent));
   await page.waitForFunction(() => document.querySelector(".where-opt.on")?.textContent === "On a rented GPU");
   assert.equal(await page.locator("#steps .step").count(), 1, "planned for the machine again");

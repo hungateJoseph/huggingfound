@@ -75,6 +75,7 @@ export function startStubRunpod() {
         }
         if (data.action === "start") {
           if (pod.status !== "EXITED" && pod.status !== "ERROR") return reply(409, { message: "Action not valid for current pod status" });
+          if (state.noGpu) return reply(400, { message: "There are not enough free GPUs on the host machine to start this pod." });
           pod.status = "STARTING";
           return reply(200, view(pod));
         }

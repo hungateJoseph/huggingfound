@@ -21,7 +21,11 @@ const api = {
 
 async function check(res) {
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(body.error || `HTTP ${res.status}`);
+    err.body = body;
+    throw err;
+  }
   return body;
 }
 
@@ -2376,6 +2380,7 @@ function renderRental() {
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
+      ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
         ${r.status === "EXITED" || r.status === "ERROR" ? `<button class="primary" id="rent-start">Start</button>` : ""}
@@ -2392,6 +2397,7 @@ function renderRental() {
     ${privateImageHtml(true)}`;
     loadRegistries(panel);
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
+    panel.querySelector("#rent-replace")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
     panel.querySelector("#rent-save-idle").addEventListener("click", async () => {
@@ -2520,11 +2526,38 @@ async function rentAction(action, question) {
   try {
     state.rental = await api.post(`/api/rent/${action}`, {});
   } catch (err) {
-    alert(err.message);
+    // Said in the panel, not in a browser alert; a stopped machine whose
+    // host has no free card gets the way out: a fresh machine of the same size.
+    state.rentError = { action, message: err.message, noGpu: Boolean(err.body?.noGpu) };
+    renderRental();
+    if ($("#settings").hidden) {
+      $("#settings").hidden = false;
+      $("#rent").scrollIntoView({ block: "start" });
+    }
     return;
   }
+  state.rentError = null;
   await load();
   afterRentalChange();
+}
+
+// Deletes the stopped machine and opens renting with the same size chosen.
+async function replaceMachine() {
+  const gb = state.rental?.gb;
+  if (!confirm(`Delete this machine and rent a fresh ${gb ? `${gb} GB ` : ""}one? Its models download again on the new machine.`)) return;
+  try {
+    state.rental = await api.post("/api/rent/delete", {});
+  } catch (err) {
+    state.rentError = { action: "delete", message: err.message };
+    renderRental();
+    return;
+  }
+  state.rentError = null;
+  state.rentWant = (state.rentTiers ?? []).find((t) => t.gb === gb)?.gb ?? state.rentWant;
+  await load();
+  $("#settings").hidden = false;
+  renderRental();
+  $("#rent").scrollIntoView({ block: "start" });
 }
 
 // The bar under the header: a machine is being paid for, and here is how to stop it.
