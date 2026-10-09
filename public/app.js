@@ -745,6 +745,7 @@ function wireRentAsk(body, model, choice) {
   body.querySelector("#ask-start")?.addEventListener("click", () => rentAction("start", null));
   body.querySelector("#ask-rent")?.addEventListener("click", () => {
     state.rentWant = choice.tier;
+    state.rentFrom = model.id;
     $("#settings").hidden = false;
     renderRental();
     $("#rent").scrollIntoView({ block: "start" });
@@ -770,6 +771,7 @@ function wireRentAsk(body, model, choice) {
     }
     state.rentOptions = null;
     state.rentWant = choice.tier;
+    state.rentFrom = model.id;
     await load();
     if (state.open) openModel(state.open);
     $("#settings").hidden = false;
@@ -2545,8 +2547,20 @@ function renderRental() {
       btn.textContent = "Rent it";
       return;
     }
-    notice("A GPU is being rented; chat models now point at it. It usually answers within a few minutes.", "ok");
     await load();
+    // Renting that started from a model's window goes back to that window:
+    // the key entry and the sizes close, and the model plans for the machine.
+    const from = state.rentFrom;
+    state.rentFrom = null;
+    if (from) {
+      $("#settings").hidden = true;
+      notice(`A ${gb} GB GPU is being rented; ${from.split("/").pop()} now runs on it. It usually answers within a few minutes.`, "ok");
+      whereFor.set(from, "rented");
+      state.rentAsk = null;
+      openModel(from);
+      return;
+    }
+    notice("A GPU is being rented; chat models now point at it. It usually answers within a few minutes.", "ok");
     afterRentalChange();
   });
 }

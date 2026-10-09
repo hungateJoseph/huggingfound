@@ -657,11 +657,17 @@ await step("renting from the model window preselects its size, and the bar shows
   assert.match(await page.locator("#rent-bar").innerText(), /Rented GPU: NVIDIA A40 48 GB, starting, \$0\.40 an hour\./);
   assert.equal(runpod.state.created.length, 1);
   assert.deepEqual(runpod.state.created[0].mounts, { persistent: { size: 60, path: "/root/.ollama" } });
+  // Renting from a model's window closes Settings and goes back to that window, which plans one step on the machine.
+  await page.waitForFunction(() => document.querySelector("#settings").hidden);
+  await page.waitForSelector("#steps .step");
+  assert.equal(await page.locator("#modal-title").innerText(), "Cydonia-24B-v2-GGUF");
+  // Settings, opened again, show the machine and the chat server pointing at it.
+  await page.evaluate(() => document.querySelector("#open-settings").click());
+  await page.waitForSelector("#settings:not([hidden])");
   assert.match(await page.locator("#rent-panel .rent-card").innerText(), /starting[\s\S]*Stops by itself after 30 minutes/);
   assert.equal(await page.locator("#chat-server").inputValue(), rentedOllama.url, "the chat server is the rented machine");
   assert.match(await page.locator("#chat-server-status").innerText(), /rented GPU; Ollama on it is not answering yet/);
   await page.click("#close-settings");
-  // The model window now plans one step on the machine and says it is starting.
   await page.waitForSelector("#steps .step");
   assert.equal(await page.locator(".where-opt.on").innerText(), "On a rented GPU");
   let titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
@@ -894,7 +900,7 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   acceptDialogs = false;
   const made = runpod.state.created.at(-1);
   assert.equal(made.env.OLLAMA_ORIGINS, hostedBase, "Ollama on the machine accepts this site's pages");
-  await visitor.click("#close-settings");
+  await visitor.waitForFunction(() => document.querySelector("#settings").hidden, null, { timeout: 10000 });
   await visitor.waitForSelector("#steps .step .go");
   assert.equal(await visitor.locator(".where-opt.on").innerText(), "On a rented GPU");
   assert.equal(await visitor.locator("#modal-body .get-app").count(), 0, "no need for the app when the machine does the work");
