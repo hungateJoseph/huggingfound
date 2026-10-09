@@ -16,6 +16,7 @@ import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices 
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
 import { cleanSummary, extractiveSummary, summarize, summarizerModel } from "./summarize.js";
 import { rankModels } from "./find.js";
+import { qualityScore } from "./quality.js";
 import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
 import { RentError, TIERS, createRental, tierFor } from "./rent.js";
@@ -993,9 +994,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
 
   // A rough speed line for a listing card, from the size guessed off the name.
   function withSpeed(m, ctx = null) {
-    if (!m.runner?.easy) return { ...m, speed: "" };
+    const quality = qualityScore(m);
+    if (!m.runner?.easy) return { ...m, speed: "", quality };
     const sizeGb = guessSizeGb({ id: m.id, runnerId: m.runner.id });
-    return { ...m, speed: sizeGb ? estimate({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine: ctx ? machineFor(m.runner.id, ctx) : machine }).text : "" };
+    return { ...m, quality, speed: sizeGb ? estimate({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine: ctx ? machineFor(m.runner.id, ctx) : machine }).text : "" };
   }
 
   // whisper.cpp is happiest with 16 kHz wav. Other formats go through

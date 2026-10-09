@@ -280,6 +280,8 @@ function sortModels(list) {
   const cutoff = days ? Date.now() - days * 86400000 : 0;
   const kept = cutoff ? list.filter((m) => m.createdAt && new Date(m.createdAt).getTime() >= cutoff) : list.slice();
   if (by === "likes") kept.sort((a, b) => b.likes - a.likes);
+  // Size and family first, then what people think, for the strongest models of a kind.
+  else if (by === "capable") kept.sort((a, b) => (b.quality ?? 0) - (a.quality ?? 0) || b.likes - a.likes);
   else if (by === "downloads") kept.sort((a, b) => b.downloads - a.downloads);
   else if (by === "newest") kept.sort((a, b) => new Date(b.createdAt ?? 0) - new Date(a.createdAt ?? 0));
   return kept;

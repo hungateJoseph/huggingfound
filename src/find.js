@@ -1,5 +1,6 @@
 import { voiceText } from "./voices.js";
 import { refusalSignals } from "./refusals.js";
+import { qualityScore } from "./quality.js";
 
 // Ranks models for a plain-language search ("model good for creative
 // writing", "anime images", "porn writing") by how well the name, the
@@ -19,6 +20,10 @@ const INTENTS = [
   { cats: ["chat"], re: /\b(chat|chatbot|assistant|question|questions|answer|answers|summar(y|ize|ise)|translate|translation|general)\b/i },
 ];
 
+// Words that name a kind of model rather than a model: a name that merely
+// contains one ("stable-video-diffusion") is not much of a match for
+// "video generation", where any video model is wanted.
+const GENERIC = /^(image|images|picture|pictures|photo|photos|photograph|video|videos|animation|animations|clip|clips|speech|audio|voice|text|chat|chatbot|assistant|model|models|generation|generator|generate|generating|generated|creation|create|creating|tool|tools|llm|ai|gguf|txt2img|text-to-image|text-to-video|diffusion)$/i;
 const STOP = new Set(["a", "an", "the", "for", "of", "to", "in", "on", "with", "and", "or", "that", "this", "is", "are", "be", "model", "models", "good", "best", "great", "at", "about", "knows", "know", "which", "what", "some", "any", "me", "my", "i", "want", "need", "find", "like", "can", "does", "do", "it", "its", "one", "open", "source", "local", "free", "ai", "llm"]);
 
 export function queryWords(q) {
@@ -92,7 +97,8 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {},
     // What people say weighs most, then the category the words point at,
     // then the name; popularity and being runnable settle ties, and a
     // repository nobody has reviewed cannot outrank one people vouch for.
-    const nameHits = coverage(words, m.id);
+    const specific = words.filter((w) => !GENERIC.test(w));
+    const nameHits = coverage(specific, m.id) + coverage(words.filter((w) => GENERIC.test(w)), m.id) * 0.2;
     if (nameHits) {
       score += 1.5 * nameHits;
       why.push("name");
@@ -134,9 +140,13 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {},
     if (!nameHits && !anySaid && !noteHits && catHit && words.length > 3 && !sources.has("hub")) score -= 1;
     // Shown on request, a model people say refuses still sits well below the rest.
     if (refusal.refuses) score = score / 2 - 1;
-    ranked.push({ ...m, score: Math.round(score * 100) / 100, why });
+    // How capable the model is likely to be, from its size and family:
+    // worth less than any relevance signal, so it orders equals.
+    const quality = qualityScore(m);
+    score += quality * 0.6;
+    ranked.push({ ...m, score: Math.round(score * 100) / 100, quality, why });
   }
-  ranked.sort((a, b) => b.score - a.score || (b.likes ?? 0) - (a.likes ?? 0));
+  ranked.sort((a, b) => b.score - a.score || b.quality - a.quality || (b.likes ?? 0) - (a.likes ?? 0));
   // `hiddenRefusing` is the number of models people report as refusing, whether hidden or shown.
   return { words, intents: [...intents], models: ranked, hiddenRefusing };
 }

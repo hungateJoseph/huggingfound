@@ -168,6 +168,9 @@ await step("Browse has no adult tabs; adult models stay in their own category wi
   assert.ok(names.includes("Cydonia-24B-v2-GGUF"), "still listed under Chat and writing");
   assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.adult").innerText(), /18\+/);
 
+  await page.selectOption("#sort", "capable");
+  names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
+  assert.equal(names[0], "Cydonia-24B-v2-GGUF", "the biggest chat model first when sorted by capability");
   await page.selectOption("#sort", "likes");
   names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.equal(names[0], "Polite-Chat-7B-GGUF", "most liked runnable chat model first");
