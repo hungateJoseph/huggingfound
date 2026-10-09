@@ -335,6 +335,28 @@ test("an add-on is downloaded onto the rented GPU and applied there to a base mo
   assert.equal((await json(`/api/model?id=${ADDON}`)).plan.steps[0].done, false, "a missing file makes the step pending again");
 });
 
+test("hiding a model also clears it off the machine: its chat model, image files and add-on files", async () => {
+  const SD = "second-state/stable-diffusion-v1-5-GGUF";
+  const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";
+  await post("/api/run", { kind: "pull-image-model", args: { repo: SD, file: FILE }, where: "rented" }).then((r) => r.json()).then(({ id }) => get(`/api/runs/${id}`).then((r) => r.text()));
+  const ADDON = "h94/IP-Adapter-FaceID";
+  await post("/api/run", { kind: "pull-addon", args: { repo: ADDON, files: ["ip-adapter-faceid_sd15.bin", "ip-adapter-faceid_sd15_lora.safetensors"] }, where: "rented" }).then((r) => r.json()).then(({ id }) => get(`/api/runs/${id}`).then((r) => r.text()));
+  assert.equal((await post("/api/rent/forget", { id: "nope" })).status, 400);
+  const image = await (await post("/api/rent/forget", { id: SD })).json();
+  assert.deepEqual(image.removed, [`${SD}/${FILE}`]);
+  assert.ok(!agent.state.files.some((f) => f.repo === SD));
+  const addon = await (await post("/api/rent/forget", { id: ADDON })).json();
+  assert.ok(addon.removed.includes(`${ADDON}/ip-adapter-faceid_sd15.bin`) && addon.removed.includes(`${ADDON}/ip-adapter-faceid_sd15_lora.safetensors`));
+  assert.ok(addon.removed.every((k) => k.startsWith(`${ADDON}/`)), "every file of that add-on, and nothing else");
+  assert.ok(!agent.state.addons.some((a) => a.repo === ADDON));
+  const chat = await (await post("/api/rent/forget", { id: QWEN })).json();
+  assert.deepEqual(chat.removed, [PULLED], "the chat model pulled from that repository goes too");
+  assert.deepEqual((await (await post("/api/rent/forget", { id: QWEN })).json()).removed, [], "nothing left to remove");
+  // Back onto the machine for the tests that follow.
+  await post("/api/run", { kind: "pull-model", args: { name: PULLED }, where: "rented" }).then((r) => r.json()).then(({ id }) => get(`/api/runs/${id}`).then((r) => r.text()));
+  await post("/api/chat", { model: PULLED, messages: [{ role: "user", content: "hi" }] });
+});
+
 test("everything on the machine is listed in one place: chat models with the loaded one, image models with the one in the GPU", async () => {
   const SD = "second-state/stable-diffusion-v1-5-GGUF";
   const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";

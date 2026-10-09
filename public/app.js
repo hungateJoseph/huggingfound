@@ -2291,9 +2291,19 @@ async function saveHidden() {
   render();
 }
 
+// Hiding a model also clears it off the rented machine, so a model judged
+// no good stops taking up its disk; the answer says what went.
 async function hideModel(id) {
   state.hidden.add(id);
   await saveHidden();
+  if (!state.rental?.rented) return [];
+  try {
+    const { removed } = await api.post("/api/rent/forget", { id });
+    if (removed.length) await load();
+    return removed;
+  } catch {
+    return [];
+  }
 }
 
 async function unhideModel(id) {
@@ -2316,10 +2326,10 @@ $("#hide-model").addEventListener("click", async () => {
     notice(`${id.split("/").pop()} is back in search and Browse.`, "ok");
     return;
   }
-  await hideModel(id);
+  const removed = await hideModel(id);
   $("#modal").hidden = true;
   state.open = null;
-  notice(`${id.split("/").pop()} is hidden from search and Browse. Settings lists hidden models, with a way to bring one back.`, "ok");
+  notice(`${id.split("/").pop()} is hidden from search and Browse${removed.length ? ` and removed from the rented GPU` : ""}. Settings lists hidden models, with a way to bring one back.`, "ok");
 });
 
 function renderHiddenList() {

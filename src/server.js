@@ -651,6 +651,45 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           mine.touch();
           return send(res, 200, { ok: true });
         }
+        // A hidden model leaves the machine too: its chat model, its image
+        // files and its add-on files, whichever of them are there.
+        if (req.method === "POST" && action === "forget") {
+          const body = await json(req);
+          const id = String(body.id ?? "");
+          if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
+          const removed = [];
+          const onMachine = await machineModels(ctx);
+          const remote = chatServer(ctx);
+          const agent = imageAgent(ctx);
+          for (const m of onMachine.chat.filter((c) => c.id === id)) {
+            try {
+              await removeOllamaModel(m.name, fetchImpl, remote);
+              removed.push(m.name);
+            } catch {
+              // gone already, or not answering
+            }
+          }
+          for (const m of onMachine.images.filter((f) => f.repo === id)) {
+            try {
+              await removeAgentModel(m.repo, m.file, fetchImpl, agent);
+              removed.push(`${m.repo}/${m.file}`);
+            } catch {
+              // gone already
+            }
+          }
+          if (agent) {
+            const addons = await agentAddons(agent, fetchImpl).catch(() => []);
+            for (const key of addons.filter((k) => k.startsWith(`${id}/`))) {
+              try {
+                await removeAgentAddon(id, key.slice(id.length + 1), fetchImpl, agent);
+                removed.push(key);
+              } catch {
+                // gone already
+              }
+            }
+          }
+          return send(res, 200, { removed });
+        }
         if (req.method === "POST" && action === "stop") return send(res, 200, await mine.stop());
         if (req.method === "POST" && action === "start") return send(res, 200, await mine.start());
         if (req.method === "POST" && action === "delete") return send(res, 200, await mine.remove());
