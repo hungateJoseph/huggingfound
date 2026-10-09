@@ -653,6 +653,9 @@ function renderModel(model, plan, choice = null) {
   const onSite = state.hosted && !plan.remote;
   if (onSite) parts.push(`<h3>How to run it</h3>`);
   parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
+  queueMicrotask(() => {
+    for (const [i, s] of plan.steps.entries()) if (s.running && $(`#steps .step[data-index="${i}"]`)) followStep(model, plan, i, s.running);
+  });
   if (onSite) parts.push(`<div class="get-app hosted-only"><b>HuggingFound on your computer</b> does these steps with one click and opens a try box here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
 npm install
@@ -840,24 +843,21 @@ function stepHtml(s, i) {
       <div class="text">${esc(s.text)}</div>
       ${s.command ? `<code>${esc(s.command)}</code>` : ""}
     </div>
-    ${state.hosted && !state.plan?.remote ? "" : `<button class="go ${s.done ? "ghost" : "primary"}" data-index="${i}" ${s.done ? "disabled" : ""}>${s.done ? "Done" : "Run this step"}</button>`}
+    ${state.hosted && !state.plan?.remote ? "" : `<button class="go ${s.done ? "ghost" : "primary"}" data-index="${i}" ${s.done || s.running ? "disabled" : ""}>${s.done ? "Done" : s.running ? "Running" : "Run this step"}</button>`}
   </li>`;
 }
 
-async function runStep(model, plan, index) {
+// Shows a running step's log in its box and follows it to the end,
+// whether the run was just started or found already going.
+async function followStep(model, plan, index, id) {
   const step = plan.steps[index];
   const li = $(`#steps .step[data-index="${index}"]`);
+  if (!li) return;
   const btn = li.querySelector(".go");
-  const before = plan.steps.slice(0, index).filter((s) => !s.done);
-  if (before.length && !confirm(`Step ${index + 1} needs the earlier steps first. Run "${before[0].title}" now?`)) return;
-  if (before.length) return runStep(model, plan, plan.steps.indexOf(before[0]));
-
-  const what = step.command ? `HuggingFound will run:\n\n${step.command}\n\nContinue?` : `Run "${step.title}" now?`;
-  if (!confirm(what)) return;
-
   btn.disabled = true;
   btn.textContent = "Running";
   li.classList.add("running");
+  li.classList.remove("failed");
   let log = li.querySelector(".log");
   if (!log) {
     log = document.createElement("pre");
@@ -865,9 +865,7 @@ async function runStep(model, plan, index) {
     li.appendChild(log);
   }
   log.textContent = "";
-
   try {
-    const { id } = await api.post("/api/run", { kind: step.kind, args: step.args ?? {}, where: state.choice?.where ?? (plan.remote ? "rented" : "local") });
     const result = await follow(id, (line) => {
       log.textContent += line + "\n";
       log.scrollTop = log.scrollHeight;
@@ -904,10 +902,44 @@ async function runStep(model, plan, index) {
   } catch (err) {
     li.classList.remove("running");
     li.classList.add("failed");
-    log.textContent += `Could not start: ${err.message}\n`;
+    log.textContent += `Lost the step: ${err.message}\n`;
     btn.disabled = false;
     btn.textContent = "Try again";
   }
+}
+
+async function runStep(model, plan, index) {
+  const step = plan.steps[index];
+  const li = $(`#steps .step[data-index="${index}"]`);
+  const btn = li.querySelector(".go");
+  const before = plan.steps.slice(0, index).filter((s) => !s.done);
+  if (before.length && !confirm(`Step ${index + 1} needs the earlier steps first. Run "${before[0].title}" now?`)) return;
+  if (before.length) return runStep(model, plan, plan.steps.indexOf(before[0]));
+
+  const what = step.command ? `HuggingFound will run:\n\n${step.command}\n\nContinue?` : `Run "${step.title}" now?`;
+  if (!confirm(what)) return;
+
+  btn.disabled = true;
+  btn.textContent = "Running";
+  li.classList.add("running");
+  let id;
+  try {
+    ({ id } = await api.post("/api/run", { kind: step.kind, args: step.args ?? {}, where: state.choice?.where ?? (plan.remote ? "rented" : "local"), model: model.id, title: step.title }));
+  } catch (err) {
+    li.classList.remove("running");
+    li.classList.add("failed");
+    let log = li.querySelector(".log");
+    if (!log) {
+      log = document.createElement("pre");
+      log.className = "log";
+      li.appendChild(log);
+    }
+    log.textContent += `Could not start: ${err.message}\n`;
+    btn.disabled = false;
+    btn.textContent = "Try again";
+    return;
+  }
+  await followStep(model, plan, index, id);
 }
 
 function follow(id, onLine) {
@@ -2689,7 +2721,8 @@ function renderRentBar(r) {
   const time = running && r.uptimeSeconds ? `, running ${minutesText(r.uptimeSeconds)}${r.spent != null ? ` (about ${money(r.spent)})` : ""}` : "";
   bar.hidden = false;
   const held = (r.chatModels ?? 0) + (r.imageModels ?? 0);
-  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}, ${esc(word)}${cost}${time}.</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-settings">Manage</button></span></div>`;
+  const busy = r.downloading ? `<span class="pill live">${r.downloading} downloading</span>` : "";
+  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}, ${esc(word)}${cost}${time}.</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}${busy ? ` ${busy}` : ""}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-settings">Manage</button></span></div>`;
   bar.querySelector("#bar-models").addEventListener("click", openGpuModels);
   bar.querySelector("#bar-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
   bar.querySelector("#bar-start")?.addEventListener("click", () => rentAction("start", null));
@@ -2739,9 +2772,32 @@ async function renderGpuModels() {
   };
   const chat = models.chatOk ? (models.chat.length ? `<ul class="gpu-list">${models.chat.map((m) => row(m, "chat")).join("")}</ul>` : `<p class="muted small">No chat models on it yet. Open a chat model and download it there.</p>`) : `<p class="muted small">Ollama on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
   const images = !r.images ? `<p class="muted small">This machine runs chat models only; a machine rented now runs image models too.</p>` : r.imageProblem ? `<p class="muted small">The image server on this machine cannot start (${esc(r.imageProblem)}). This is a fault in the machine image, not in your setup; a machine rented after it is fixed will work.</p>` : models.imagesOk ? (models.images.length ? `<ul class="gpu-list">${models.images.map((m) => row(m, "image")).join("")}</ul>` : `<p class="muted small">No image models on it yet. Open an image model and download it there.</p>`) : `<p class="muted small">The image agent on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
-  body.innerHTML = `<h3>Chat models</h3>${chat}<h3>Image models</h3>${images}<p class="muted small">Models stay on the machine's disk while it is stopped and go when it is deleted. Each download onto it, and each conversation or picture, counts as use for the idle timer.</p><div class="actions"><button class="ghost" id="gpu-models-refresh">Refresh</button></div>`;
+  // What is being downloaded right now, and what just finished, each with
+  // the way to its model's window where the full log is.
+  const runs = models.runs ?? [];
+  const runRow = (run) => {
+    const name = run.model ? run.model.split("/").pop() : run.title || run.first;
+    const pill = run.status === "running" ? `<span class="pill live">downloading</span>` : run.status === "done" ? `<span class="pill good">done</span>` : `<span class="pill bad">failed</span>`;
+    return `<li data-model="${esc(run.model ?? "")}">
+      <div><div class="name">${esc(name)}</div><div class="sub"><span>${esc(run.title || run.first)}</span>${run.last && run.last !== run.first ? `<span>${esc(run.last)}</span>` : ""}${pill}</div></div>
+      <div class="buttons">${run.model ? `<button class="primary" data-open-run>Open</button>` : ""}</div>
+    </li>`;
+  };
+  const downloads = runs.length ? `<h3>Downloads</h3><ul class="gpu-list" id="gpu-runs">${runs.map(runRow).join("")}</ul>` : "";
+  body.innerHTML = `${downloads}<h3>Chat models</h3>${chat}<h3>Image models</h3>${images}<p class="muted small">Models stay on the machine's disk while it is stopped and go when it is deleted. Each download onto it, and each conversation or picture, counts as use for the idle timer.</p><div class="actions"><button class="ghost" id="gpu-models-refresh">Refresh</button></div>`;
   body.querySelector("#gpu-models-refresh").addEventListener("click", renderGpuModels);
-  for (const li of body.querySelectorAll("li")) {
+  for (const li of body.querySelectorAll("#gpu-runs li")) {
+    li.querySelector("[data-open-run]")?.addEventListener("click", () => {
+      whereFor.set(li.dataset.model, "rented");
+      state.rentAsk = null;
+      $("#gpu-models").hidden = true;
+      openModel(li.dataset.model);
+    });
+  }
+  // While something downloads, the list refreshes itself.
+  clearTimeout(state.gpuRunsTimer);
+  if (runs.some((run) => run.status === "running") && !$("#gpu-models").hidden) state.gpuRunsTimer = setTimeout(() => (!$("#gpu-models").hidden ? renderGpuModels() : null), 3000);
+  for (const li of body.querySelectorAll("li[data-kind]")) {
     li.querySelector("[data-open]")?.addEventListener("click", () => {
       whereFor.set(li.dataset.id, "rented");
       state.rentAsk = null;

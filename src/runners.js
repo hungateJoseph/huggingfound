@@ -724,6 +724,7 @@ export function startCustomRun(text, work, { owner = null } = {}) {
   };
   const finish = (status, message) => {
     run.status = status;
+    run.finishedAt = Date.now();
     if (message) emit(message);
     for (const l of run.listeners) l(null);
     settle(status);
@@ -936,6 +937,26 @@ export function cancelRun(id) {
 
 export function getRun(id) {
   return runs.get(id);
+}
+
+// The step a run is for, as a key the plan can match: kind, repository or
+// name, file or merged name. Set by the server when a step starts.
+export function stepKey(kind, args = {}) {
+  return `${kind}|${args.repo ?? args.name ?? ""}|${args.file ?? args.into ?? ""}`;
+}
+
+// The runs that belong to an owner (every run when owner is null): the ones
+// still going, and the ones over within the last ten minutes, newest first.
+export function listRuns(owner = null, { recentMs = 10 * 60e3 } = {}) {
+  const now = Date.now();
+  const out = [];
+  for (const run of runs.values()) {
+    if (owner != null && run.owner !== owner) continue;
+    if (run.status !== "running" && now - run.startedAt > recentMs && !(run.finishedAt && now - run.finishedAt < recentMs)) continue;
+    const lines = run.lines;
+    out.push({ id: run.id, kind: run.kind, status: run.status, key: run.key ?? null, model: run.model ?? null, title: run.title ?? lines[0] ?? "", first: lines[0] ?? "", last: lines.at(-1) ?? "", startedAt: run.startedAt });
+  }
+  return out.sort((a, b) => b.startedAt - a.startedAt);
 }
 
 async function waitForUrl(url, fetchImpl) {

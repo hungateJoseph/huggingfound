@@ -51,7 +51,7 @@ export function startStubAgent() {
         const total = 1.1 * 1024 ** 3;
         for (const line of [{ status: "starting" }, { status: `downloading ${data.file}`, total, completed: total / 2 }, { status: `downloading ${data.file}`, total, completed: total }, { status: "success" }]) {
           res.write(`${JSON.stringify(line)}\n`);
-          await new Promise((r) => setTimeout(r, 5));
+          await new Promise((r) => setTimeout(r, state.slowMs ?? 5));
         }
         state.files.push({ repo: data.repo, file: data.file, gb: 1.1 });
         return res.end();

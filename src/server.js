@@ -16,7 +16,9 @@ import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, clearOutputs, describeIm
   pullAddonOnAgent,
   removeAgentAddon,
   agentAddons,
-  agentHealth, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
+  agentHealth,
+  listRuns,
+  stepKey, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
@@ -176,7 +178,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           return send(res, 403, { error: "Not on the hosted site. Run HuggingFound on your own computer to download and try models." });
         }
         const ctx = contextFor(req);
-        if (hosted && !ctx.user && (SIGNED_IN.has(url.pathname) || url.pathname.startsWith("/api/runs/") || url.pathname.startsWith("/api/rent/"))) {
+        if (hosted && !ctx.user && (SIGNED_IN.has(url.pathname) || url.pathname.startsWith("/api/runs") || url.pathname.startsWith("/api/rent/"))) {
           return send(res, 401, { error: "Enter a RunPod key in a model's window, or sign in, to do this on the site; or run HuggingFound on your own computer." });
         }
         // A guest's keys live on while the guest is active.
@@ -584,7 +586,19 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       // What the page needs to offer the other place: the size of GPU this
       // file wants, and whether a machine is rented already.
       const choice = ["ollama", "sd", "diffusers"].includes(kind) ? { where: useRemote || gpuOnly ? "rented" : "local", rented: Boolean(remote), tier: gpuOnly && plan.addon ? 24 : tierFor(plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY), ...(gpuOnly ? { gpuOnly: true } : {}) } : null;
+      // A step whose download is already going (started from this window
+      // earlier, or from another tab) shows its progress instead of a button.
+      const owner = ctx.user?.id ?? null;
+      for (const step of plan.steps ?? []) {
+        const active = listRuns(owner).find((r) => r.status === "running" && r.key === stepKey(step.kind, step.args ?? {}));
+        if (active) step.running = active.id;
+      }
       return send(res, 200, { model, plan, choice });
+    }
+    // Every download or run of this person's: what is going now, and what
+    // finished in the last minutes, each with the model it was for.
+    if (req.method === "GET" && url.pathname === "/api/runs") {
+      return send(res, 200, { runs: listRuns(ctx.user?.id ?? null) });
     }
     if (req.method === "GET" && url.pathname === "/api/storage") {
       return send(res, 200, await storage(fetchImpl, chatServer(ctx)));
@@ -616,8 +630,12 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (req.method === "GET" && action === "registries") return send(res, 200, { registries: mine.configured() ? await mine.registries() : [] });
         // Everything on the machine right now: chat models (and which are
         // loaded) from Ollama, image models (and the loaded one) from the agent.
-        if (req.method === "GET" && action === "models") return send(res, 200, await machineModels(ctx));
-        if (req.method === "GET" && action === "") return send(res, 200, await mine.status());
+        if (req.method === "GET" && action === "models") return send(res, 200, { ...(await machineModels(ctx)), runs: listRuns(ctx.user?.id ?? null) });
+        if (req.method === "GET" && action === "") {
+          const status = await mine.status();
+          const downloading = listRuns(ctx.user?.id ?? null).filter((r) => r.status === "running").length;
+          return send(res, 200, downloading ? { ...status, downloading } : status);
+        }
         if (req.method === "POST" && action === "") {
           const body = await json(req);
           // The browser talks to the machine itself (chat on the site, pictures
@@ -670,6 +688,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
     if (req.method === "POST" && url.pathname === "/api/run") {
       const body = await json(req);
+      // What a run is for, so a list of runs can name the model and the plan
+      // can find the step again.
+      const tag = (run) => {
+        run.key = stepKey(String(body.kind ?? ""), body.args ?? {});
+        run.model = /^[\w.-]+\/[\w.-]+$/.test(String(body.model ?? "")) ? String(body.model) : null;
+        run.title = String(body.title ?? "").slice(0, 200) || null;
+        return run;
+      };
       try {
         const args = { ...(body.args ?? {}) };
         const remote = chatServer(ctx);
@@ -691,7 +717,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
               ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner })
               : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner });
           run.finished.then(release);
-          return send(res, 200, { id: run.id });
+          return send(res, 200, { id: tag(run).id });
         }
         // The remote address comes from settings, never from the page.
         if (body.kind === "generate-image") {
@@ -710,10 +736,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
             release();
             if (status === "done" && rentedChat(ctx)) warm(String(args.name ?? ""), remote);
           });
-          return send(res, 200, { id: run.id });
+          return send(res, 200, { id: tag(run).id });
         }
         const run = startRun(String(body.kind ?? ""), args, machine, { token: env().HF_TOKEN, fetchImpl, hubBase, owner: ctx.user?.id ?? null });
-        return send(res, 200, { id: run.id });
+        return send(res, 200, { id: tag(run).id });
       } catch (err) {
         return send(res, 400, { error: err.message });
       }

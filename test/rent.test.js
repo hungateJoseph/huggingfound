@@ -277,6 +277,31 @@ test("a diffusers-family model is fetched as a folder on the rented GPU, and a v
   assert.equal((await post("/api/remove", { kind: "gpu-file", repo: QWEN_IMAGE, file: "model_index.json" })).status, 200);
 });
 
+test("a download already going shows in the model's plan, in the list of runs and in the machine's status, with the model it is for", async () => {
+  const SD = "second-state/stable-diffusion-v1-5-GGUF";
+  const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";
+  agent.state.slowMs = 150;
+  const started = await post("/api/run", { kind: "pull-image-model", args: { repo: SD, file: FILE }, where: "rented", model: SD, title: "Download the model on the rented GPU (1.1 GB)" });
+  const { id } = await started.json();
+  // Opening the window again finds the step running rather than offering it again.
+  const plan = (await json(`/api/model?id=${SD}`)).plan;
+  assert.equal(plan.steps[0].running, id);
+  const listed = (await json("/api/runs")).runs;
+  assert.equal(listed.length >= 1, true);
+  const mine = listed.find((r) => r.id === id);
+  assert.deepEqual([mine.status, mine.model, mine.title, mine.kind], ["running", SD, "Download the model on the rented GPU (1.1 GB)", "custom"]);
+  assert.match(mine.first, /Downloading stable-diffusion-v1-5-pruned-emaonly-Q8_0\.gguf on the rented GPU/);
+  assert.equal((await json("/api/rent")).downloading, 1, "the status counts it, for the bar");
+  assert.ok((await json("/api/rent/models")).runs.some((r) => r.id === id), "the machine's listing names it");
+  await get(`/api/runs/${id}`).then((r) => r.text());
+  agent.state.slowMs = 5;
+  const after = (await json("/api/runs")).runs.find((r) => r.id === id);
+  assert.equal(after.status, "done");
+  assert.equal((await json(`/api/model?id=${SD}`)).plan.steps[0].running, undefined);
+  assert.equal((await json("/api/rent")).downloading, undefined, "nothing going: no count");
+  await post("/api/remove", { kind: "gpu-file", repo: SD, file: FILE });
+});
+
 test("a machine from before a feature is told apart by its agent's version, and the plan says to replace it", async () => {
   agent.state.version = 1;
   const addon = (await json("/api/model?id=h94/IP-Adapter-FaceID")).plan;
