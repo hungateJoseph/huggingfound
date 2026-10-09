@@ -705,6 +705,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click('.where-opt[data-where="rented"]');
   await page.waitForSelector("#ask-start");
   assert.match(await page.locator(".rent-ask").innerText(), /Your rented GPU \(NVIDIA A40, 48 GB\) is stopped/);
+  assert.equal(await page.locator("#ask-replace").count(), 1, "a stopped machine can be replaced from the model window");
   // When the machine's host has no free card, the panel says so and offers a fresh machine instead of a raw error.
   runpod.state.noGpu = true;
   await page.click("#ask-start");

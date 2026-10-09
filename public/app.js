@@ -709,10 +709,15 @@ function rentAskHtml(choice, plan) {
   if (r?.rented) {
     const [word] = rentalPhase(r);
     const fits = !choice.tier || !r.gb || r.gb >= choice.tier;
+    // A machine from before a feature is known by the version its agent
+    // last reported; replacing it deletes it first, then rents afresh.
+    const older = r.agentVersion != null && r.agentCurrent != null && r.agentVersion < r.agentCurrent;
+    const olderNote = older ? ` It runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}); replacing it gets the current one, and its models are fetched again.` : "";
+    const replace = `<button class="${older ? "primary" : "ghost"}" id="ask-replace">Replace the machine</button>`;
     if (r.status === "EXITED" || r.status === "ERROR") {
-      return `<div class="rent-ask"><p><b>Your rented GPU (${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}) is stopped.</b> It stopped itself after sitting idle; its models are still on its disk. Starting it takes a minute or two.${fits ? "" : ` ${esc(size)} It may be tight on this card.`}</p><div class="actions"><button class="primary" id="ask-start">Start it</button>${back}</div></div>`;
+      return `<div class="rent-ask"><p><b>Your rented GPU (${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}) is stopped.</b> It stopped itself after sitting idle; its models are still on its disk. Starting it takes a minute or two.${fits ? "" : ` ${esc(size)} It may be tight on this card.`}${olderNote}</p><div class="actions">${older ? `${replace}<button class="ghost" id="ask-start">Start it anyway</button>` : `<button class="primary" id="ask-start">Start it</button>${replace}`}${back}</div></div>`;
     }
-    return `<div class="rent-ask"><p><b>Your rented GPU is ${esc(word)}.</b> This window switches to it as soon as it answers.</p><div class="actions">${back}</div></div>`;
+    return `<div class="rent-ask"><p><b>Your rented GPU is ${esc(word)}.</b> This window switches to it as soon as it answers.${olderNote}</p><div class="actions">${replace}${back}</div></div>`;
   }
   if (state.hosted && !state.user) {
     const hours = state.auth?.guestHours ?? 12;
@@ -749,6 +754,10 @@ function rentAskHtml(choice, plan) {
 function wireRentAsk(body, model, choice) {
   body.querySelector("#ask-signin")?.addEventListener("click", openSignIn);
   body.querySelector("#ask-start")?.addEventListener("click", () => rentAction("start", null));
+  body.querySelector("#ask-replace")?.addEventListener("click", () => {
+    state.rentFrom = model.id;
+    replaceMachine();
+  });
   body.querySelector("#ask-rent")?.addEventListener("click", () => {
     state.rentWant = choice.tier;
     state.rentFrom = model.id;
@@ -2646,10 +2655,11 @@ async function rentAction(action, question) {
   afterRentalChange();
 }
 
-// Deletes the stopped machine and opens renting with the same size chosen.
+// Deletes the machine, then opens renting with the same size chosen, so
+// the old one is gone before the new one is ordered.
 async function replaceMachine() {
   const gb = state.rental?.gb;
-  if (!confirm(`Delete this machine and rent a fresh ${gb ? `${gb} GB ` : ""}one? Its models download again on the new machine.`)) return;
+  if (!confirm(`Delete this machine${state.rental?.status === "RUNNING" ? ", which is running," : ""} and rent a fresh ${gb ? `${gb} GB ` : ""}one? Its models download again on the new machine.`)) return;
   try {
     state.rental = await api.post("/api/rent/delete", {});
   } catch (err) {
