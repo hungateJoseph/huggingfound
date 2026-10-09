@@ -457,6 +457,16 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(await page.locator("#messages .msg").count(), 24, "the earlier conversation is back");
   assert.match(await page.locator("#messages .msg").last().innerText(), /earlier answer 11/);
 
+  // Asking a text model for a picture is caught before it is sent, with the way to an image model.
+  const sentBefore = chatBodies.length;
+  await page.fill("#chat-text", "draw me a cat on a bicycle");
+  await page.click("#chat-send");
+  await page.waitForSelector("#messages .picture-note");
+  assert.match(await page.locator("#messages .picture-note").innerText(), /writes text only[\s\S]*cannot make a picture/);
+  assert.equal(chatBodies.length, sentBefore, "nothing was sent");
+  assert.equal(await page.locator("#chat-text").inputValue(), "draw me a cat on a bicycle", "the message is kept");
+  await page.click("#note-dismiss");
+  assert.equal(await page.locator("#messages .picture-note").count(), 0);
   // Effort: Standard is chosen by default; Thorough turns the model's thinking on and adds a care instruction, for this request only.
   assert.equal(await page.locator('.effort[data-kind="chat"] input:checked').inputValue(), "standard");
   await page.click('.effort[data-kind="chat"] input[value="thorough"]');
@@ -696,7 +706,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
 await step("every card says what the model makes, and a search for pictures marks the text models that cannot", async () => {
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
-  assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.makes").innerText(), /Text only/);
+  assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.makes").innerText(), /Text only, no pictures/);
   await page.click(".tab[data-tab=images]");
   assert.match(await page.locator("#models .model", { hasText: "pony-realism-v23-sdxl" }).locator(".pill.makes").innerText(), /Makes images/);
   await page.click(".tab[data-tab=speech]");

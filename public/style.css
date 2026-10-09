@@ -409,3 +409,5 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .model .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model .why { display: none; }
 #machine-line { margin: 4px 0 0; }
+.picture-note { justify-self: stretch; max-width: 100%; margin: 4px 0; }
+.picture-note .tools-row { margin-top: 8px; }

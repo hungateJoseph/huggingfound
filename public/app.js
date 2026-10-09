@@ -465,7 +465,7 @@ function makesOf(m) {
   else if (cats.includes("vision") || pipeline === "image-text-to-text") kind = "vision";
   else if (runner === "ollama" || pipeline === "text-generation" || cats.some((c) => ["chat", "coding", "math", "nsfw-writing"].includes(c))) kind = "text";
   else kind = "other";
-  const text = { video: "Makes video", images: "Makes images", speech: "Transcribes speech", audio: "Makes sound", vision: "Text, understands images", text: "Text only", other: pipeline ? pipeline.replace(/-/g, " ") : "Other" }[kind];
+  const text = { video: "Makes video", images: "Makes images", speech: "Transcribes speech", audio: "Makes sound", vision: "Text, understands images", text: "Text only, no pictures", other: pipeline ? pipeline.replace(/-/g, " ") : "Other" }[kind];
   return { kind, text, fits: (want) => (want === "images" ? kind === "images" : want === "video" ? kind === "video" : true) };
 }
 
@@ -1363,6 +1363,29 @@ function renderChat(box, modelName) {
     if (chat.busy) return;
     const text = $("#chat-text").value.trim();
     if (!text) return;
+    // A model that writes cannot draw; asking it for a picture gets an
+    // apology and a description. Say so first, with the way to a model that can.
+    if (!chat.pictureOk && asksForPicture(text) && ["text", "vision"].includes(makesOf(state.model ?? {}).kind)) {
+      $("#messages").querySelector(".picture-note")?.remove();
+      const note = document.createElement("div");
+      note.className = "picture-note notice warn";
+      note.innerHTML = `<b>${esc(modelName.split("/").pop())} writes text only.</b> It cannot make a picture; at most it describes one. <span class="tools-row"><button class="primary" id="note-images">Find an image model</button><button class="ghost" id="note-send">Send anyway</button><button class="ghost" id="note-dismiss">Never mind</button></span>`;
+      $("#messages").appendChild(note);
+      $("#messages").scrollTop = $("#messages").scrollHeight;
+      note.querySelector("#note-images").addEventListener("click", () => {
+        $("#modal").hidden = true;
+        state.open = null;
+        $("#nav-browse").click();
+        document.querySelector('.tab[data-tab="images"]')?.click();
+      });
+      note.querySelector("#note-send").addEventListener("click", () => {
+        chat.pictureOk = true;
+        note.remove();
+        send();
+      });
+      note.querySelector("#note-dismiss").addEventListener("click", () => note.remove());
+      return;
+    }
     $("#chat-text").value = "";
     const system = $("#chat-system").value.trim();
     try {
@@ -1764,6 +1787,11 @@ async function repaint({ repo, file, request, context, prompt, negative, strengt
   if (result.status !== "done" || !result.result) throw new Error("the edit did not finish");
   foot.textContent = `By ${file}.`;
   onImage?.(result.result, file, request, { prompt, negative, planned });
+}
+
+// Whether a message asks for a picture rather than words.
+function asksForPicture(text) {
+  return /\b(generate|create|make|draw|paint|render|show|give|send|produce|design|sketch)\b[^.?!]{0,40}\b(image|images|picture|pictures|photo|photos|photograph|drawing|painting|illustration|artwork|logo|wallpaper|portrait|selfie|meme|icon)\b/i.test(text) || /\b(image|picture|photo) of\b/i.test(text) || /\b(draw|paint|sketch) (me|a|an|the)\b/i.test(text);
 }
 
 function addMsg(role, text) {
