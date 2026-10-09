@@ -109,6 +109,19 @@ await step("the page opens on a single search box", async () => {
   assert.match(await page.locator("#found-title").innerText(), /coding help/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");
+  // A search for a kind of output leads with the models that make it,
+  // the strongest first, and the Order control can reorder what was found.
+  await page.fill("#trait", "video generation");
+  await page.click("#trait-go");
+  await page.waitForFunction(() => /video generation/.test(document.querySelector("#found-title").textContent));
+  await page.waitForSelector("#found .model");
+  const videos = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(videos.slice(0, 2), ["Wan2.2-T2V-A14B", "stable-video-diffusion-img2vid"], "the stronger video family first, the far more liked old one second, chat models after both");
+  assert.equal(await page.locator("#found-sort").inputValue(), "match");
+  await page.selectOption("#found-sort", "likes");
+  const byLikes = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
+  assert.deepEqual(byLikes.slice(0, 2), ["stable-video-diffusion-img2vid", "Wan2.2-T2V-A14B"], "by users' opinion the liked one leads, and video models still come before the rest");
+  await page.selectOption("#found-sort", "match");
   await page.fill("#trait", "");
   await page.click("#trait-go");
   await page.waitForFunction(() => document.querySelector("#results").hidden);

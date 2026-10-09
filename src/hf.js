@@ -1,3 +1,4 @@
+import { wantedKind } from "./quality.js";
 import { categorize, describe } from "./categorize.js";
 
 // Talks to the Hugging Face Hub API. `fetchImpl` and `base` are injectable so
@@ -67,6 +68,14 @@ export function createHub({ fetchImpl = fetch, base = "https://huggingface.co", 
       { search: terms, sort: "trendingScore", direction: "-1", limit: "30", filter: "gguf" },
       { search: terms, sort: "likes", direction: "-1", limit: "20" },
     ];
+    // A search for a kind of output also asks the Hub for that kind by its
+    // pipeline, since the makers of video models rarely put "video" in the name.
+    const kind = wantedKind(terms);
+    const pipelines = { video: ["text-to-video", "image-to-video"], images: ["text-to-image"], speech: ["automatic-speech-recognition"] }[kind] ?? [];
+    for (const pipeline_tag of pipelines) {
+      queries.push({ pipeline_tag, sort: "trendingScore", direction: "-1", limit: "25" });
+      queries.push({ pipeline_tag, sort: "likes", direction: "-1", limit: "15" });
+    }
     const seen = new Map();
     const collect = async (query, required) => {
       let items = [];

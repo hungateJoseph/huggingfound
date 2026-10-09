@@ -1,6 +1,6 @@
 import { voiceText } from "./voices.js";
 import { refusalSignals } from "./refusals.js";
-import { qualityScore } from "./quality.js";
+import { kindOf, qualityScore, wantedKind } from "./quality.js";
 
 // Ranks models for a plain-language search ("model good for creative
 // writing", "anime images", "porn writing") by how well the name, the
@@ -68,6 +68,9 @@ function saidHits(words, m) {
 export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {}, hideRefusing = true }) {
   const words = queryWords(q);
   const intents = intentCategories(q);
+  // A search for a kind of output (video, pictures, speech) is answered by
+  // models that make it; the rest follow, marked, however well they match.
+  const kind = wantedKind(q);
   const byId = new Map();
   const add = (m, source) => {
     const cur = byId.get(m.id);
@@ -144,9 +147,11 @@ export function rankModels(q, { hub = [], scanned = [], picks = [], voices = {},
     // worth less than any relevance signal, so it orders equals.
     const quality = qualityScore(m);
     score += quality * 0.6;
-    ranked.push({ ...m, score: Math.round(score * 100) / 100, quality, why });
+    const fits = !kind || kindOf(m) === kind;
+    if (kind && fits) why.push(`makes ${kind}`);
+    ranked.push({ ...m, score: Math.round(score * 100) / 100, quality, fits, why });
   }
-  ranked.sort((a, b) => b.score - a.score || b.quality - a.quality || (b.likes ?? 0) - (a.likes ?? 0));
+  ranked.sort((a, b) => Number(b.fits) - Number(a.fits) || b.score - a.score || b.quality - a.quality || (b.likes ?? 0) - (a.likes ?? 0));
   // `hiddenRefusing` is the number of models people report as refusing, whether hidden or shown.
-  return { words, intents: [...intents], models: ranked, hiddenRefusing };
+  return { words, intents: [...intents], kind, models: ranked, hiddenRefusing };
 }

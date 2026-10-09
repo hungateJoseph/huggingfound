@@ -53,7 +53,16 @@
     <section id="notice" class="notice info" hidden></section>
 
     <section id="results" hidden>
-      <h2 id="found-title" class="section-title"></h2>
+      <div class="found-head">
+        <h2 id="found-title" class="section-title"></h2>
+        <label class="small">Order
+          <select id="found-sort">
+            <option value="match">Best match, strongest first</option>
+            <option value="capable">Most capable</option>
+            <option value="likes">Recommended by users</option>
+          </select>
+        </label>
+      </div>
       <p class="muted small" id="found-hint"></p>
       <div id="found" class="cards"></div>
       <p id="found-empty" class="muted" hidden></p>

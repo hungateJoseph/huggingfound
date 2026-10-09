@@ -9,6 +9,8 @@ export const MODELS = [
   { id: "bartowski/Qwen2.5-Math-7B-Instruct-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "math"], downloads: 12000, likes: 30, createdAt: "2024-10-01T00:00:00.000Z" },
   { id: "meta-llama/Llama-3.1-8B-Instruct", pipeline_tag: "text-generation", library_name: "transformers", tags: ["transformers", "safetensors", "conversational"], gated: "manual", downloads: 5000000, likes: 4000, createdAt: "2024-07-23T00:00:00.000Z" },
   { id: "unsloth/gemma-3-4b-it-GGUF", pipeline_tag: "image-text-to-text", library_name: "transformers", tags: ["gguf", "image-text-to-text"], downloads: 80000, likes: 200, createdAt: "2025-03-12T00:00:00.000Z" },
+  { id: "Wan-AI/Wan2.2-T2V-A14B", pipeline_tag: "text-to-video", library_name: "diffusers", tags: ["diffusers", "text-to-video"], downloads: 40000, likes: 700, createdAt: "2025-07-28T00:00:00.000Z" },
+  { id: "stabilityai/stable-video-diffusion-img2vid", pipeline_tag: "image-to-video", library_name: "diffusers", tags: ["diffusers", "image-to-video"], downloads: 200000, likes: 3000, createdAt: "2023-11-21T00:00:00.000Z" },
   { id: "second-state/stable-diffusion-v1-5-GGUF", pipeline_tag: "text-to-image", library_name: null, tags: ["gguf", "text-to-image"], downloads: 3000, likes: 20, createdAt: "2024-08-20T00:00:00.000Z" },
   { id: "black-forest-labs/FLUX.1-dev", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "text-to-image"], gated: "auto", downloads: 900000, likes: 9000, createdAt: "2024-08-01T00:00:00.000Z" },
   { id: "ggerganov/whisper.cpp", pipeline_tag: "automatic-speech-recognition", library_name: null, tags: ["automatic-speech-recognition"], downloads: 400000, likes: 900, createdAt: "2023-03-01T00:00:00.000Z" },

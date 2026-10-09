@@ -190,7 +190,7 @@ $("#trait-form").addEventListener("submit", async (e) => {
   btn.textContent = "Searching";
   try {
     const result = await api.get(`/api/find?q=${encodeURIComponent(q)}${state.showRefusing ? "&showRefusing=1" : ""}`);
-    state.found = { q, models: result.models, web: result, hubError: result.hubError, gathered: result.gathered, scanned: result.scanned, took: result.took, hiddenRefusing: result.hiddenRefusing, hideRefusing: result.hideRefusing };
+    state.found = { q, models: result.models, kind: result.kind ?? null, web: result, hubError: result.hubError, gathered: result.gathered, scanned: result.scanned, took: result.took, hiddenRefusing: result.hiddenRefusing, hideRefusing: result.hideRefusing };
     notice(result.hubError ? `Hugging Face did not answer (${result.hubError}); showing what is known locally.` : "", "warn");
     if (state.mode !== "browse") setMode("results");
   } catch (err) {
@@ -219,6 +219,7 @@ function setMode(mode) {
   $("#nav-browse").classList.toggle("on", mode === "browse");
 }
 $("#nav-home").addEventListener("click", () => setMode(state.found ? "results" : "home"));
+$("#found-sort").addEventListener("change", render);
 $("#nav-browse").addEventListener("click", () => {
   setMode("browse");
   render();
@@ -304,9 +305,19 @@ function render() {
   const shown = (m) => state.showHidden || !state.hidden.has(m.id);
   const keep = (m) => shown(m) && (!onlyRunnable || m.runner?.easy) && (!q || m.id.toLowerCase().includes(q) || (m.voice?.text ?? "").toLowerCase().includes(q));
 
-  // Search results keep the server's relevance order; only the runnable
-  // filter and the person's own hide list apply to them.
-  const found = state.found ? state.found.models.filter((m) => shown(m) && (!onlyRunnable || m.runner?.easy)) : [];
+  // Search results come in the server's order: models that make what was
+  // asked for first, then relevance, then how capable each is likely to be.
+  // The Order control can put capability or users' opinion first instead;
+  // a model that makes the wrong kind of thing stays below the ones that fit.
+  const foundSort = $("#found-sort").value;
+  // When the search asks for a kind of output (video, say) that no runnable
+  // model makes, the models that do make it are shown anyway, with what
+  // they need, rather than an empty page.
+  const fitting = (state.found?.models ?? []).filter((m) => m.fits && state.found.kind);
+  const keepFitting = fitting.length > 0 && !fitting.some((m) => m.runner?.easy);
+  const found = state.found ? state.found.models.filter((m) => shown(m) && (!onlyRunnable || m.runner?.easy || (keepFitting && m.fits))) : [];
+  if (foundSort === "capable") found.sort((a, b) => Number(b.fits ?? true) - Number(a.fits ?? true) || (b.quality ?? 0) - (a.quality ?? 0) || b.score - a.score);
+  else if (foundSort === "likes") found.sort((a, b) => Number(b.fits ?? true) - Number(a.fits ?? true) || (b.likes ?? 0) - (a.likes ?? 0) || b.score - a.score);
   const foundHidden = state.found ? state.found.models.filter((m) => state.hidden.has(m.id)).length : 0;
   const wants = state.found ? wantsFrom(state.found.q) : null;
   $("#found").innerHTML = found.map((m) => modelCard(m, wants)).join("");
@@ -477,8 +488,8 @@ function makesOf(m) {
 
 // What a search is after, when its words say so.
 function wantsFrom(q) {
-  if (/\b(videos?|animations?|animate|clips?|film|movie)\b/i.test(q)) return "video";
-  if (/\b(images?|pictures?|photos?|photographs?|art|artwork|draw|drawing|illustrations?|anime|wallpapers?|renders?|paintings?|portraits?|logos?|sketch)\b/i.test(q)) return "images";
+  if (/\b(videos?|animations?|animate|clips?|film|movie|img2vid|text-to-video|t2v)\b/i.test(q)) return "video";
+  if (/\b(images?|pictures?|photos?|photographs?|art|artwork|draw|drawing|illustrations?|anime|wallpapers?|renders?|paintings?|portraits?|logos?|sketch|txt2img|text-to-image)\b/i.test(q)) return "images";
   return null;
 }
 

@@ -27,6 +27,29 @@ function params(m) {
   return gb > 0 ? gb / 0.6 : null;
 }
 
+// What comes out of a model: video, images, speech (a transcript), audio,
+// vision (text about a picture) or text.
+export function kindOf(m) {
+  const pipeline = String(m.pipeline ?? "");
+  const cats = m.categories ?? [];
+  const runner = m.runner?.id ?? m.runner ?? "";
+  if (/video/.test(pipeline)) return "video";
+  if (cats.includes("images") || cats.includes("nsfw-images") || runner === "sd" || /^(text-to-image|image-to-image|image-editing|inpainting|unconditional-image-generation)$/.test(pipeline)) return "images";
+  if (cats.includes("speech") || runner === "whisper" || pipeline === "automatic-speech-recognition") return "speech";
+  if (pipeline === "text-to-speech" || pipeline === "text-to-audio") return "audio";
+  if (cats.includes("vision") || pipeline === "image-text-to-text") return "vision";
+  return "text";
+}
+
+// The kind a search is after, when its words say so.
+export function wantedKind(q) {
+  const t = String(q);
+  if (/\b(videos?|animations?|animate|clips?|film|movie|img2vid|text-to-video|t2v)\b/i.test(t)) return "video";
+  if (/\b(images?|pictures?|photos?|photographs?|art|artwork|draw|drawing|illustrations?|anime|wallpapers?|renders?|paintings?|portraits?|logos?|sketch|txt2img|text-to-image)\b/i.test(t)) return "images";
+  if (/\b(speech|voice|audio|transcri\w+|dictation|whisper|subtitles?|podcast|meeting)\b/i.test(t)) return "speech";
+  return null;
+}
+
 export function qualityScore(m) {
   const id = String(m.id ?? "");
   const name = id.split("/").pop() ?? "";
