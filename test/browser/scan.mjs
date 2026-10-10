@@ -628,8 +628,14 @@ await step("every chat model asks where to run it; picking a GPU without a key a
   assert.equal(await page.locator("#ask-no-box").isVisible(), false);
   await page.fill("#ask-key", RUNPOD_KEY);
   await page.click("#ask-save");
-  await page.waitForSelector("#rent-panel .tier");
-  assert.match(await page.locator("#runpod-status").innerText(), /A key is saved \(rpa_\*+cdef\)/);
+  // The key entry gives way to the rental offer in the same window; Settings stays closed.
+  await page.waitForSelector(".rent-offer #ask-size");
+  assert.equal(await page.locator("#settings").isHidden(), true);
+  assert.equal(await page.locator("#ask-key").count(), 0, "the key entry is gone");
+  assert.equal(await page.locator(".rent-offer #ask-size").inputValue(), "48", "the size the model wants is chosen");
+  assert.match(await page.locator(".rent-offer #ask-rent").innerText(), /Rent it, \$0\.40 an hour/);
+  await page.waitForSelector("#rent-panel .tier", { state: "attached" });
+  assert.match(await page.locator("#runpod-status").evaluate((el) => el.textContent), /A key is saved \(rpa_\*+cdef\)/);
   const tiers = await page.$$eval("#rent-panel .tier", (els) => els.map((e) => [e.querySelector("b").textContent, e.querySelector(".price").textContent, e.querySelector("input").disabled, e.querySelector("input").checked]));
   // The model window asked for 48 GB, so that size is chosen.
   assert.deepEqual(tiers, [
@@ -639,24 +645,19 @@ await step("every chat model asks where to run it; picking a GPU without a key a
     ["141 GB GPU", "H200 SXM, none free right now", true, false],
   ]);
   assert.match(fs.readFileSync(envFile, "utf8"), new RegExp(`RUNPOD_API_KEY=${RUNPOD_KEY}`));
-  await page.click("#close-settings");
 });
 
 await step("renting from the model window preselects its size, and the bar shows the running cost", async () => {
-  await page.waitForFunction(() => /No GPU is rented right now[\s\S]*A40 at \$0\.40 an hour/.test(document.querySelector(".rent-ask")?.textContent ?? ""), null, { timeout: 10000 });
-  assert.match(await page.locator(".rent-ask").innerText(), /No GPU is rented right now[\s\S]*A40 at \$0\.40 an hour/, "with a key saved, the question becomes an offer");
-  await page.click("#ask-rent");
-  await page.waitForSelector("#rent-panel .tier");
-  assert.equal(await page.locator('#rent-panel input[name="rent-tier"]:checked').inputValue(), "48");
-  await page.fill("#rent-disk", "60");
+  await page.waitForFunction(() => /Rent a GPU for this[\s\S]*wants a 48 GB card/.test(document.querySelector(".rent-ask")?.textContent ?? "") && document.querySelector(".rent-offer #ask-size"), null, { timeout: 10000 });
+  assert.match(await page.locator(".rent-offer #ask-size option:checked").innerText(), /48 GB, A40, \$0\.40 an hour \(recommended\)/, "with a key saved, the question is an offer with the right size chosen");
   rentedOllama.state.down = true;
   acceptDialogs = true;
-  await page.click("#rent-go");
+  await page.click("#ask-rent");
   await page.waitForSelector("#rent-bar:not([hidden])");
   acceptDialogs = false;
   assert.match(await page.locator("#rent-bar").innerText(), /Rented GPU: NVIDIA A40 48 GB, starting, \$0\.40 an hour\./);
   assert.equal(runpod.state.created.length, 1);
-  assert.deepEqual(runpod.state.created[0].mounts, { persistent: { size: 60, path: "/root/.ollama" } });
+  assert.deepEqual(runpod.state.created[0].mounts, { persistent: { size: 50, path: "/root/.ollama" } }, "the default disk; Disk size and other settings opens the full panel");
   // Renting from a model's window closes Settings and goes back to that window, which plans one step on the machine.
   await page.waitForFunction(() => document.querySelector("#settings").hidden);
   await page.waitForSelector("#steps .step");
@@ -692,7 +693,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
   await page.click("#open-settings");
   await page.waitForSelector("#rent-panel .rent-card");
-  assert.match(await page.locator("#rent-panel .rent-card").innerText(), /Stopped: no hourly charge\. The 60 GB disk keeps its models/);
+  assert.match(await page.locator("#rent-panel .rent-card").innerText(), /Stopped: no hourly charge\. The 50 GB disk keeps its models/);
   assert.equal(await page.locator("#chat-server").inputValue(), "", "chat models are back on this computer");
   assert.match(await page.locator("#chat-server-status").innerText(), /run on this computer/);
   await page.fill("#rent-idle", "45");
@@ -837,15 +838,15 @@ await step("hosted: a guest enters a key in the model window, rents, and sees wh
   await visitor.click("#ask-yes");
   await visitor.fill("#ask-key", RUNPOD_KEY);
   await visitor.click("#ask-save");
-  await visitor.waitForSelector("#rent-panel .tier");
-  assert.equal(await visitor.locator('#rent-panel input[name="rent-tier"]:checked').inputValue(), "48");
+  await visitor.waitForSelector(".rent-offer #ask-size");
+  assert.equal(await visitor.locator(".rent-offer #ask-size").inputValue(), "48");
+  assert.equal(await visitor.locator("#settings").isHidden(), true, "no Settings panel over the window");
   assert.match(await visitor.locator("#account").innerText(), /Guest, keys kept until/);
   assert.match(await visitor.locator("#account-line").innerText(), /You are a guest[\s\S]*12 hours after your last use/);
   assert.equal(await visitor.locator("#delete-account").innerText(), "Forget my keys now");
   assert.equal(await visitor.locator("#open-settings").isVisible(), true, "a guest reaches Settings for the rented machine");
   const guests = fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g"));
   assert.equal(guests.length, 1);
-  await visitor.click("#close-settings");
   await visitor.keyboard.press("Escape");
   // Forgetting the keys ends the guest.
   acceptDialogs = true;
@@ -890,13 +891,12 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
-  await visitor.waitForSelector("#ask-rent");
-  await visitor.click("#ask-rent");
-  await visitor.waitForSelector("#rent-panel .tier");
-  assert.equal(await visitor.locator('#rent-panel input[name="rent-tier"]:checked').inputValue(), "48");
+  await visitor.waitForSelector(".rent-offer #ask-size");
+  assert.equal(await visitor.locator(".rent-offer #ask-size").inputValue(), "48");
+  assert.equal(await visitor.locator("#ask-key").count(), 0, "a saved key is never asked for again");
   rentedOllama.state.down = false;
   acceptDialogs = true;
-  await visitor.click("#rent-go");
+  await visitor.click("#ask-rent");
   await visitor.waitForSelector("#rent-bar:not([hidden])");
   acceptDialogs = false;
   const made = runpod.state.created.at(-1);

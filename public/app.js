@@ -729,7 +729,7 @@ function rentAskHtml(choice, plan) {
       <div class="actions"><button class="primary" id="ask-yes">Enter a key as a guest</button>${state.auth?.google ? `<button class="ghost" id="ask-signin">Sign in with Google</button>` : ""}<button class="ghost" id="ask-no">I have no key yet</button>${back}</div>
       <div id="ask-yes-box" hidden>
         <label class="field"><span>RunPod API key</span><input type="password" id="ask-key" autocomplete="off" placeholder="rpa_..."><small class="muted">Kept encrypted on this site for ${hours} hours after your last use and sent only to RunPod. Nothing you say to the model passes through this site.</small></label>
-        <div class="actions"><button class="primary" id="ask-save">Save and pick a size</button></div>
+        <div class="actions"><button class="primary" id="ask-save">Save the key</button></div>
       </div>
       <div id="ask-no-box" hidden>
         <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. Come back and click "Enter a key as a guest". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
@@ -737,16 +737,29 @@ function rentAskHtml(choice, plan) {
     </div>`;
   }
   if (choice.hasRunpodKey) {
-    const offer = (state.rentOptions ?? []).find((t) => t.gb === choice.tier);
-    const price = offer?.pricePerHour != null ? ` The cheapest free one is ${esc(offer.gpu.name)} at ${money(offer.pricePerHour)} an hour.` : "";
-    return `<div class="rent-ask"><p><b>No GPU is rented right now.</b> ${esc(size)}${price}</p><div class="actions">${choice.tier ? `<button class="primary" id="ask-rent">Rent a ${choice.tier} GB GPU</button>` : ""}${back}</div></div>`;
+    // With a key saved, renting is one choice and one button here; the
+    // key never comes up again while it is saved.
+    const options = state.rentOptions ?? [];
+    const free = options.filter((t) => t.available && t.pricePerHour != null);
+    const pick = free.find((t) => t.gb === choice.tier) ?? free.find((t) => t.gb > (choice.tier ?? 0)) ?? free[0] ?? null;
+    const sizes = free.length
+      ? `<label class="field"><span>Size</span><select id="ask-size">${free.map((t) => `<option value="${t.gb}" ${pick && t.gb === pick.gb ? "selected" : ""}>${t.gb} GB, ${esc(t.gpu.name)}, ${money(t.pricePerHour)} an hour${t.gb === choice.tier ? " (recommended)" : ""}</option>`).join("")}</select></label>`
+      : state.rentOptionsError
+        ? `<p class="muted small">RunPod is not answering about sizes: ${esc(state.rentOptionsError)}</p>`
+        : options.length ? `<p class="muted small">No card is free at RunPod right now; it changes by the minute. Try again shortly.</p>` : `<p class="muted small">Asking RunPod for sizes and prices</p>`;
+    return `<div class="rent-ask rent-offer">
+      <p><b>Rent a GPU for this.</b> ${esc(size)} RunPod bills your account by the hour while it runs; it stops itself after sitting idle, and the bar at the top can stop or delete it any time.</p>
+      ${sizes}
+      <div class="actions"><button class="primary" id="ask-rent" ${pick ? "" : "disabled"}>${pick ? `Rent it, ${money(pick.pricePerHour)} an hour` : "Rent it"}</button><button class="ghost" id="ask-sizes">Disk size and other settings</button>${back}</div>
+      <p class="muted small" id="ask-rent-note"></p>
+    </div>`;
   }
   return `<div class="rent-ask">
     <p><b>Do you have a RunPod API key?</b> RunPod rents GPUs by the hour; with a key HuggingFound starts a machine for you, runs the model on it and stops it when you are done. ${esc(size)}</p>
     <div class="actions"><button class="primary" id="ask-yes">Yes, I have one</button><button class="ghost" id="ask-no">No, not yet</button>${back}</div>
     <div id="ask-yes-box" hidden>
       <label class="field"><span>RunPod API key</span><input type="password" id="ask-key" autocomplete="off" placeholder="rpa_..."><small class="muted">Kept ${state.hosted ? "with your account, encrypted" : "in the settings file on this computer"} and sent only to RunPod.</small></label>
-      <div class="actions"><button class="primary" id="ask-save">Save and pick a size</button></div>
+      <div class="actions"><button class="primary" id="ask-save">Save the key</button></div>
     </div>
     <div id="ask-no-box" hidden>
       <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. Come back and click "Yes, I have one". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
@@ -761,12 +774,38 @@ function wireRentAsk(body, model, choice) {
     state.rentFrom = model.id;
     replaceMachine();
   });
-  body.querySelector("#ask-rent")?.addEventListener("click", () => {
-    state.rentWant = choice.tier;
+  if (body.querySelector(".rent-offer") && state.rentOptions == null && !state.rentOptionsLoading) loadRentOptions();
+  body.querySelector("#ask-sizes")?.addEventListener("click", () => {
+    state.rentWant = Number(body.querySelector("#ask-size")?.value) || choice.tier;
     state.rentFrom = model.id;
     $("#settings").hidden = false;
     renderRental();
     $("#rent").scrollIntoView({ block: "start" });
+  });
+  body.querySelector("#ask-rent")?.addEventListener("click", async () => {
+    const gb = Number(body.querySelector("#ask-size")?.value);
+    const offer = (state.rentOptions ?? []).find((t) => t.gb === gb);
+    if (!offer) return;
+    const diskGb = state.rentDisk ?? 50;
+    if (!confirm(`Rent a ${offer.gpu.name} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\nRunPod bills your account while it runs. It stops by itself after sitting idle, and you can stop or delete it from the bar at any time.`)) return;
+    const btn = body.querySelector("#ask-rent");
+    const note = body.querySelector("#ask-rent-note");
+    btn.disabled = true;
+    btn.textContent = "Renting";
+    try {
+      state.rental = await api.post("/api/rent", { gb, diskGb });
+    } catch (err) {
+      note.textContent = `Could not rent it: ${err.message}`;
+      btn.disabled = false;
+      btn.textContent = `Rent it, ${money(offer.pricePerHour)} an hour`;
+      return;
+    }
+    state.rentFrom = null;
+    notice(`A ${gb} GB GPU is being rented; ${model.id.split("/").pop()} now runs on it. It usually answers within a few minutes.`, "ok");
+    await load();
+    whereFor.set(model.id, "rented");
+    state.rentAsk = null;
+    openModel(model.id);
   });
   body.querySelector("#ask-yes")?.addEventListener("click", () => {
     body.querySelector("#ask-yes-box").hidden = false;
@@ -787,15 +826,14 @@ function wireRentAsk(body, model, choice) {
       alert(err.message);
       return;
     }
+    // The key entry gives way to the one-time rental, right here.
     state.rentOptions = null;
     state.rentWant = choice.tier;
     state.rentFrom = model.id;
     await load();
     if (state.open) openModel(state.open);
-    $("#settings").hidden = false;
-    renderRental();
-    $("#rent").scrollIntoView({ block: "start" });
-    notice(asGuest ? `The key is saved for ${state.auth?.guestHours ?? 12} hours after your last use. Pick a size and the machine starts.` : "The RunPod key is saved. Pick a size and the machine starts.", "ok");
+    loadRentOptions();
+    notice(asGuest ? `The key is saved for ${state.auth?.guestHours ?? 12} hours after your last use.` : "The RunPod key is saved.", "ok");
   });
 }
 
