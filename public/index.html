@@ -16,8 +16,6 @@
       </a>
       <nav class="views">
         <button class="view-link on" id="nav-home">Search</button>
-        <button class="view-link" id="nav-browse">Browse</button>
-        <a class="view-link hosted-only" id="nav-privacy" href="/privacy.html">Privacy</a>
       </nav>
       <div class="top-right">
         <button class="ghost hosted-only" id="open-checker">Check an answer</button>
@@ -47,6 +45,11 @@
         <button class="chip" data-example="transcribe meetings">transcribe meetings</button>
         <button class="chip" data-example="math and reasoning">math and reasoning</button>
       </p>
+      <div class="browse-invite" id="browse-invite">
+        <span class="muted small">Not sure what you are looking for? Try a category:</span>
+        <span id="home-categories"></span>
+        <button class="chip strong" id="nav-browse">Browse everything</button>
+      </div>
       <p class="muted small" id="home-hint"></p>
     </section>
 
@@ -401,5 +404,9 @@ npm start</code>
   </div>
 
   <script src="app.js"></script>
+  <footer class="site-foot">
+    <span class="muted small">HuggingFound</span>
+    <a class="hosted-only muted small" id="nav-privacy" href="/privacy.html">Privacy</a>
+  </footer>
 </body>
 </html>

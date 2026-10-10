@@ -427,3 +427,10 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .progress-text { margin-top: 4px; }
 @keyframes progress-stripes { from { background-position: 0 0; } to { background-position: 28px 0; } }
 .rent-offer select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
+.browse-invite { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; align-items: center; margin: 10px 0 6px; }
+.browse-invite #home-categories { display: contents; }
+.chip.strong { background: var(--ink); color: #fff; border-color: var(--ink); }
+.chip.strong.on { outline: 2px solid var(--accent); }
+.site-foot { display: flex; gap: 16px; justify-content: center; align-items: center; margin: 48px auto 24px; }
+.site-foot a { text-decoration: none; }
+body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
