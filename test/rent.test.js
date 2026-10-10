@@ -581,6 +581,27 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   assert.equal(runpod.state.pods[r.id].status, "EXITED");
   assert.equal(readEnv(file).OLLAMA_SERVER, undefined);
   assert.equal(await rental.checkIdle(), false, "already stopped");
+  // A machine last seen stopped is not asked about every minute: that only spends the account's allowance.
+  const before = runpod.state.calls.length;
+  clock += 60e3;
+  await rental.checkIdle();
+  clock += 60e3;
+  await rental.checkIdle();
+  assert.equal(runpod.state.calls.length, before, "no RunPod call while it is known to be stopped");
+  clock += 15 * 60e3;
+  await rental.checkIdle();
+  assert.equal(runpod.state.calls.length, before + 1, "looked at again after a quarter of an hour");
+  // A download that never ends cannot keep the machine awake for ever.
+  await rental.start();
+  await rental.status({ probe: false });
+  await rental.status({ probe: false });
+  assert.equal((await rental.status({ probe: false })).status, "RUNNING");
+  const stuck = rental.hold();
+  clock += 5 * 3600e3;
+  assert.equal(await rental.checkIdle(), false, "a download of five hours still counts");
+  clock += 2 * 3600e3;
+  assert.equal(await rental.checkIdle(), true, "after six hours the hold has expired and the idle machine stops");
+  stuck();
   // Turned off, it never stops; quitting still does unless that is off too.
   await rental.start();
   await rental.status({ probe: false });

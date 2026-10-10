@@ -101,7 +101,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   let throttledKey = "";
   const spent = [];
   let lastActivity = now();
-  let holds = 0;
+  // Downloads in progress, each with when it began: one that never ends
+  // (a stuck connection, a lost page) cannot keep the machine awake and
+  // billing for ever.
+  let holdList = [];
+  const HOLD_MAX_MS = 6 * 3600e3;
+  const holds = () => (holdList = holdList.filter((h) => now() - h.at < HOLD_MAX_MS)).length;
   let watching = null;
 
   const key = () => env().RUNPOD_API_KEY || "";
@@ -293,10 +298,11 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     },
     // A download in progress keeps the machine awake however long it takes.
     hold() {
-      holds++;
+      const h = { at: now() };
+      holdList.push(h);
       lastActivity = now();
       return () => {
-        holds = Math.max(0, holds - 1);
+        holdList = holdList.filter((x) => x !== h);
         lastActivity = now();
       };
     },
@@ -455,8 +461,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     // a download in progress or an idle time of 0 keeps it running.
     async checkIdle() {
       const minutes = idleMinutes();
-      if (!podId() || !minutes || holds > 0) return false;
+      if (!podId() || !minutes || holds() > 0) return false;
       if (now() - lastActivity < minutes * 60e3) return false;
+      // A machine last seen stopped has nothing to stop; asking RunPod about
+      // it every minute would only spend the account's allowance. It is
+      // looked at again now and then, in case it was started elsewhere.
+      if (last && last.id === podId() && !["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status) && now() - lastAt < 15 * 60e3) return false;
       const current = await this.status({ probe: false }).catch(() => null);
       if (!current?.rented || current.status !== "RUNNING") return false;
       await this.stop();

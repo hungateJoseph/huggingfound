@@ -225,7 +225,24 @@ $("#nav-browse").addEventListener("click", () => {
   render();
 });
 
+// The categories as chips under the search box, for someone who does not
+// know what to type: each opens Browse on that tab.
+function renderHomeCategories() {
+  const box = $("#home-categories");
+  if (!box || box.childElementCount) return;
+  const cats = (state.categories ?? []).filter((c) => c.browse !== false);
+  box.innerHTML = cats.map((c) => `<button class="chip" data-cat="${esc(c.id)}">${esc(c.name)}</button>`).join("");
+  for (const chip of box.querySelectorAll("[data-cat]")) {
+    chip.addEventListener("click", () => {
+      setMode("browse");
+      render();
+      document.querySelector(`.tab[data-tab="${chip.dataset.cat}"]`)?.click();
+    });
+  }
+}
+
 function renderHomeHint() {
+  renderHomeCategories();
   const v = state.voices;
   const parts = [];
   if (!state.scanAt && !state.hosted) parts.push("No scan yet, so results come from Hugging Face's own search and the curated picks.");
@@ -2947,13 +2964,34 @@ $("#gpu-models").addEventListener("click", (e) => {
 // One timer, ever: each call replaces the pending one, so however often the
 // panel is redrawn there is one poll in flight. (Two timers once doubled
 // each tick until RunPod throttled the key.)
+// How often the page asks about the machine: often while it starts, every
+// minute while it runs, every five while it is stopped, and not at all in a
+// hidden tab or after an hour without a touch (unless a download is going):
+// every ask spends the RunPod account's daily allowance.
 function pollRental() {
   clearTimeout(state.rentPoll);
   state.rentPoll = null;
+  state.rentPollPaused = false;
   if (!state.rental?.rented) return;
-  const quiet = state.rental.ready || state.rental.status === "EXITED";
-  state.rentPoll = setTimeout(rentalTick, quiet ? 60000 : 12000);
+  const untouched = Date.now() - (state.lastTouch ?? Date.now());
+  if (document.hidden || (untouched > 3600e3 && !state.rental.downloading)) {
+    state.rentPollPaused = true;
+    return;
+  }
+  const stopped = ["EXITED", "TERMINATED", "ERROR"].includes(state.rental.status);
+  state.rentPoll = setTimeout(rentalTick, stopped ? 300000 : state.rental.ready ? 60000 : 12000);
 }
+
+state.lastTouch = Date.now();
+for (const ev of ["pointerdown", "keydown"]) {
+  document.addEventListener(ev, () => {
+    state.lastTouch = Date.now();
+    if (state.rentPollPaused) rentalTick();
+  }, { passive: true });
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && state.rentPollPaused) rentalTick();
+});
 
 async function rentalTick() {
   state.rentPoll = null;
