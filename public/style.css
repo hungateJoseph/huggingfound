@@ -434,3 +434,6 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .site-foot { display: flex; gap: 16px; justify-content: center; align-items: center; margin: 48px auto 24px; }
 .site-foot a { text-decoration: none; }
 body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
+.step .progress-wrap { grid-column: 1 / -1; }
+.bg-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; }
+#notice button { margin-left: 8px; }

@@ -910,6 +910,11 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   await visitor.request.get(`${hostedBase}/api/rent`);
   acceptDialogs = true;
   await visitor.click("#steps .step .go");
+  // A running step says the work goes on without the window, with a way out and a way to stay.
+  await visitor.waitForSelector(".bg-note");
+  assert.match(await visitor.locator(".bg-note").innerText(), /keeps going if you leave this window/);
+  await visitor.click("#bg-stay");
+  assert.equal(await visitor.locator(".bg-note").count(), 0);
   await visitor.waitForSelector("#steps .step.done", { timeout: 15000 });
   acceptDialogs = false;
   assert.ok(rentedOllama.state.pulls.some((p) => /Cydonia/.test(p)));

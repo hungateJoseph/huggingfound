@@ -70,7 +70,12 @@ async function finish(id) {
 }
 
 test("it answers health, and only the allowed origins may call it from a page", async () => {
-  for (let i = 0; i < 40 && ((await (await get("/health")).json()).sdOk === null || (await (await get("/health")).json()).pyOk === null); i++) await new Promise((r) => setTimeout(r, 50));
+  // Both startup checks spawn a process; on a busy machine they take a while.
+  for (let i = 0; i < 200; i++) {
+    const h = await (await get("/health")).json();
+    if (h.sdOk !== null && h.pyOk !== null) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
   const h = await (await get("/health")).json();
   assert.deepEqual(h, { ok: true, version: "5", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0 }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });

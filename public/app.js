@@ -142,11 +142,45 @@ $("#scan").addEventListener("click", async () => {
   }
 });
 
-function notice(text, kind = "info") {
+function notice(text, kind = "info", action = null) {
   const el = $("#notice");
   el.hidden = !text;
   el.textContent = text;
   el.className = `notice ${kind}`;
+  if (action) {
+    const btn = document.createElement("button");
+    btn.className = "primary";
+    btn.textContent = action.label;
+    btn.addEventListener("click", () => {
+      el.hidden = true;
+      action.run();
+    });
+    el.append(" ", btn);
+  }
+}
+
+// Work on the rented GPU goes on without the window: a step's download runs
+// on the machine, a picture is made there and kept until it is looked at.
+// The window says so once, with the way out.
+function backgroundNote(into, model, what) {
+  if (!into || into.querySelector(".bg-note")) return;
+  const note = document.createElement("div");
+  note.className = "notice info bg-note";
+  note.innerHTML = `<span>${esc(what)} on the rented GPU and keeps going if you leave this window. Look for other models meanwhile; the bar's Downloads button shows the progress${what.startsWith("The picture") || what.startsWith("The clip") ? ", and a note here tells you when it is ready" : ""}.</span> <span class="tools-row"><button class="ghost" id="bg-browse">Keep browsing</button><button class="ghost" id="bg-stay">Stay here</button></span>`;
+  into.appendChild(note);
+  note.querySelector("#bg-browse").addEventListener("click", () => {
+    $("#modal").hidden = true;
+    state.open = null;
+    notice(`${model.id.split("/").pop()} is still going on the rented GPU. The bar's Downloads button shows its progress; open the model any time to see it.`, "ok");
+  });
+  note.querySelector("#bg-stay").addEventListener("click", () => note.remove());
+}
+
+// A picture finished while its window was closed: a note offers to open it.
+function pictureReady(modelId, show) {
+  state.readyPictures = state.readyPictures ?? new Map();
+  state.readyPictures.set(modelId, show);
+  notice(`Your picture from ${modelId.split("/").pop()} is ready on the rented GPU.`, "ok", { label: "Open it", run: () => openModel(modelId) });
 }
 
 // ---- lists ----------------------------------------------------------------
@@ -1062,6 +1096,7 @@ async function runStep(model, plan, index) {
     btn.textContent = "Try again";
     return;
   }
+  backgroundNote(li.parentElement?.parentElement ?? li, model, "The download runs");
   await followStep(model, plan, index, id);
 }
 
@@ -2117,13 +2152,19 @@ function renderImage(box, t) {
     notice("The image model was unloaded from memory.", "ok");
   });
   box.querySelector("#addon-scale")?.addEventListener("input", (e) => (box.querySelector("#addon-scale-out").value = e.target.value));
+  const waiting = state.readyPictures?.get(state.model?.id);
+  if (waiting) {
+    state.readyPictures.delete(state.model.id);
+    waiting($("#image-out"));
+  }
   $("#image-go").addEventListener("click", async () => {
     const prompt = $("#image-prompt").value.trim();
     if (!prompt) return;
     const log = $("#image-log");
+    const goBtn = $("#image-go");
     log.hidden = false;
     log.textContent = "";
-    $("#image-go").disabled = true;
+    goBtn.disabled = true;
     try {
       const quality = box.querySelector("input[name=quality]:checked")?.value ?? "default";
       try {
@@ -2153,13 +2194,23 @@ function renderImage(box, t) {
           target = base;
           extra = { addon: { kind: t.addonKind, repo: t.repo, file: variant.file, lora: variant.lora, scale: Number(box.querySelector("#addon-scale").value) }, ipImage, xl: base.xl };
         }
+        const openedFor = state.model?.id ?? t.repo;
+        backgroundNote(box, state.model ?? { id: t.repo }, video ? "The clip is made" : "The picture is made");
         const job = await agentJob(t.agent, { ...target, prompt, negative, quality: plan?.qualities?.[quality], video, ...extra }, (line) => {
           log.textContent += line + "\n";
           log.scrollTop = log.scrollHeight;
         });
+        const show = (out) => {
+          if (job.video) showClip(out, { data: job.video, prompt });
+          else showPicture(out, { data: job.image, prompt, negative, model: t.repo, madeBy: addon ? `${t.repo.split("/").pop()} on ${target.repo.split("/").pop()}` : t.file, agent: t.agent, repo: target.repo, modelFile: target.file, chain: [] });
+        };
+        // The window may have been left meanwhile: the result waits for it.
+        if (state.open !== openedFor || !document.body.contains(box)) {
+          pictureReady(openedFor, show);
+          return;
+        }
         $("#image-out").innerHTML = "";
-        if (job.video) showClip($("#image-out"), { data: job.video, prompt });
-        else showPicture($("#image-out"), { data: job.image, prompt, negative, model: t.repo, madeBy: addon ? `${t.repo.split("/").pop()} on ${target.repo.split("/").pop()}` : t.file, agent: t.agent, repo: target.repo, modelFile: target.file, chain: [] });
+        show($("#image-out"));
         return;
       }
       const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt, negative, quality } });
@@ -2174,7 +2225,7 @@ function renderImage(box, t) {
     } catch (err) {
       log.textContent += `Could not start: ${err.message}\n`;
     } finally {
-      $("#image-go").disabled = false;
+      goBtn.disabled = false;
     }
   });
 }
@@ -2887,7 +2938,9 @@ async function renderGpuModels() {
   }
   const [word] = rentalPhase(r);
   sub.textContent = `${r.gpu || "GPU"}${r.gb ? `, ${r.gb} GB` : ""}, ${word}${r.costPerHour != null ? `, ${money(r.costPerHour)} an hour` : ""}.`;
-  body.innerHTML = `<p class="muted small">Looking at the machine</p>`;
+  // The placeholder shows only the first time; a refresh keeps the list in
+  // place until the new one is ready, so nothing flickers.
+  if (!body.querySelector(".gpu-list, h3")) body.innerHTML = `<p class="muted small">Looking at the machine</p>`;
   let models;
   try {
     models = await api.get("/api/rent/models");
