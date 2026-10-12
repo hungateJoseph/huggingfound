@@ -75,7 +75,16 @@ export const TIERS = [
   { gb: 48, min: 40, max: 64, files: 34, examples: "70B-class models at 4-bit" },
   { gb: 80, min: 80, max: 100, files: 57, examples: "100B-class models, or 70B at higher quality" },
   { gb: 141, min: 140, max: 200, files: 100, examples: "the biggest open models, such as 200B-class at 4-bit" },
+  // Several cards in one machine, for the models no single card holds: the
+  // Python worker spreads a model's parts across them.
+  { gb: 282, count: 2, min: 140, max: 200, files: 200, examples: "two 141 GB cards: the largest video models in full precision" },
+  { gb: 564, count: 4, min: 140, max: 200, files: 400, examples: "four 141 GB cards: the very largest models" },
 ];
+
+// How a size reads: "48 GB GPU", or "2 × 141 GB GPUs".
+export function tierLabel(t) {
+  return t.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPUs` : `${t.gb} GB GPU`;
+}
 
 export function tierFor(fileGb) {
   if (!fileGb) return null;
@@ -190,12 +199,15 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.secure === "number");
       const free = inTier.filter((g) => g.availability && g.availability !== "NONE").sort((a, b) => a.price.secure - b.price.secure);
       const pick = free[0] ?? inTier.sort((a, b) => a.price.secure - b.price.secure)[0] ?? null;
+      const count = tier.count ?? 1;
       return {
         gb: tier.gb,
+        count,
+        label: tierLabel(tier),
         files: tier.files,
         examples: tier.examples,
         gpu: pick ? { id: pick.id, name: pick.name || pick.id, memory: pick.memory, availability: pick.availability ?? "UNKNOWN" } : null,
-        pricePerHour: pick ? pick.price.secure : null,
+        pricePerHour: pick ? pick.price.secure * count : null,
         available: Boolean(free.length),
       };
     });
@@ -386,7 +398,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         name: "huggingfound",
         image: full ? image : OLLAMA_IMAGE,
         ...(full && auth ? { registry: auth } : {}),
-        gpu: { id: offer.gpu.id, count: 1, minCudaVersion: MIN_CUDA },
+        gpu: { id: offer.gpu.id, count: tier.count ?? 1, minCudaVersion: MIN_CUDA },
         cloud: "SECURE",
         disk: CONTAINER_DISK_GB,
         ports: full ? [`${OLLAMA_PORT}/http`, `${AGENT_PORT}/http`] : [`${OLLAMA_PORT}/http`],
@@ -394,8 +406,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         mounts: { persistent: { size: disk, path: MODELS_PATH } },
       });
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
-      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(offer.gpu.memory || tier.gb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "" });
-      point(pod.id, offer.gpu.memory || tier.gb);
+      const totalGb = (offer.gpu.memory || tier.gb / (tier.count ?? 1)) * (tier.count ?? 1);
+      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "" });
+      point(pod.id, totalGb);
       lastActivity = now();
       last = summarize(pod, false);
       return last;

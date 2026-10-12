@@ -206,6 +206,8 @@ async function ensureWorkerLoaded(target, adapters = []) {
   py.dir = req.dir ?? req.file;
   py.key = key;
   py.kind = answer.kind ?? "image";
+  py.note = answer.note || "";
+  py.mode = answer.mode || "";
 }
 
 async function unloadWorker() {
@@ -325,6 +327,7 @@ function startJob(input) {
         }
         await ensureWorkerLoaded(file, adapters);
         job.kind = py.kind;
+        job.note = py.note;
         job.status = "generating";
         const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined };
         const answer = await askWorker(req, (p) => (job.progress = p));
@@ -800,7 +803,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && m) {
       const job = jobs.get(m[1]);
       if (!job) return send(res, 404, { error: "No such job" });
-      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, error: job.error, image: job.status === "completed" ? job.image : null, video: job.status === "completed" ? job.video : null });
+      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, note: job.note || "", error: job.error, image: job.status === "completed" ? job.image : null, video: job.status === "completed" ? job.video : null });
     }
     send(res, 404, { error: "Not found" });
   } catch (err) {

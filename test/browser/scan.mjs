@@ -643,6 +643,8 @@ await step("every chat model asks where to run it; picking a GPU without a key a
     ["48 GB GPU", "A40, $0.40 an hour", false, true],
     ["80 GB GPU", "A100 PCIe, $1.64 an hour", false, false],
     ["141 GB GPU", "H200 SXM, none free right now", true, false],
+    ["2 × 141 GB GPUs", "H200 SXM, none free right now", true, false],
+    ["4 × 141 GB GPUs", "H200 SXM, none free right now", true, false],
   ]);
   assert.match(fs.readFileSync(envFile, "utf8"), new RegExp(`RUNPOD_API_KEY=${RUNPOD_KEY}`));
 });

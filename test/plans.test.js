@@ -157,6 +157,16 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.equal(gatedOk.tryWith.startPicture, "optional", "it also takes words alone, so the picture is optional");
   assert.equal(buildPlan({ model: { ...ltxD, tags: ["diffusers", "image-to-video"] }, files: ltxD.files, machine, detected: gpu, hasToken: true }).tryWith.startPicture, "required");
   assert.equal(gatedOk.qualities.max.height, 704, "clip sizes are multiples of 32");
+  // The fit follows the worker's ladder: whole, 8-bit, 4-bit, or not at all; the recommended size has room at 8 bits.
+  const big = { ...summarize({ id: "MiniMaxAI/MiniMax-H3", pipeline_tag: "image-text-to-video", library_name: "minimax-h3", tags: ["video"] }), files: [{ name: "model_index.json", gb: 0 }, { name: "transformer/model.safetensors", gb: 62 }, { name: "text_encoder/model.safetensors", gb: 62 }, { name: "vae/model.safetensors", gb: 10 }, { name: "FL2VA/transformer/model.safetensors", gb: 134 }] };
+  const on = (gpuGb) => buildPlan({ model: big, files: big.files, machine: { ...machine, remote: true, gpuGb, comfortableGb: gpuGb * 0.9 }, detected: gpu, hasToken: false });
+  assert.equal(on(48).file.gb, 134, "the copies under their own folders do not count");
+  assert.match(on(24).fit.text, /Too big for the server's 24 GB even at 4 bits/);
+  assert.match(on(48).fit.text, /Loads at 4 bits on the server's 48 GB/);
+  assert.match(on(80).fit.text, /Loads at 4 bits on the server's 80 GB/, "8 bits of 134 GB is just over 80");
+  assert.match(on(141).fit.text, /Loads at 8 bits on the server's 141 GB/);
+  assert.match(on(282).fit.text, /^Fits the server's 282 GB/);
+  assert.equal(Math.round(on(48).tierGb), 80, "recommended: room for it at 8 bits");
 });
 
 test("an add-on such as an IP-Adapter asks for a rented GPU, then is applied there to a base model already on the machine", () => {

@@ -46,7 +46,7 @@ export function startStubRunpod() {
         if (!gpu) return reply(422, { message: "unknown gpu" });
         if (gpu.availability === "NONE") return reply(409, { message: "no capacity" });
         const id = `pod${state.nextId++}abc`;
-        const pod = { id, name: data.name, image: data.image, status: "PROVISIONING", cost: gpu.price.secure, gpu: { id: gpu.id, count: data.gpu.count ?? 1, memory: gpu.memory }, ports: data.ports, env: data.env, mounts: data.mounts, disk: data.disk, dataCenterId: "US-KS-2", createdAt: new Date().toISOString(), startedAt: null, runtime: null, polls: 0 };
+        const pod = { id, name: data.name, image: data.image, status: "PROVISIONING", cost: gpu.price.secure * (data.gpu.count ?? 1), gpu: { id: gpu.id, count: data.gpu.count ?? 1, memory: gpu.memory }, ports: data.ports, env: data.env, mounts: data.mounts, disk: data.disk, dataCenterId: "US-KS-2", createdAt: new Date().toISOString(), startedAt: null, runtime: null, polls: 0 };
         state.pods[id] = pod;
         state.created.push(data);
         return reply(201, view(pod));

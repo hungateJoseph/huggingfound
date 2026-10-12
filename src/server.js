@@ -611,7 +611,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         : buildPlan({ model, files: model.files, machine: planMachine, detected, hasToken: Boolean(own), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer(), twin: await diffusersTwin(model, own) });
       // What the page needs to offer the other place: the size of GPU this
       // file wants, and whether a machine is rented already.
-      const choice = ["ollama", "sd", "diffusers"].includes(kind) ? { where: useRemote || gpuOnly ? "rented" : "local", rented: Boolean(remote), tier: gpuOnly && plan.addon ? 24 : tierFor(plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY), ...(gpuOnly ? { gpuOnly: true } : {}) } : null;
+      const choice = ["ollama", "sd", "diffusers"].includes(kind) ? { where: useRemote || gpuOnly ? "rented" : "local", rented: Boolean(remote), tier: gpuOnly && plan.addon ? 24 : tierFor(plan.tierGb ?? plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY), ...(gpuOnly ? { gpuOnly: true } : {}) } : null;
       // A step whose download is already going (started from this window
       // earlier, or from another tab) shows its progress instead of a button.
       const owner = ctx.user?.id ?? null;

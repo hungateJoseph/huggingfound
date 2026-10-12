@@ -757,7 +757,8 @@ function chooseWhere(id, where) {
 
 function rentAskHtml(choice, plan) {
   const back = choice.gpuOnly ? "" : `<button class="ghost" data-where="local">Run it on my computer instead</button>`;
-  const size = choice.tier ? `This ${plan.file?.gb ? `${plan.file.gb.toFixed(1)} GB ` : ""}file wants a ${choice.tier} GB card.` : "This file is bigger than any card on offer.";
+  const wanted = (state.rentTiers ?? []).find((t) => t.gb === choice.tier);
+  const size = choice.tier ? `This ${plan.file?.gb ? `${plan.file.gb.toFixed(1)} GB ` : ""}${plan.file?.repo ? "model" : "file"} wants ${wanted?.count > 1 ? `${wanted.count} cards of ${wanted.gb / wanted.count} GB in one machine` : `a ${choice.tier} GB card`}.` : "This file is bigger than any size on offer.";
   // A machine that exists but is stopped (it stops itself when idle) is
   // started again, not replaced.
   const r = state.rental;
@@ -795,7 +796,7 @@ function rentAskHtml(choice, plan) {
     const free = options.filter((t) => t.available && t.pricePerHour != null);
     const pick = free.find((t) => t.gb === choice.tier) ?? free.find((t) => t.gb > (choice.tier ?? 0)) ?? free[0] ?? null;
     const sizes = free.length
-      ? `<label class="field"><span>Size</span><select id="ask-size">${free.map((t) => `<option value="${t.gb}" ${pick && t.gb === pick.gb ? "selected" : ""}>${t.gb} GB, ${esc(t.gpu.name)}, ${money(t.pricePerHour)} an hour${t.gb === choice.tier ? " (recommended)" : ""}</option>`).join("")}</select></label>`
+      ? `<label class="field"><span>Size</span><select id="ask-size">${free.map((t) => `<option value="${t.gb}" ${pick && t.gb === pick.gb ? "selected" : ""}>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB` : `${t.gb} GB`}, ${esc(t.gpu.name)}, ${money(t.pricePerHour)} an hour${t.gb === choice.tier ? " (recommended)" : ""}</option>`).join("")}</select></label>`
       : state.rentOptionsError
         ? `<p class="muted small">RunPod is not answering about sizes: ${esc(state.rentOptionsError)}</p>`
         : options.length ? `<p class="muted small">No card is free at RunPod right now; it changes by the minute. Try again shortly.</p>` : `<p class="muted small">Asking RunPod for sizes and prices</p>`;
@@ -2318,6 +2319,7 @@ async function agentJob(agent, { repo, file, prompt, negative, quality, init = n
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `the machine answered HTTP ${res.status}`);
   const { id } = await res.json();
   let last = "";
+  let noted = false;
   const started = Date.now();
   for (;;) {
     await new Promise((r) => setTimeout(r, 1500));
@@ -2328,6 +2330,10 @@ async function agentJob(agent, { repo, file, prompt, negative, quality, init = n
     if (word && word !== last) {
       onLine(word);
       last = word;
+    }
+    if (job.note && !noted) {
+      onLine(job.note);
+      noted = true;
     }
     if (job.status === "completed") {
       onLine(`Done in ${Math.round((Date.now() - started) / 1000)} s.`);
@@ -2763,7 +2769,7 @@ function renderRental() {
   const want = state.rentWant && state.rentOptions.some((t) => t.gb === state.rentWant && t.available) ? state.rentWant : state.rentOptions.find((t) => t.available)?.gb;
   panel.innerHTML = `<div class="tiers">${state.rentOptions.map((t) => `<label class="tier ${t.available ? "" : "off"}">
       <input type="radio" name="rent-tier" value="${t.gb}" ${t.gb === want ? "checked" : ""} ${t.available ? "" : "disabled"}>
-      <span><b>${t.gb} GB GPU</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour` : ", none free right now"}` : "not on offer right now"}</span><small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small></span>
+      <span><b>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPUs` : `${t.gb} GB GPU`}</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour` : ", none free right now"}` : "not on offer right now"}</span><small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small></span>
     </label>`).join("")}</div>
     <label class="field">
       <span>Disk for its models, in GB</span>

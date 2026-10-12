@@ -54,11 +54,12 @@ const post = (p, body) => fetch(base + p, { method: "POST", headers: { "Content-
 const json = async (p) => (await get(p)).json();
 
 test("the sizes on offer match the fit thresholds, and a file picks its size", () => {
-  assert.deepEqual(TIERS.map((t) => t.gb), [24, 48, 80, 141]);
+  assert.deepEqual(TIERS.map((t) => t.gb), [24, 48, 80, 141, 282, 564]);
   assert.equal(tierFor(4.7).gb, 24);
   assert.equal(tierFor(19.7).gb, 48, "a 20 GB file is tight on 24 GB, so the next size up");
   assert.equal(tierFor(40).gb, 80);
-  assert.equal(tierFor(130), null, "beyond anything on offer");
+  assert.equal(tierFor(130).gb, 282, "beyond one card: two in a machine");
+  assert.equal(tierFor(500), null, "beyond anything on offer");
   assert.equal(tierFor(0), null);
 });
 
@@ -66,7 +67,7 @@ test("without a key nothing can be rented, and the page is told so", async () =>
   const s = await json("/api/state");
   assert.deepEqual(s.rental, { rented: false });
   assert.equal(s.runpodKey, "");
-  assert.equal(s.rentTiers.length, 4);
+  assert.equal(s.rentTiers.length, 6);
   assert.equal(s.stopOnQuit, true);
   const options = await json("/api/rent/options");
   assert.equal(options.configured, false);
@@ -92,6 +93,9 @@ test("with a key, each size names the cheapest card that is actually free", asyn
   assert.equal(by[80].gpu.name, "A100 PCIe", "LOW availability still counts as free");
   assert.equal(by[141].gpu.name, "H200 SXM");
   assert.equal(by[141].available, false, "listed but none free");
+  // Several cards in one machine, for models no single card holds: the same card, priced per card.
+  assert.deepEqual([by[282].count, by[282].label, by[282].gpu.name, by[282].pricePerHour], [2, "2 × 141 GB GPUs", "H200 SXM", by[141].pricePerHour * 2]);
+  assert.deepEqual([by[564].count, by[564].label, by[564].files], [4, "4 × 141 GB GPUs", 400]);
   assert.ok(!tiers.some((t) => t.gpu?.name === "MI300X"), "cards outside the secure cloud are left out");
   assert.equal(runpod.state.calls.filter((c) => c === "GET /catalog/gpus").length, 1);
   await json("/api/rent/options");
@@ -245,9 +249,10 @@ test("an image model's plan on the rented GPU is one download, done by the machi
 test("a diffusers-family model is fetched as a folder on the rented GPU, and a video family answers with a clip", async () => {
   const QWEN_IMAGE = "Qwen/Qwen-Image";
   const { plan, choice } = await json(`/api/model?id=${QWEN_IMAGE}`);
-  assert.deepEqual(choice, { where: "rented", rented: true, tier: 141, hasRunpodKey: true, gpuOnly: true }, "rented only, and 58 GB of weights want the biggest card");
+  assert.deepEqual(choice, { where: "rented", rented: true, tier: 80, hasRunpodKey: true, gpuOnly: true }, "rented only; 58 GB of weights load at 8 bits with room on an 80 GB card");
   assert.equal(plan.runnable, true);
   assert.equal(plan.steps[0].kind, "pull-image-repo");
+  assert.match(plan.fit.text, /Loads at 8 bits on the server's 48 GB \(57\.6 GB in full precision\)/, "the fit follows the worker's ladder");
   assert.ok(!plan.steps[0].args.files.some((f) => /README|assets\//.test(f)), "no card or demo pictures");
   assert.ok(plan.steps[0].args.files.includes("transformer/diffusion_pytorch_model-00001-of-00002.safetensors"));
   assert.match(plan.steps[0].title, /files on the rented GPU \(57\.6 GB\)/);

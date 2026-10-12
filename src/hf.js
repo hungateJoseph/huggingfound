@@ -245,7 +245,11 @@ export function repoFiles(files) {
     const name = f.name;
     if (name.startsWith(".") || skipName.test(name)) continue;
     const dir = name.includes("/") ? name.split("/")[0] : "";
-    if (/^(images?|assets?|examples?|samples?|demo|docs?)$/i.test(dir)) continue;
+    if (/^(images?|assets?|examples?|samples?|demo|docs?|scripts?|notebooks?|tests?)$/i.test(dir)) continue;
+    // The index names components one folder deep. Anything deeper is a
+    // second copy of the model for another use (a variant, a source
+    // checkpoint) and is not what loads.
+    if (name.split("/").length > 2) continue;
     // Single-file checkpoints at the top level are the same model again.
     if (!dir && /\.(safetensors|bin|gguf)$/i.test(name)) continue;
     if (/\.bin$/i.test(name) && [...names].some((n) => n.startsWith(`${dir}/`) && /\.safetensors$/i.test(n))) continue;

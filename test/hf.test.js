@@ -148,6 +148,8 @@ test("the files a diffusers folder needs: index, configs, one copy of each weigh
     { name: "scheduler/scheduler_config.json", gb: 0 }, { name: "tokenizer/tokenizer.json", gb: 0.01 },
     { name: "unet/config.json", gb: 0 }, { name: "unet/diffusion_pytorch_model.safetensors", gb: 10 }, { name: "unet/diffusion_pytorch_model.fp16.safetensors", gb: 5 }, { name: "unet/diffusion_pytorch_model.bin", gb: 10 },
     { name: "vae/diffusion_pytorch_model.bin", gb: 0.3 }, { name: "sd_xl_base_1.0.safetensors", gb: 6.9 },
+    // A second copy of the model under its own folder, and helper scripts: not what loads.
+    { name: "FL2VA/transformer/model-00001-of-00002.safetensors", gb: 60 }, { name: "scripts/run.py", gb: 0 },
   ];
   const repo = repoFiles(files);
   assert.deepEqual(repo.files.map((f) => f.from), ["model_index.json", "scheduler/scheduler_config.json", "tokenizer/tokenizer.json", "unet/config.json", "unet/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"], "the half-precision variant over the full one, safetensors over .bin, a .bin alone kept, no single-file checkpoint, no samples");

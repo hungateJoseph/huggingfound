@@ -378,10 +378,11 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
     return {
       runnable: false,
       needsGpu: true,
-      reason: `${model.name} runs only on a rented GPU: it is loaded by the diffusers library, which nothing on a laptop runs well${repo.gb ? `, and its ${repo.gb.toFixed(0)} GB of weights want a data-centre card` : ""}. Rent one by the hour and the machine fetches the model and makes ${what} there.`,
+      reason: `${model.name} runs only on a rented GPU: it is loaded by the diffusers library, which nothing on a laptop runs well${repo.gb ? `, and its ${repo.gb.toFixed(0)} GB of weights want a data-centre card${repo.gb > 60 ? " (it loads at 8 bits on a card with room for about half of that, or in full precision across several cards)" : ""}` : ""}. Rent one by the hour and the machine fetches the model and makes ${what} there.`,
       steps: [],
       link: model.url,
       file: repo,
+      tierGb: recommendedGb(repo.gb),
     };
   }
   if (model.gated && !hasToken) {
@@ -389,7 +390,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   }
   const stale = staleMachine(model, detected.gpu, "pull-image-repo", "this family could run there");
   if (stale) return stale;
-  const fit = fitFor(repo.gb, machine);
+  const fit = diffusersFit(repo.gb, machine);
   const done = detected.gpu.files.includes(`${model.id}/model_index.json`);
   const fast = /turbo|lightning|schnell|distill|hyper|rapid|fast|step/i.test(model.id);
   const cfg = /flux/i.test(model.id) ? 3.5 : /qwen/i.test(model.id) ? 4 : 5;
@@ -415,7 +416,26 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const speed = { text: video ? "A short clip takes a few minutes on a data-centre card; the first one longer while the model loads." : "A picture takes some seconds to a minute on a data-centre card; the first one longer while the model loads.", seconds: null };
   // An image-to-video model animates a picture; a text-to-video one may take one as well.
   const startPicture = video ? (/image-to-video/.test(model.pipeline ?? "") && !(model.tags ?? []).includes("text-to-video") ? "required" : "optional") : null;
-  return { runnable: true, runner: "diffusers", file: repo, fit, speed, measured: "", steps, qualities, fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
+  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb), speed, measured: "", steps, qualities, fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
+}
+
+// How a folder model sits on the rented machine's card or cards: whole,
+// at 8 or 4 bits (the worker's own ladder), or not at all. The sizes
+// mirror worker.py: 8-bit takes about 0.6 of the full weights, 4-bit 0.35.
+export function diffusersFit(gb, machine) {
+  if (!gb) return { level: "unknown", text: "Size unknown" };
+  const room = machine.gpuGb ?? machine.comfortableGb ?? 0;
+  const where = `the server's ${room} GB`;
+  if (gb * 1.15 <= room) return { level: "good", text: `Fits ${where} (${gb.toFixed(1)} GB)` };
+  if (gb * 0.6 <= room) return { level: "tight", text: `Loads at 8 bits on ${where} (${gb.toFixed(1)} GB in full precision); a little lower quality` };
+  if (gb * 0.35 <= room) return { level: "tight", text: `Loads at 4 bits on ${where} (${gb.toFixed(1)} GB in full precision); lower quality and slower, a bigger size would do better` };
+  return { level: "no", text: `Too big for ${where} even at 4 bits (${gb.toFixed(1)} GB); it would stream from the machine's memory, very slowly, or needs a bigger size` };
+}
+
+// The size to recommend for a folder model: room for it at 8 bits with
+// margin, which is where quality is still close to full precision.
+function recommendedGb(gb) {
+  return gb ? gb * 0.6 : null;
 }
 
 // Why the chat server is not answering: a rented machine says where it is

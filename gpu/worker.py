@@ -34,7 +34,7 @@ def say(obj):
     _out.flush()
 
 
-state = {"pipe": None, "dir": None, "key": None, "kind": None, "offloaded": False, "adapters": [], "faces": None}
+state = {"pipe": None, "dir": None, "key": None, "kind": None, "offloaded": False, "adapters": [], "faces": None, "mode": None}
 
 
 def check():
@@ -104,26 +104,94 @@ def load(req):
         cls = str(index.get("_class_name", ""))
         # Wan, LTX, Mochi and CogVideoX name their pipelines after themselves.
         kind = "video" if any(w in cls for w in ("Video", "Wan", "LTX", "Mochi", "CogVideoX", "Allegro", "Latte", "SkyReels", "Hunyuan")) else "image"
-        pipe = DiffusionPipeline.from_pretrained(model_dir, torch_dtype=dtype, local_files_only=True)
         weights = folder_gb(model_dir)
+        pipe, mode = load_folder(model_dir, dtype, weights)
     with contextlib.suppress(Exception):
         pipe.set_progress_bar_config(disable=True)
     for adapter in adapters:
         apply_adapter(pipe, adapter, dtype)
-    # A model that fits the card goes onto it whole; a bigger one streams
-    # its parts through the card as they are needed, slower but it runs.
     vram = torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0
-    offloaded = False
-    if torch.cuda.is_available():
-        if weights * 1.15 < vram:
-            pipe.to("cuda")
-        else:
-            pipe.enable_model_cpu_offload()
-            offloaded = True
+    if single:
+        mode = place(pipe, weights, vram)
     with contextlib.suppress(Exception):
         pipe.vae.enable_tiling()
-    state.update(pipe=pipe, dir=model_dir or single, key=key, kind=kind, offloaded=offloaded, adapters=adapters)
-    return {"ok": True, "kind": kind, "offloaded": offloaded, "weightsGb": round(weights, 1), "vramGb": round(vram, 1)}
+    state.update(pipe=pipe, dir=model_dir or single, key=key, kind=kind, offloaded=mode == "offload", adapters=adapters, mode=mode)
+    return {"ok": True, "kind": kind, "mode": mode, "note": MODE_NOTES.get(mode, ""), "offloaded": mode == "offload", "weightsGb": round(weights, 1), "vramGb": round(vram, 1), "gpus": torch.cuda.device_count() if torch.cuda.is_available() else 0}
+
+
+MODE_NOTES = {
+    "gpu": "",
+    "multi-gpu": "Spread across the machine's cards.",
+    "8-bit": "Loaded at 8 bits to fit the card: a little lower quality than full precision.",
+    "4-bit": "Loaded at 4 bits to fit the card: noticeably lower quality and slower; a bigger card would do better.",
+    "offload": "Bigger than the card: streamed through it from the machine's memory, slowly.",
+}
+
+
+def gpu_memory():
+    import torch
+
+    if not torch.cuda.is_available():
+        return 0, 0, 0
+    n = torch.cuda.device_count()
+    each = [torch.cuda.get_device_properties(i).total_memory / 1024**3 for i in range(n)]
+    return n, each[0], sum(each)
+
+
+def place(pipe, weights, vram):
+    """Where a loaded pipeline goes: the card whole, or streamed through it."""
+    import torch
+
+    if not torch.cuda.is_available():
+        return "cpu"
+    if weights * 1.15 < vram:
+        pipe.to("cuda")
+        return "gpu"
+    pipe.enable_model_cpu_offload()
+    return "offload"
+
+
+def load_folder(model_dir, dtype, weights):
+    """Loads a folder model the way its size allows: whole on one card,
+    spread over several, at 8 or 4 bits when it would not fit otherwise,
+    or streamed from the machine's memory as a last resort. Pipelines a
+    repository ships its own code for load with that code, which runs on
+    the rented machine only."""
+    from diffusers import DiffusionPipeline
+
+    n, first, total = gpu_memory()
+    common = {"torch_dtype": dtype, "local_files_only": True, "trust_remote_code": True}
+    if n and weights * 1.15 < first:
+        pipe = DiffusionPipeline.from_pretrained(model_dir, **common)
+        pipe.to("cuda")
+        return pipe, "gpu"
+    if n > 1 and weights * 1.15 < total:
+        # One component per card, as whole as they come.
+        pipe = DiffusionPipeline.from_pretrained(model_dir, device_map="balanced", **common)
+        return pipe, "multi-gpu"
+    quant = None
+    if n and weights * 0.6 < total:
+        quant = ("bitsandbytes_8bit", {"load_in_8bit": True})
+    elif n and weights * 0.35 < total:
+        quant = ("bitsandbytes_4bit", {"load_in_4bit": True, "bnb_4bit_quant_type": "nf4", "bnb_4bit_compute_dtype": dtype})
+    if quant:
+        try:
+            from diffusers import PipelineQuantizationConfig
+
+            cfg = PipelineQuantizationConfig(quant_backend=quant[0], quant_kwargs=quant[1], components_to_quantize=["transformer", "transformer_2", "unet", "text_encoder", "text_encoder_2", "text_encoder_3"])
+            pipe = DiffusionPipeline.from_pretrained(model_dir, quantization_config=cfg, **common)
+            if n > 1:
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe.to("cuda")
+            return pipe, "8-bit" if quant[0].endswith("8bit") else "4-bit"
+        except Exception as err:  # noqa: BLE001
+            say({"progress": 0, "note": f"quantised load failed ({type(err).__name__}: {str(err)[:200]}); streaming instead"})
+    pipe = DiffusionPipeline.from_pretrained(model_dir, **common)
+    if n:
+        pipe.enable_model_cpu_offload()
+        return pipe, "offload"
+    return pipe, "cpu"
 
 
 # ---- add-ons -----------------------------------------------------------------------

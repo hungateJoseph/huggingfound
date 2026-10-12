@@ -38,7 +38,7 @@ export function categorize(model) {
   // A repository that bundles a text encoder GGUF next to an image model
   // gets a "conversational" tag on the Hub. It is still an image model;
   // handing that encoder to Ollama as a chat model is a mistake.
-  const imageLike = /^(text-to-image|image-to-image|image-editing|image-to-video|text-to-video|video-to-video|inpainting)$/.test(pipeline) || tags.has("flux") || tags.has("diffusers");
+  const imageLike = /^(text-to-image|image-to-image|image-editing|inpainting)$/.test(pipeline) || /video/.test(pipeline) || tags.has("flux") || tags.has("diffusers");
   if (pipeline === "text-to-image" || (imageLike && !/text-generation/.test(pipeline))) {
     cats.push("images");
   } else if (pipeline === "automatic-speech-recognition") {
