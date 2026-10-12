@@ -68,6 +68,7 @@ def unload():
     state["key"] = None
     state["kind"] = None
     state["adapters"] = []
+    state["modular"] = False
     gc.collect()
     with contextlib.suppress(Exception):
         import torch
@@ -103,7 +104,7 @@ def load(req):
             index = json.load(f)
         cls = str(index.get("_class_name", ""))
         # Wan, LTX, Mochi and CogVideoX name their pipelines after themselves.
-        kind = "video" if any(w in cls for w in ("Video", "Wan", "LTX", "Mochi", "CogVideoX", "Allegro", "Latte", "SkyReels", "Hunyuan")) else "image"
+        kind = "video" if any(w in cls for w in ("Video", "Wan", "LTX", "Mochi", "CogVideoX", "Allegro", "Latte", "SkyReels", "Hunyuan", "MiniMax")) else "image"
         weights = folder_gb(model_dir)
         pipe, mode = load_folder(model_dir, dtype, weights)
     with contextlib.suppress(Exception):
@@ -161,6 +162,12 @@ def load_folder(model_dir, dtype, weights):
 
     n, first, total = gpu_memory()
     common = {"torch_dtype": dtype, "local_files_only": True, "trust_remote_code": True}
+    with open(os.path.join(model_dir, "model_index.json"), encoding="utf-8") as f:
+        cls = str(json.load(f).get("_class_name", ""))
+    # The newer "modular" pipelines (MiniMax-H3 among them) load through
+    # their own class and take their inputs by name.
+    if "Modular" in cls:
+        return load_modular(model_dir, dtype, weights, n, first, total)
     if n and weights * 1.15 < first:
         pipe = DiffusionPipeline.from_pretrained(model_dir, **common)
         pipe.to("cuda")
@@ -269,10 +276,83 @@ def face_embeds(pipe, image, adapter, dtype):
 
 
 def accepted(pipe):
+    if state.get("modular"):
+        names = set()
+        for attr in ("input_names", "intermediate_input_names"):
+            with contextlib.suppress(Exception):
+                names |= set(getattr(pipe, attr) or [])
+        with contextlib.suppress(Exception):
+            names |= {p.name for p in pipe.blocks.inputs}
+        # Without a list of inputs, everything common is offered and the
+        # pipeline takes what it knows.
+        return names or {"prompt", "negative_prompt", "num_inference_steps", "guidance_scale", "width", "height", "num_frames", "generator", "image", "strength"}
     try:
         return set(inspect.signature(pipe.__call__).parameters)
     except (TypeError, ValueError):
         return set()
+
+
+def load_modular(model_dir, dtype, weights, n, first, total):
+    """A modular pipeline: the blocks come from the repository's own code,
+    the components are loaded afterwards, and placement follows the same
+    ladder as far as the class allows (whole, spread, or offloaded)."""
+    from diffusers import ModularPipeline
+
+    pipe = ModularPipeline.from_pretrained(model_dir, trust_remote_code=True, local_files_only=True)
+    loaded = {"torch_dtype": dtype, "local_files_only": True, "trust_remote_code": True}
+    mode = "cpu"
+    if n and weights * 1.15 < first:
+        pipe.load_components(**loaded)
+        pipe.to("cuda")
+        mode = "gpu"
+    elif n > 1 and weights * 1.15 < total:
+        try:
+            pipe.load_components(device_map="balanced", **loaded)
+            mode = "multi-gpu"
+        except Exception as err:  # noqa: BLE001
+            say({"progress": 0, "note": f"spreading across cards failed ({type(err).__name__}: {str(err)[:200]}); streaming instead"})
+            pipe.load_components(**loaded)
+            pipe.enable_auto_cpu_offload(device="cuda")
+            mode = "offload"
+    elif n:
+        pipe.load_components(**loaded)
+        pipe.enable_auto_cpu_offload(device="cuda")
+        mode = "offload"
+    else:
+        pipe.load_components(**loaded)
+    state["modular"] = True
+    return pipe, mode
+
+
+def run_modular(pipe, kwargs, kind):
+    """Calls a modular pipeline and finds its pictures or frames in what
+    comes back, whichever name the blocks gave them."""
+    wanted = "videos" if kind == "video" else "images"
+    try:
+        result = pipe(**kwargs, output=wanted)
+    except Exception:  # noqa: BLE001
+        result = pipe(**kwargs)
+    frames = images = None
+    if hasattr(result, "values") and not isinstance(result, (list, tuple)):
+        values = result.values if isinstance(result.values, dict) else {}
+        for key in ("videos", "frames", "video"):
+            if values.get(key) is not None:
+                frames = values[key]
+                break
+        for key in ("images", "image"):
+            if images is None and values.get(key) is not None:
+                images = values[key]
+    elif isinstance(result, (list, tuple)):
+        if kind == "video":
+            frames = result
+        else:
+            images = result
+    else:
+        if kind == "video":
+            frames = result
+        else:
+            images = result
+    return frames, images
 
 
 def generate(req):
@@ -346,7 +426,15 @@ def generate(req):
         kwargs["callback_on_step_end"] = on_step
 
     with torch.inference_mode():
-        result = pipe(**kwargs)
+        if state.get("modular"):
+            frames_out, images_out = run_modular(pipe, kwargs, kind)
+            if frames_out is None and images_out is None:
+                raise ValueError("the pipeline returned neither pictures nor frames")
+            result = type("Out", (), {})()
+            result.frames = [first_clip(frames_out)] if frames_out is not None else None
+            result.images = [first_image(images_out)] if images_out is not None else None
+        else:
+            result = pipe(**kwargs)
 
     if getattr(result, "frames", None) is not None:
         from diffusers.utils import export_to_video
@@ -367,6 +455,74 @@ def generate(req):
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return {"ok": True, "image": base64.b64encode(buf.getvalue()).decode("ascii"), "width": image.width, "height": image.height}
+
+
+def as_array(x):
+    """A tensor becomes an array; anything else is returned as it is."""
+    with contextlib.suppress(Exception):
+        import torch
+
+        if isinstance(x, torch.Tensor):
+            return x.detach().float().cpu().numpy()
+    return x
+
+
+def first_clip(x):
+    """The first clip of a batch as a list of frames, whatever container
+    it came in: an array (B, F, H, W, C) or (F, H, W, C), a list of clips
+    each a list of frames, or a single list of frames."""
+    import numpy as np
+
+    x = as_array(x)
+    if isinstance(x, np.ndarray):
+        if x.ndim == 5:
+            x = x[0]
+        if x.ndim == 4:
+            return [frame_to_pil(f) for f in x]
+        raise ValueError(f"unexpected clip shape {x.shape}")
+    if isinstance(x, (list, tuple)) and x:
+        inner = as_array(x[0])
+        if isinstance(inner, (list, tuple)):
+            return [frame_to_pil(f) for f in inner]
+        if isinstance(inner, np.ndarray) and inner.ndim == 4:
+            return [frame_to_pil(f) for f in inner]
+        return [frame_to_pil(f) for f in x]
+    raise ValueError("no frames in the result")
+
+
+def first_image(x):
+    """The first picture of a batch as a PIL image."""
+    import numpy as np
+
+    x = as_array(x)
+    if isinstance(x, np.ndarray):
+        if x.ndim == 4:
+            x = x[0]
+        return frame_to_pil(x)
+    if isinstance(x, (list, tuple)) and x:
+        return first_image(x[0])
+    return frame_to_pil(x)
+
+
+def frame_to_pil(f):
+    import numpy as np
+    from PIL import Image
+
+    if hasattr(f, "save"):
+        return f
+    arr = np.asarray(as_array(f))
+    # Channels first (C, H, W) becomes channels last.
+    if arr.ndim == 3 and arr.shape[0] in (1, 3, 4) and arr.shape[-1] not in (1, 3, 4):
+        arr = np.moveaxis(arr, 0, -1)
+    if arr.dtype != np.uint8:
+        lo = float(arr.min()) if arr.size else 0.0
+        # Values in -1..1 are shifted; values in 0..1 are scaled.
+        if lo < 0:
+            arr = (arr + 1) / 2
+        arr = (np.clip(arr, 0, 1) * 255).round().astype(np.uint8)
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = arr[..., 0]
+    return Image.fromarray(arr)
 
 
 def main():
