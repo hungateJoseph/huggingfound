@@ -141,6 +141,22 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   const pieces = buildPlan({ model: gguf, files: gguf.files, machine, detected: gpu, hasToken: false });
   assert.equal(pieces.runnable, false);
   assert.match(pieces.reason, /loose pieces/);
+  // With a known twin in the diffusers layout, the plan points at it instead.
+  const ltx = { ...summarize({ id: "Lightricks/LTX-2.5", pipeline_tag: "image-to-video", library_name: "diffusion-single-file", tags: ["diffusion-single-file", "image-to-video"], gated: "auto" }), files: [{ name: "diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors", gb: 39 }] };
+  const twinned = buildPlan({ model: ltx, files: ltx.files, machine, detected: gpu, hasToken: true, twin: { id: "Lightricks/LTX-2.5-Diffusers", name: "LTX-2.5-Diffusers" } });
+  assert.equal(twinned.runnable, false);
+  assert.deepEqual(twinned.twin, { id: "Lightricks/LTX-2.5-Diffusers", name: "LTX-2.5-Diffusers" });
+  assert.match(twinned.reason, /The same model in the layout the rented GPU runs is LTX-2.5-Diffusers/);
+  // A gated folder model runs with a token, fetched by the machine with it; an image-to-video model wants a starting picture.
+  const ltxD = { ...summarize({ id: "Lightricks/LTX-2.5-Diffusers", pipeline_tag: "image-to-video", library_name: "diffusers", tags: ["diffusers", "image-to-video", "text-to-video"], gated: "auto" }), files: [{ name: "model_index.json", gb: 0 }, { name: "transformer/diffusion_pytorch_model.safetensors", gb: 39 }] };
+  assert.equal(buildPlan({ model: ltxD, files: ltxD.files, machine, detected: gpu, hasToken: false }).gated, true);
+  const gatedOk = buildPlan({ model: ltxD, files: ltxD.files, machine, detected: gpu, hasToken: true });
+  assert.equal(gatedOk.runnable, true);
+  assert.match(gatedOk.steps[0].text, /with your Hugging Face token since the model is gated/);
+  assert.equal(gatedOk.tryWith.kind, "video");
+  assert.equal(gatedOk.tryWith.startPicture, "optional", "it also takes words alone, so the picture is optional");
+  assert.equal(buildPlan({ model: { ...ltxD, tags: ["diffusers", "image-to-video"] }, files: ltxD.files, machine, detected: gpu, hasToken: true }).tryWith.startPicture, "required");
+  assert.equal(gatedOk.qualities.max.height, 704, "clip sizes are multiples of 32");
 });
 
 test("an add-on such as an IP-Adapter asks for a rented GPU, then is applied there to a base model already on the machine", () => {

@@ -69,6 +69,8 @@ function runnerFor(model, cats, gguf) {
     // pieces separately, which is a hand-assembly job, so they are shown
     // but not set up.
     const rawTags = (model.tags ?? []).map((t) => t.toLowerCase());
+    // Video is beyond stable-diffusion.cpp whatever the tags say.
+    if (/video/.test(model.pipeline_tag ?? "") || rawTags.some((t) => /video/.test(t))) return { id: "diffusers", name: "the diffusers library on a rented GPU", easy: false, gpu: true };
     const family = /stable.?diffusion|\bsd-?(1\.?5|2\.?1|xl)\b|sdxl|sd.?turbo|dreamshaper|realistic.?vision|juggernaut/i.test(model.id);
     const parts = /flux|klein|qwen|wan|hunyuan|z-image|lumina|chroma|kolors|pixart|sana|cogview|hidream|stable-diffusion-3|sd3|lora|openvino|onnx|tensorrt|coreml/i.test(model.id) || rawTags.some((t) => /^(flux|flux2|klein|qwen-image|wan|hunyuan|sd3|stable-diffusion-3)$/.test(t));
     const sdPipeline = rawTags.includes("stable-diffusion-xl") || rawTags.includes("stable-diffusion") || rawTags.some((t) => /^diffusers:stablediffusion(xl)?(img2img|inpaint)?pipeline$/.test(t));

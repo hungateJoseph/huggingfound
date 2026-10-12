@@ -49,7 +49,7 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "HF_TOKEN"]);
 // Models a person has hidden from search and Browse: ids, comma-separated.
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
@@ -103,6 +103,30 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   const remoteFor = (runnerId, ctx) => (runnerId === "ollama" ? chatServer(ctx) : runnerId === "sd" || runnerId === "diffusers" ? imageAgent(ctx) : "");
   const machineFor = (runnerId, ctx) => (remoteFor(runnerId, ctx) ? chatServerMachine(remoteFor(runnerId, ctx), ctx.settings().OLLAMA_SERVER_GB) : machine);
   const hub = () => createHub({ fetchImpl, base: hubBase, token: env().HF_TOKEN });
+  // The Hugging Face token for gated models: the person's own on the hosted
+  // site (kept with their account), the settings file's in the app.
+  const tokenFor = (ctx) => (hosted ? ctx.settings().HF_TOKEN || "" : env().HF_TOKEN || "");
+  // A model published as pieces often has a twin in the folder the
+  // diffusers library loads, named with -Diffusers. Looked up once.
+  const twins = new Map();
+  async function diffusersTwin(model, token) {
+    if (model.runner?.id !== "diffusers" || (model.files ?? []).some((f) => f.name === "model_index.json")) return null;
+    if (twins.has(model.id)) return twins.get(model.id);
+    let found = null;
+    for (const suffix of ["-Diffusers", "-diffusers"]) {
+      try {
+        const m = await hub().model(`${model.id}${suffix}`, { token });
+        if (m && !m.gatedBlocked && (m.files ?? []).some((f) => f.name === "model_index.json")) {
+          found = { id: m.id, name: m.name };
+          break;
+        }
+      } catch {
+        // no such repository
+      }
+    }
+    twins.set(model.id, found);
+    return found;
+  }
   const hub_ = hub;
   const civitai = createCivitai({ fetchImpl, base: civitaiBase });
   const hn = createHackerNews({ fetchImpl, base: hnBase });
@@ -563,8 +587,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const id = url.searchParams.get("id") ?? "";
       if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
       // Gated refusals are not cached: a token added later should get a fresh answer.
-      const model = details.get(id) ?? (await hub().model(id));
-      if (!model.gatedBlocked) details.set(id, model);
+      const own = tokenFor(ctx);
+      const model = details.get(id) ?? (await hub().model(id, { token: own }));
+      // What a person's own token unlocked is not kept for everyone.
+      if (!model.gatedBlocked && !(own && model.gated)) details.set(id, model);
       // Curated picks name their runner and file outright, so a repository
       // the tag rules cannot place still gets a plan.
       const pick = PICKS.find((p) => p.id === id);
@@ -582,7 +608,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const detected = useRemote && kind === "ollama" ? withRental(await detect(fetchImpl, remote), ctx) : useRemote && (kind === "sd" || kind === "diffusers") ? await withGpu(hosted ? noRunners() : await detect(fetchImpl), remote, ctx) : hosted ? noRunners() : await detect(fetchImpl);
       const plan = model.gatedBlocked
         ? { runnable: false, gated: true, reason: "This model is gated and the request was refused. Accept the licence on Hugging Face and add a token in Settings.", steps: [], link: `https://huggingface.co/${id}` }
-        : buildPlan({ model, files: model.files, machine: planMachine, detected, hasToken: !hosted && Boolean(env().HF_TOKEN), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer() });
+        : buildPlan({ model, files: model.files, machine: planMachine, detected, hasToken: Boolean(own), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer(), twin: await diffusersTwin(model, own) });
       // What the page needs to offer the other place: the size of GPU this
       // file wants, and whether a machine is rented already.
       const choice = ["ollama", "sd", "diffusers"].includes(kind) ? { where: useRemote || gpuOnly ? "rented" : "local", rented: Boolean(remote), tier: gpuOnly && plan.addon ? 24 : tierFor(plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY), ...(gpuOnly ? { gpuOnly: true } : {}) } : null;
@@ -748,13 +774,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           if (!agent) return send(res, 400, { error: "No GPU is rented. Rent one in Settings, or run the model on this computer." });
           const release = ctx.rental?.hold() ?? (() => {});
           const owner = ctx.user?.id ?? null;
+          const token = tokenFor(ctx);
           const run = body.kind === "pull-image-folder"
-            ? pullImageFolderOnAgent(String(args.repo ?? ""), args.files, String(args.into ?? ""), fetchImpl, agent, { owner })
+            ? pullImageFolderOnAgent(String(args.repo ?? ""), args.files, String(args.into ?? ""), fetchImpl, agent, { owner, token })
             : body.kind === "pull-image-repo"
-              ? pullImageRepoOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner })
+              ? pullImageRepoOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token })
             : body.kind === "pull-addon"
-              ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner })
-              : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner });
+              ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token })
+              : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner, token });
           run.finished.then(release);
           return send(res, 200, { id: tag(run).id });
         }

@@ -56,6 +56,8 @@ test("vision, image, and speech pipelines get their runners", () => {
   const other = categorize({ id: "someone/painting-model", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers"] });
   assert.equal(other.runner.id, "diffusers");
 
+  const ltx = categorize({ id: "Lightricks/LTX-2.5", pipeline_tag: "image-to-video", library_name: "diffusion-single-file", tags: ["diffusion-single-file", "image-to-video"] });
+  assert.equal(ltx.runner.id, "diffusers", "a video model is never stable-diffusion.cpp's, whatever its tags");
   const wan = categorize({ id: "Wan-AI/Wan2.2-TI2V-5B-Diffusers", pipeline_tag: "text-to-video", library_name: "diffusers", tags: ["diffusers"] });
   assert.ok(wan.categories.includes("images"));
   assert.equal(wan.runner.id, "diffusers", "video families too");

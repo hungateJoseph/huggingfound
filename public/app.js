@@ -666,8 +666,7 @@ function renderModel(model, plan, choice = null) {
 
   if (!plan.runnable) {
     parts.push(`<div class="notice ${plan.gated || plan.needsGpu ? "info" : "warn"}">${esc(plan.reason)}${plan.link ? ` <a href="${esc(plan.link)}" target="_blank" rel="noopener">${plan.gated || plan.addon || plan.needsGpu ? "Open the model page" : "Search for a GGUF version"}</a>` : ""}</div>`);
-    if (plan.gated && state.hosted) parts.push(`<p class="muted small">On your computer, HuggingFound's Settings take a Hugging Face read token, and this plan unlocks there.</p>`);
-    else if (plan.gated) parts.push(`<div class="actions"><button class="ghost" id="open-settings-from-model">Add a token in Settings</button></div>`);
+    if (plan.gated) parts.push(`<div class="actions"><button class="ghost" id="open-settings-from-model">Add a Hugging Face token in Settings</button></div>`);
     // A model that runs only on a rented GPU leads straight to renting one.
     if (plan.needsGpu && choice) {
       state.rentAsk = model.id;
@@ -675,8 +674,10 @@ function renderModel(model, plan, choice = null) {
     }
     // A machine from before this feature is replaced from here.
     if (plan.staleMachine) parts.push(`<div class="actions"><button class="primary" id="replace-from-model">Replace the machine</button></div>`);
+    if (plan.twin) parts.push(`<div class="actions"><button class="primary" id="open-twin">Open ${esc(plan.twin.name)}</button></div>`);
     body.innerHTML = parts.join("");
     body.querySelector("#open-settings-from-model")?.addEventListener("click", () => ($("#settings").hidden = false));
+    body.querySelector("#open-twin")?.addEventListener("click", () => openModel(plan.twin.id));
     body.querySelector("#replace-from-model")?.addEventListener("click", () => {
       state.rentFrom = model.id;
       replaceMachine();
@@ -2135,6 +2136,7 @@ function renderImage(box, t) {
     ${addonHtml}
     <div class="effort-title">Effort</div>
     <div class="quality" id="quality">${options}</div>
+    ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">${t.startPicture === "required" ? "This model animates a picture: the clip begins from it." : "With a picture the clip begins from it; without one it comes from the words alone."}</small></label>` : ""}
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
       <button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>
@@ -2178,6 +2180,19 @@ function renderImage(box, t) {
         // keeps the result, which is saved only when downloaded.
         let target = { repo: t.repo, file: t.file };
         let extra = {};
+        if (video && t.startPicture) {
+          const startFile = box.querySelector("#video-start")?.files[0];
+          if (t.startPicture === "required" && !startFile) throw new Error("this model needs a starting picture");
+          if (startFile) {
+            extra.init = await new Promise((resolve, reject) => {
+              const r = new FileReader();
+              r.onload = () => resolve(String(r.result));
+              r.onerror = () => reject(new Error("could not read the picture"));
+              r.readAsDataURL(startFile);
+            });
+            extra.strength = 0.9;
+          }
+        }
         if (addon) {
           const base = bases[Number(box.querySelector("#addon-base")?.value ?? -1)];
           if (!base) throw new Error("no base model on the rented GPU yet");

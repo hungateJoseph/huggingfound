@@ -104,8 +104,12 @@ export function createHub({ fetchImpl = fetch, base = "https://huggingface.co", 
   }
 
   // Full details for one model, including file names and sizes.
-  async function model(id) {
-    const res = await fetchImpl(new URL(`/api/models/${id}?blobs=true`, base), { headers: headers() });
+  async function model(id, { token: own = "" } = {}) {
+    // A gated repository answers only a token whose account accepted the
+    // licence, so a person's own token takes precedence over the app's.
+    const h = headers();
+    if (own) h.Authorization = `Bearer ${own}`;
+    const res = await fetchImpl(new URL(`/api/models/${id}?blobs=true`, base), { headers: h });
     if (res.status === 401 || res.status === 403) return { id, gatedBlocked: true };
     if (!res.ok) throw new Error(`Hugging Face replied HTTP ${res.status} for ${id}`);
     const m = await res.json();

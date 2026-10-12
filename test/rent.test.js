@@ -316,6 +316,30 @@ test("a machine from before a feature is told apart by its agent's version, and 
   assert.equal((await json("/api/model?id=h94/IP-Adapter-FaceID")).plan.runnable, true);
 });
 
+test("a gated folder model runs on the machine with the person's Hugging Face token, and a pieces repository points at its diffusers twin", async () => {
+  const LTX = "Lightricks/LTX-2.5";
+  const TWIN = "Lightricks/LTX-2.5-Diffusers";
+  const token = `hf_${"x".repeat(30)}`;
+  // Without a token the gated twin cannot even be looked at, so the pieces repository has no way forward yet.
+  const blocked = (await json(`/api/model?id=${TWIN}`)).plan;
+  assert.equal(blocked.gated, true);
+  assert.equal((await post("/api/settings", { HF_TOKEN: token })).status, 200);
+  const pieces = (await json(`/api/model?id=${LTX}`)).plan;
+  assert.equal(pieces.runnable, false);
+  assert.deepEqual(pieces.twin, { id: TWIN, name: "LTX-2.5-Diffusers" }, "the -Diffusers twin is found on the Hub");
+  const plan = (await json(`/api/model?id=${TWIN}`)).plan;
+  assert.equal(plan.runnable, true, plan.reason);
+  assert.equal(plan.steps[0].kind, "pull-image-repo");
+  assert.match(plan.steps[0].text, /with your Hugging Face token/);
+  assert.equal(plan.tryWith.kind, "video");
+  assert.equal(plan.tryWith.startPicture, "optional");
+  const res = await post("/api/run", { kind: "pull-image-repo", args: plan.steps[0].args, where: "rented" });
+  await (await get(`/api/runs/${(await res.json()).id}`)).text();
+  assert.equal(agent.state.downloads.at(-1).token, token, "the machine fetches with the token");
+  await post("/api/remove", { kind: "gpu-file", repo: TWIN, file: "model_index.json" });
+  await post("/api/settings", { HF_TOKEN: "" });
+});
+
 test("an add-on is downloaded onto the rented GPU and applied there to a base model", async () => {
   const ADDON = "h94/IP-Adapter-FaceID";
   const { plan, choice } = await json(`/api/model?id=${ADDON}`);

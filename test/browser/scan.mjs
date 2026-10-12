@@ -116,11 +116,11 @@ await step("the page opens on a single search box", async () => {
   await page.waitForFunction(() => /video generation/.test(document.querySelector("#found-title").textContent));
   await page.waitForSelector("#found .model");
   const videos = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
-  assert.deepEqual(videos.slice(0, 3), ["Wan2.2-T2V-A14B", "Wan2.2-TI2V-5B-Diffusers", "stable-video-diffusion-img2vid"], "the stronger video family first, the far more liked old one last, chat models after all three");
+  assert.deepEqual(videos.slice(0, 5), ["Wan2.2-T2V-A14B", "Wan2.2-TI2V-5B-Diffusers", "LTX-2.5", "LTX-2.5-Diffusers", "stable-video-diffusion-img2vid"], "the stronger video families first, the far more liked old one last, chat models after all of them");
   assert.equal(await page.locator("#found-sort").inputValue(), "match");
   await page.selectOption("#found-sort", "likes");
   const byLikes = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
-  assert.deepEqual(byLikes.slice(0, 2), ["stable-video-diffusion-img2vid", "Wan2.2-T2V-A14B"], "by users' opinion the liked one leads, and video models still come before the rest");
+  assert.deepEqual(byLikes.slice(0, 2), ["LTX-2.5", "stable-video-diffusion-img2vid"], "by users' opinion the most liked lead, and video models still come before the rest");
   assert.equal(await page.locator("#found-sort").inputValue(), "likes");
   await page.selectOption("#found-sort", "match");
   await page.fill("#trait", "");
@@ -867,7 +867,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
   assert.equal(await visitor.locator("#delete-account").innerText(), "Delete my account");
   await visitor.click("#open-settings");
   await visitor.waitForSelector("#settings:not([hidden])");
-  assert.equal(await visitor.locator("#token").isVisible(), false, "no Hugging Face token on the site");
+  assert.equal(await visitor.locator("#token").isVisible(), true, "a Hugging Face token is kept with the account, for gated models on the rented GPU");
   assert.equal(await visitor.locator("#chat-server").isVisible(), false, "no hand-set chat server on the site");
   assert.equal(await visitor.locator("#image-server").isVisible(), false);
   assert.equal(await visitor.locator("#runpod-key").isVisible(), true);

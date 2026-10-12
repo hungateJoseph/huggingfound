@@ -8,11 +8,11 @@ import { isAddon } from "./quality.js";
 // needs, with the ones already done marked so the page can skip them.
 // Each step names a kind from runners.js; the page never sends commands.
 
-export function buildPlan({ model, files, machine, detected, hasToken, preferredFile, timings = {}, imageServer = null }) {
+export function buildPlan({ model, files, machine, detected, hasToken, preferredFile, timings = {}, imageServer = null, twin = null }) {
   const runner = model.runner;
   if (!runner) return { runnable: false, reason: "This kind of model has no local runner in HuggingFound yet.", steps: [] };
   if (isAddon(model.name) && (runner.id === "sd" || runner.id === "diffusers")) return addonPlan({ model, files, detected });
-  if (runner.id === "diffusers") return diffusersPlan({ model, files, machine, detected });
+  if (runner.id === "diffusers") return diffusersPlan({ model, files, machine, detected, hasToken, twin });
   if (!runner.easy) {
     return {
       runnable: false,
@@ -161,8 +161,8 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
     // On the rented GPU the only step is the download, done by the machine;
     // pictures are then made there, asked for by the browser itself.
     if (detected.gpu?.url) {
-      if (model.gated) {
-        return { runnable: false, gated: true, reason: `${model.name} is gated, and the rented GPU fetches files without your Hugging Face token. Run it on this computer instead, or pick an open model.`, steps: [], link: model.url };
+      if (model.gated && !hasToken) {
+        return { runnable: false, gated: true, reason: `${model.name} is gated: accept its licence on Hugging Face and add a read token in Settings, and the rented GPU fetches it with that token.`, steps: [], link: model.url };
       }
       // A folder-layout model: the machine fetches the parts and merges
       // them into one checkpoint, as this computer would.
@@ -351,11 +351,22 @@ function addonPlan({ model, files, detected }) {
 // other folder-layout families, video included): it runs on a rented GPU,
 // where the machine fetches the folder and its Python side makes the
 // pictures or clips. Nothing on a person's own computer loads these.
-function diffusersPlan({ model, files, machine, detected }) {
+function diffusersPlan({ model, files, machine, detected, hasToken = false, twin = null }) {
   const repo = repoFiles(files);
-  const video = /video/.test(model.pipeline ?? "");
+  const video = /video/.test(model.pipeline ?? "") || (model.tags ?? []).some((t) => /video/.test(t));
   const what = video ? "clips" : "pictures";
   if (!repo) {
+    // The same model is often published twice: once as pieces for ComfyUI
+    // and once in the folder the diffusers library loads. The folder runs.
+    if (twin) {
+      return {
+        runnable: false,
+        twin,
+        reason: `${model.name} is published here as loose pieces for other tools. The same model in the layout the rented GPU runs is ${twin.name}; open it and it runs there.`,
+        steps: [],
+        link: model.url,
+      };
+    }
     return {
       runnable: false,
       reason: `${model.name} is published as loose pieces (quantised or split weights without the folder the diffusers library loads), which have to be assembled by hand. Look for the model's diffusers version, usually the maker's own repository or one whose name ends in -Diffusers.`,
@@ -373,8 +384,8 @@ function diffusersPlan({ model, files, machine, detected }) {
       file: repo,
     };
   }
-  if (model.gated) {
-    return { runnable: false, gated: true, reason: `${model.name} is gated, and the rented GPU fetches files without your Hugging Face token. Pick an open model, or the same family from a maker who publishes it openly.`, steps: [], link: model.url };
+  if (model.gated && !hasToken) {
+    return { runnable: false, gated: true, reason: `${model.name} is gated: its licence has to be accepted on Hugging Face, and the rented GPU needs your Hugging Face read token to fetch it. Accept the licence on the model page, add the token in Settings, and this plan unlocks.`, steps: [], link: model.url };
   }
   const stale = staleMachine(model, detected.gpu, "pull-image-repo", "this family could run there");
   if (stale) return stale;
@@ -386,7 +397,7 @@ function diffusersPlan({ model, files, machine, detected }) {
     ? {
         fast: { steps: 20, width: 832, height: 480, frames: 33, fps: 16, cfg, text: "a 2-second clip at 480p" },
         default: { steps: 30, width: 832, height: 480, frames: 49, fps: 16, cfg, text: "a 3-second clip at 480p" },
-        max: { steps: 40, width: 1280, height: 720, frames: 81, fps: 16, cfg, text: "a 5-second clip at 720p, many minutes" },
+        max: { steps: 40, width: 1280, height: 704, frames: 81, fps: 16, cfg, text: "a 5-second clip at 720p, many minutes" },
       }
     : {
         fast: { steps: fast ? 4 : 12, size: 768, width: 768, height: 768, cfg, text: "768 by 768, fewer steps" },
@@ -397,12 +408,14 @@ function diffusersPlan({ model, files, machine, detected }) {
     kind: "pull-image-repo",
     args: { repo: model.id, files: repo.files.map((f) => f.from) },
     title: `Download the model's ${repo.files.length} files on the rented GPU (${repo.gb ? repo.gb.toFixed(1) + " GB" : "size unknown"})`,
-    text: `The machine fetches the model's folder straight from Hugging Face onto its own disk; nothing comes to this computer. ${fit.text}.${detected.gpu.running ? "" : ` ${serverDownNote(detected.gpu.rented)}`}`,
+    text: `The machine fetches the model's folder straight from Hugging Face onto its own disk${model.gated ? ", with your Hugging Face token since the model is gated" : ""}; nothing comes to this computer. ${fit.text}.${detected.gpu.running ? "" : ` ${serverDownNote(detected.gpu.rented)}`}`,
     done,
     command: `download ${repo.files.length} files of ${model.id} onto the rented GPU`,
   }];
   const speed = { text: video ? "A short clip takes a few minutes on a data-centre card; the first one longer while the model loads." : "A picture takes some seconds to a minute on a data-centre card; the first one longer while the model loads.", seconds: null };
-  return { runnable: true, runner: "diffusers", file: repo, fit, speed, measured: "", steps, qualities, fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers" }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
+  // An image-to-video model animates a picture; a text-to-video one may take one as well.
+  const startPicture = video ? (/image-to-video/.test(model.pipeline ?? "") && !(model.tags ?? []).includes("text-to-video") ? "required" : "optional") : null;
+  return { runnable: true, runner: "diffusers", file: repo, fit, speed, measured: "", steps, qualities, fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
 }
 
 // Why the chat server is not answering: a rented machine says where it is

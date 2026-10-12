@@ -146,11 +146,12 @@ test("a signed-in person keeps only their own keys, and the hosted settings refu
   ana = cookieOf(await post("/api/auth/google", { credential: idToken() }));
   ben = cookieOf(await post("/api/auth/google", { credential: idToken({ email: "ben@example.com", name: "Ben", picture: null }) }));
   assert.notEqual(ana, ben);
-  assert.equal((await post("/api/settings", { HF_TOKEN: "hf_abc" }, ana)).status, 400);
+  assert.equal((await post("/api/settings", { HF_TOKEN: "hf_abcdefghij" }, ana)).status, 200, "a Hugging Face token is kept with the account: the rented machine fetches gated models with it");
   assert.equal((await post("/api/settings", { OLLAMA_SERVER: "http://x", OLLAMA_SERVER_GB: "24" }, ana)).status, 400, "no hand-set servers on the site");
   assert.equal((await post("/api/settings", { RUNPOD_API_KEY: KEY, ANTHROPIC_API_KEY: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz" }, ana)).status, 200);
   const s = await json("/api/state", ana);
   assert.match(s.runpodKey, /^rpa_\*+cdef$/);
+  assert.match(s.token, /^hf_a\*+ghij$/);
   assert.match(s.claudeKey, /^sk-a\*+wxyz$/);
   assert.equal(s.claudeReady, true);
   assert.equal(s.claudeHosted.saved, true);
