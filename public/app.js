@@ -73,7 +73,8 @@ async function load() {
   state.runpodKey = s.runpodKey;
   state.registryAuth = s.registryAuth || "";
   state.stopOnQuit = s.stopOnQuit;
-  $("#runpod-status").textContent = s.runpodKey ? `A key is saved (${s.runpodKey}).` : state.hosted ? "No key saved; renting is off." : "No key saved; renting is off. The chat server above can still be set by hand.";
+  $("#runpod-status").textContent = s.runpodKey ? `A key is saved (${s.runpodKey}).` : s.rental?.rented ? "No key saved, but a machine is still rented: enter the key of the account that rented it to stop or delete it." : state.hosted ? "No key saved; renting is off." : "No key saved; renting is off. The chat server above can still be set by hand.";
+  state.runpodKey = s.runpodKey || "";
   renderRental();
   if (s.runpodKey && !state.rentOptions) loadRentOptions();
   renderRunners();
@@ -2721,6 +2722,7 @@ function renderRental() {
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
+      ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
       ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>` : ""}</div>` : ""}
       <div class="actions">
@@ -2750,6 +2752,10 @@ function renderRental() {
     loadRegistries(panel);
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-replace")?.addEventListener("click", replaceMachine);
+    panel.querySelector("#rent-key-focus")?.addEventListener("click", () => {
+      $("#runpod-key").scrollIntoView({ block: "center" });
+      $("#runpod-key").focus();
+    });
     panel.querySelector("#rent-replace-old")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
@@ -2903,6 +2909,13 @@ async function rentAction(action, question) {
   }
   state.rentError = null;
   await load();
+  const r = state.rental;
+  const words = {
+    stop: `Stopped the rented GPU: the hourly charge has ended. Its ${r?.diskGb ? `${r.diskGb} GB ` : ""}disk keeps the models for a small charge a day; Start brings it back, Delete removes it and the models.`,
+    start: "Starting the rented GPU; it answers within a minute or two. The hourly charge runs from now.",
+    delete: "Deleted the rented machine and its models. Nothing is charged any more. Rent a new one below or from any model's window.",
+  }[action];
+  if (words) notice(words, "ok");
   afterRentalChange();
 }
 
@@ -3208,6 +3221,16 @@ for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#sav
     await load();
   });
   $(clear).addEventListener("click", async () => {
+    // Without the key a running machine cannot be stopped from here.
+    if (key === "RUNPOD_API_KEY" && state.rental?.rented && ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(state.rental.status)) {
+      if (!confirm("A machine is rented with this key. Without the key this site cannot stop or delete it. Stop the machine first, then remove the key?")) return;
+      try {
+        state.rental = await api.post("/api/rent/stop", {});
+      } catch (err) {
+        alert(`Could not stop the machine: ${err.message}. The key was kept.`);
+        return;
+      }
+    }
     await api.post("/api/settings", { [key]: "" });
     if (key === "RUNPOD_API_KEY") state.rentOptions = null;
     await load();

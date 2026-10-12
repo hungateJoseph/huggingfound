@@ -722,6 +722,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click("#bar-stop");
   await page.waitForFunction(() => /stopped/.test(document.querySelector("#rent-bar").textContent));
   acceptDialogs = false;
+  assert.match(await page.locator("#notice").innerText(), /Stopped the rented GPU: the hourly charge has ended/);
   assert.equal(await page.locator("#bar-start").count(), 1);
   assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
   await page.click("#open-settings");
@@ -758,6 +759,8 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click("#rent-delete");
   await page.waitForFunction(() => document.querySelector("#rent-bar").hidden);
   acceptDialogs = false;
+  // What the click did is said, and the sizes to rent again are right there.
+  assert.match(await page.locator("#notice").innerText(), /Deleted the rented machine and its models\. Nothing is charged any more\. Rent a new one below/);
   await page.waitForSelector("#rent-panel .tier");
   assert.equal(await page.locator("#chat-server").inputValue(), "");
   const saved = fs.readFileSync(envFile, "utf8");

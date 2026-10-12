@@ -469,6 +469,15 @@ test("a stopped machine's plan note, when the server address is set by hand, say
   assert.equal(readEnv(envFile).RUNPOD_POD_ID, id);
 });
 
+test("a machine rented with a key that is then removed is still accounted for: the error names the way out", async () => {
+  await post("/api/settings", { RUNPOD_API_KEY: "" });
+  const stop = await post("/api/rent/stop", {});
+  assert.equal(stop.status, 400);
+  assert.match((await stop.json()).error, /The RunPod key is gone but a machine is still rented\. Enter the key of the account that rented it[\s\S]*stops by itself after \d+ minutes/);
+  assert.equal((await json("/api/state")).rental.rented, true, "the machine is still shown");
+  await post("/api/settings", { RUNPOD_API_KEY: KEY });
+});
+
 test("deleting removes the machine, the address and every trace in the settings", async () => {
   const gone = await (await post("/api/rent/delete", {})).json();
   assert.deepEqual(gone, { rented: false });

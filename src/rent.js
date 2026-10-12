@@ -173,7 +173,10 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   }
 
   async function request(method, path, body) {
-    if (!key()) throw new RentError("Add a RunPod API key in Settings to rent a GPU.", 400);
+    if (!key()) {
+      if (podId()) throw new RentError(`The RunPod key is gone but a machine is still rented. Enter the key of the account that rented it, in Settings, to stop or delete it. Meanwhile it stops by itself after ${idleMinutes() || 1440} minutes without use.`, 400);
+      throw new RentError("Add a RunPod API key in Settings to rent a GPU.", 400);
+    }
     // A back-off belongs to the key that was throttled; a fresh key starts clean.
     if (throttledKey === key() && now() < throttledUntil) throw new RentError(`RunPod has stopped answering this account for now; it accepts requests again in ${waitText(throttledUntil - now())}. The daily allowance is shared by every key on the account.`, 429);
     if (!withinBudget()) throw new RentError("HuggingFound has asked RunPod enough for the moment; it asks again in a minute.", 429);
