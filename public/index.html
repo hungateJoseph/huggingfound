@@ -183,6 +183,15 @@ npm start</code>
     </div>
   </div>
 
+  <div class="modal" id="presence" hidden>
+    <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="presence-title">
+      <h2 id="presence-title">Still there?</h2>
+      <p id="presence-text"></p>
+      <p class="presence-count"><span id="presence-left"></span></p>
+      <div class="actions"><button class="primary" id="presence-yes">I'm here</button><button class="ghost" id="presence-stop">Stop the GPU now</button></div>
+    </div>
+  </div>
+
   <div class="modal" id="gpu-models" hidden>
     <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="gpu-models-title">
       <div class="modal-head">

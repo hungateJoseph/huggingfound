@@ -686,6 +686,37 @@ await step("renting from the model window preselects its size, and the bar shows
   await page.keyboard.press("Escape");
 });
 
+await step("left alone while the machine runs, the page asks whether anyone is there and stops the machine when nobody answers", async () => {
+  // Six seconds for the test; the default is ten minutes.
+  await page.click("#open-settings");
+  await page.waitForSelector("#rent-presence");
+  await page.fill("#rent-presence", "0.1");
+  await page.click("#rent-save-idle");
+  await page.waitForFunction(() => /Saved/.test(document.querySelector("#notice")?.textContent ?? ""));
+  await page.click("#close-settings");
+  await page.waitForSelector("#presence:not([hidden])", { timeout: 20000 });
+  assert.match(await page.locator("#presence-text").innerText(), /while the rented GPU \(\$0\.40 an hour\) runs[\s\S]*it stops when the count reaches zero/);
+  assert.match(await page.locator("#presence-left").innerText(), /^0:0[0-3]$/);
+  await page.click("#presence-yes");
+  assert.equal(await page.locator("#presence").isHidden(), true);
+  assert.equal(runpod.state.actions.some((a) => a.endsWith(":stop")), false, "answering keeps it running");
+  // Left alone again, the countdown runs out and the machine stops, with the reason on the card.
+  await page.waitForSelector("#presence:not([hidden])", { timeout: 20000 });
+  await page.waitForFunction(() => /stopped/.test(document.querySelector("#rent-bar").textContent), null, { timeout: 20000 });
+  assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
+  assert.match(await page.locator("#notice").innerText(), /stopped after 0 minutes without anyone here|without anyone here/);
+  await page.click("#open-settings");
+  await page.waitForSelector("#rent-panel .rent-card");
+  assert.match(await page.locator("#rent-panel .rent-card").innerText(), /stopped when nobody answered the still-there check/);
+  await page.fill("#rent-presence", "10");
+  await page.click("#rent-save-idle");
+  await page.waitForFunction(() => /Saved/.test(document.querySelector("#notice")?.textContent ?? ""));
+  await page.click("#close-settings");
+  await page.click("#bar-start");
+  await page.waitForFunction(() => /starting|ready/.test(document.querySelector("#rent-bar").textContent));
+  runpod.state.actions.length = 0;
+});
+
 await step("stopping from the bar frees the chat server; starting and deleting work from Settings", async () => {
   acceptDialogs = true;
   await page.click("#bar-stop");

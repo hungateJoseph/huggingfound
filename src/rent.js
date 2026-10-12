@@ -456,9 +456,10 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
     // Stops the machine: the hourly charge ends, the disk and its models
     // stay (for a small charge), and Start brings it back.
-    async stop() {
+    async stop({ reason = "" } = {}) {
       const id = podId();
       if (!id) throw new RentError("Nothing is rented.", 404);
+      if (reason) save({ RUNPOD_LAST_STOP: reason });
       try {
         await request("POST", `/pods/${encodeURIComponent(id)}/action`, { action: "stop" });
       } catch (err) {

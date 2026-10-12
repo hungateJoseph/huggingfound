@@ -421,10 +421,14 @@ test("everything on the machine is listed in one place: chat models with the loa
 });
 
 test("stopping ends the charge and frees the chat server; starting brings both back", async () => {
-  const stopped = await (await post("/api/rent/stop", {})).json();
+  // A stop from the page's still-there check says so.
+  const stopped = await (await post("/api/rent/stop", { reason: "away", minutes: 10 })).json();
   assert.equal(stopped.rented, true);
   assert.equal(stopped.status, "EXITED");
+  assert.equal(stopped.stopReason, "away:10");
   assert.deepEqual(runpod.state.actions, [`${stopped.id}:stop`]);
+  assert.equal((await json("/api/state")).presenceMinutes, 10, "the still-there check defaults to ten minutes");
+  assert.equal((await post("/api/settings", { RUNPOD_PRESENCE_MINUTES: 0.05 })).status, 400, "no shorter than six seconds");
   let s = await json("/api/state");
   assert.equal(s.chatServer, null, "chat models go back to this computer while it is stopped");
   assert.equal(readEnv(envFile).GPU_AGENT, undefined, "and so do image models");

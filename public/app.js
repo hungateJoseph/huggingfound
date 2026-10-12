@@ -69,6 +69,7 @@ async function load() {
   state.rentTiers = s.rentTiers ?? [];
   state.idleMinutes = s.idleMinutes ?? 30;
   state.maxSpend = s.maxSpend ?? 50;
+  state.presenceMinutes = s.presenceMinutes ?? 10;
   state.runpodKey = s.runpodKey;
   state.registryAuth = s.registryAuth || "";
   state.stopOnQuit = s.stopOnQuit;
@@ -2711,7 +2712,7 @@ function renderRental() {
     const running = ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(r.status);
     const cost = r.costPerHour != null ? `${money(r.costPerHour)} an hour. ` : "";
     const time = running && r.uptimeSeconds ? `Running for ${minutesText(r.uptimeSeconds)}${r.spent != null ? `, about ${money(r.spent)} this time` : ""}. ` : "";
-    const why = r.stopReason?.startsWith("idle:") ? `It stopped itself after ${r.stopReason.slice(5)} idle minutes. ` : r.stopReason?.startsWith("cap:") ? `It stopped itself at the ${money(Number(r.stopReason.slice(4)))} spend cap. ` : "";
+    const why = r.stopReason?.startsWith("idle:") ? `It stopped itself after ${r.stopReason.slice(5)} idle minutes. ` : r.stopReason?.startsWith("cap:") ? `It stopped itself at the ${money(Number(r.stopReason.slice(4)))} spend cap. ` : r.stopReason?.startsWith("away:") ? `It was stopped when nobody answered the still-there check${r.stopReason.slice(5) ? ` after ${r.stopReason.slice(5)} minutes` : ""}. ` : "";
     const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. ${why}The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for a small charge a day; Start brings it back in a minute or two, Delete removes it and the models.` : "";
     const trouble = r.imageProblem ? ` The image server on it cannot start (${r.imageProblem}); chat still works, and a machine rented after the image is fixed will make pictures.` : "";
     const older = r.agentVersion != null && r.agentCurrent != null && r.agentVersion < r.agentCurrent;
@@ -2733,6 +2734,11 @@ function renderRental() {
         <small class="muted">0 keeps it running until you stop it, though the machine itself gives up after a day without the site. A download in progress keeps it awake, up to six hours.</small>
       </label>
       <label class="field">
+        <span>Ask whether I am still here after this many minutes without a click or key</span>
+        <input type="number" id="rent-presence" min="1" max="240" step="1" value="${Math.max(1, Math.round(state.presenceMinutes ?? 10))}">
+        <small class="muted">While the machine runs, even during a download or a picture. With no answer in a short countdown the machine stops; its models stay.</small>
+      </label>
+      <label class="field">
         <span>Stop once a session has cost this many dollars</span>
         <input type="number" id="rent-cap" min="0" max="10000" step="1" value="${Number(r.maxSpend ?? 50)}">
         <small class="muted">Counted from the last start; 0 removes the cap. ${r.costPerHour ? `At ${money(r.costPerHour)} an hour, ${money(r.maxSpend ?? 50)} is about ${((r.maxSpend ?? 50) / r.costPerHour).toFixed(1)} hours.` : ""}</small>
@@ -2749,7 +2755,7 @@ function renderRental() {
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
     panel.querySelector("#rent-save-idle").addEventListener("click", async () => {
       try {
-        await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), RUNPOD_MAX_SPEND: Number($("#rent-cap").value), ...(state.hosted ? {} : { RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked }) });
+        await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), RUNPOD_MAX_SPEND: Number($("#rent-cap").value), RUNPOD_PRESENCE_MINUTES: Number($("#rent-presence").value), ...(state.hosted ? {} : { RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked }) });
       } catch (err) {
         alert(err.message);
         return;
@@ -2906,7 +2912,7 @@ async function rentAction(action, question) {
 function safeguardText(pricePerHour) {
   const idle = state.idleMinutes ?? 30;
   const cap = state.maxSpend ?? 50;
-  const guards = [idle ? `after ${idle} minutes without a chat, picture or download` : "", cap ? `once this session has cost ${money(cap)}` : ""].filter(Boolean);
+  const guards = [`when nobody answers the still-there check this page shows after ${Math.round(state.presenceMinutes ?? 10)} minutes without a click`, idle ? `after ${idle} minutes without a chat, picture or download` : "", cap ? `once this session has cost ${money(cap)}` : ""].filter(Boolean);
   const day = pricePerHour >= 3 ? ` Left running, it would cost about ${money(pricePerHour * 24)} a day.` : "";
   return `RunPod bills your account while it runs.${day} It stops by itself ${guards.join(", or ") || "only when you stop it"}${guards.length ? ", whichever comes first" : ""}, and the machine itself stops when the site has not seen it used; you can stop or delete it from the bar at any time. Both limits are in Settings.`;
 }
@@ -3082,6 +3088,76 @@ for (const ev of ["pointerdown", "keydown"]) {
     if (state.rentPollPaused) rentalTick();
   }, { passive: true });
 }
+
+// ---- the still-there check ---------------------------------------------------------
+// A machine costs money whether or not anyone is at the page. After some
+// minutes without a click or key while one runs, even in the middle of a
+// download or a picture, the page asks; with no answer in a short
+// countdown it stops the machine. The disk and its models stay, and Start
+// brings it back. The minutes are a setting; the default is short.
+const presence = { shown: false, deadline: 0, timer: null };
+const PRESENCE_CHECK_MS = 5000;
+function presenceMs() {
+  return (state.presenceMinutes ?? 10) * 60e3;
+}
+function machineBilling() {
+  const r = state.rental;
+  return Boolean(r?.rented) && ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(r.status);
+}
+function presenceTick() {
+  if (presence.shown) {
+    presenceCountdown();
+    return;
+  }
+  if (!machineBilling()) return;
+  if (Date.now() - state.lastTouch < presenceMs()) return;
+  const r = state.rental;
+  // A short countdown, shorter still when the setting itself is short.
+  const grace = Math.min(120e3, Math.max(3e3, presenceMs() / 2));
+  presence.shown = true;
+  presence.deadline = Date.now() + grace;
+  $("#presence-text").textContent = `Nothing has been clicked or typed here for ${Math.round(presenceMs() / 60e3) || "a few"} minute${Math.round(presenceMs() / 60e3) === 1 ? "" : "s"} while the rented GPU${r.costPerHour != null ? ` (${money(r.costPerHour)} an hour)` : ""} runs. Unless you answer, it stops when the count reaches zero; its models stay on its disk and Start brings it back. Change the minutes in Settings.`;
+  $("#presence").hidden = false;
+  presenceCountdown();
+}
+function presenceCountdown() {
+  const left = Math.max(0, presence.deadline - Date.now());
+  $("#presence-left").textContent = `${Math.floor(left / 60e3)}:${String(Math.ceil((left % 60e3) / 1000) % 60).padStart(2, "0")}`;
+  if (left > 0) return;
+  presenceDismiss();
+  stopForAbsence();
+}
+function presenceDismiss() {
+  presence.shown = false;
+  $("#presence").hidden = true;
+}
+async function stopForAbsence() {
+  if (!machineBilling()) return;
+  const minutes = Math.round(presenceMs() / 60e3);
+  try {
+    state.rental = await api.post("/api/rent/stop", { reason: "away", minutes });
+  } catch (err) {
+    notice(`Could not stop the rented GPU: ${err.message}. The machine's own idle watch and the spend cap still apply.`, "bad");
+    return;
+  }
+  await load();
+  notice(`The rented GPU was stopped after ${minutes} minute${minutes === 1 ? "" : "s"} without anyone here. Its models are kept; Start brings it back from the bar.`, "ok");
+  if (state.open) openModel(state.open);
+}
+$("#presence-yes").addEventListener("click", () => {
+  state.lastTouch = Date.now();
+  presenceDismiss();
+});
+$("#presence-stop").addEventListener("click", () => {
+  presenceDismiss();
+  stopForAbsence();
+});
+// The countdown runs on the clock, not on ticks, so a background tab's
+// slowed timers still end it; the check itself is cheap.
+setInterval(presenceTick, PRESENCE_CHECK_MS);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && presence.shown) presenceCountdown();
+});
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.rentPollPaused) rentalTick();
 });

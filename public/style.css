@@ -437,3 +437,5 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .step .progress-wrap { grid-column: 1 / -1; }
 .bg-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; }
 #notice button { margin-left: 8px; }
+.presence-count { font-size: 32px; font-weight: 700; margin: 8px 0 14px; font-variant-numeric: tabular-nums; }
+#presence .modal-card { margin-top: 15vh; }

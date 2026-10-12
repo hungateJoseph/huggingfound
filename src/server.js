@@ -49,7 +49,7 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "HF_TOKEN"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "HF_TOKEN"]);
 // Models a person has hidden from search and Browse: ids, comma-separated.
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
@@ -344,6 +344,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         rentTiers: TIERS,
         // The two safeguards every rental has, for the page to say so before renting.
         idleMinutes: ctx.rental ? ctx.rental.idleMinutes() : 30,
+        // Minutes without a click or key before the page asks whether anyone is there; short by default.
+        presenceMinutes: Number(saved.RUNPOD_PRESENCE_MINUTES) > 0 ? Number(saved.RUNPOD_PRESENCE_MINUTES) : 10,
         maxSpend: ctx.rental ? ctx.rental.maxSpend() : 50,
         hidden: hiddenList(saved.HIDDEN_MODELS),
         stopOnQuit: !hosted && saved.RUNPOD_STOP_ON_QUIT !== "0",
@@ -454,6 +456,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         const minutes = Number(body.RUNPOD_IDLE_MINUTES);
         if (!(Number.isInteger(minutes) && minutes >= 0 && minutes <= 1440)) return send(res, 400, { error: "The idle time must be a whole number of minutes, 0 to 1440; 0 never stops the machine" });
         updates.RUNPOD_IDLE_MINUTES = String(minutes);
+      }
+      if ("RUNPOD_PRESENCE_MINUTES" in body) {
+        const minutes = Number(body.RUNPOD_PRESENCE_MINUTES);
+        if (!(Number.isFinite(minutes) && minutes >= 0.1 && minutes <= 240)) return send(res, 400, { error: "The still-there check must be between 1 and 240 minutes" });
+        updates.RUNPOD_PRESENCE_MINUTES = String(minutes);
       }
       if ("RUNPOD_MAX_SPEND" in body) {
         const dollars = Number(body.RUNPOD_MAX_SPEND);
@@ -724,7 +731,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           }
           return send(res, 200, { removed });
         }
-        if (req.method === "POST" && action === "stop") return send(res, 200, await mine.stop());
+        if (req.method === "POST" && action === "stop") {
+          const body = await json(req).catch(() => ({}));
+          return send(res, 200, await mine.stop({ reason: body.reason === "away" ? `away:${Number(body.minutes) || ""}` : "" }));
+        }
         if (req.method === "POST" && action === "start") return send(res, 200, await mine.start());
         if (req.method === "POST" && action === "delete") return send(res, 200, await mine.remove());
         return send(res, 404, { error: "Not found" });
