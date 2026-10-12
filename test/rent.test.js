@@ -316,8 +316,8 @@ test("a machine from before a feature is told apart by its agent's version, and 
   assert.equal((await json("/api/model?id=John6666/pony-realism-v23-sdxl")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=Qwen/Qwen-Image")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).plan.runnable, true, "a single-file model still runs on the old machine");
-  assert.equal((await json("/api/rent")).agentCurrent, 5, "the status says which version is current");
-  agent.state.version = 5;
+  assert.equal((await json("/api/rent")).agentCurrent, 6, "the status says which version is current");
+  agent.state.version = 6;
   assert.equal((await json("/api/model?id=h94/IP-Adapter-FaceID")).plan.runnable, true);
 });
 
@@ -362,6 +362,16 @@ test("an add-on is downloaded onto the rented GPU and applied there to a base mo
   assert.equal((await post("/api/remove", { kind: "gpu-addon", repo: ADDON, file: "ip-adapter-faceid_sd15.bin" })).status, 200);
   assert.equal(agent.state.deleted.at(-1), `addon:${ADDON}/ip-adapter-faceid_sd15.bin`);
   assert.equal((await json(`/api/model?id=${ADDON}`)).plan.steps[0].done, false, "a missing file makes the step pending again");
+});
+
+test("a touch from the page renews the machine's own lease, so the machine stops itself only when the site has stopped seeing use", async () => {
+  assert.equal((await post("/api/rent/touch", {})).status, 200);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(agent.state.leases.length >= 1, "a lease was sent straight to the machine");
+  const count = agent.state.leases.length;
+  await post("/api/rent/touch", {});
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(agent.state.leases.length, count, "not again within a minute");
 });
 
 test("hiding a model also clears it off the machine: its chat model, image files and add-on files", async () => {
@@ -592,11 +602,13 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0, now: () => clock });
   assert.equal(await rental.checkIdle(), false, "nothing rented");
   const r = await rental.rent({ gb: 24, diskGb: 50 });
+  assert.equal(runpod.state.created.at(-1).env.HF_IDLE_MINUTES, "20", "the machine's own watch gets the same idle time");
   await rental.status({ probe: false });
   await rental.status({ probe: false });
   assert.equal((await rental.status({ probe: false })).status, "RUNNING");
   clock += 19 * 60e3;
   assert.equal(await rental.checkIdle(), false, "not idle long enough");
+  assert.equal(readEnv(file).RUNPOD_LAST_ACTIVITY !== undefined, true, "the activity clock is kept in the settings, so a restart does not reset it");
   clock += 2 * 60e3;
   const release = rental.hold();
   assert.equal(await rental.checkIdle(), false, "a download keeps it awake");
@@ -609,6 +621,8 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   assert.equal(await rental.checkIdle(), true);
   assert.equal(runpod.state.pods[r.id].status, "EXITED");
   assert.equal(readEnv(file).OLLAMA_SERVER, undefined);
+  assert.equal(readEnv(file).RUNPOD_LAST_STOP, "idle:20");
+  assert.equal((await rental.status({ probe: false })).stopReason, "idle:20", "the card can say why it stopped");
   assert.equal(await rental.checkIdle(), false, "already stopped");
   // A machine last seen stopped is not asked about every minute: that only spends the account's allowance.
   const before = runpod.state.calls.length;
@@ -631,6 +645,19 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   clock += 2 * 3600e3;
   assert.equal(await rental.checkIdle(), true, "after six hours the hold has expired and the idle machine stops");
   stuck();
+  // A session that has cost more than the cap stops even while in use.
+  await rental.start();
+  assert.ok(!readEnv(file).RUNPOD_LAST_STOP, "a start clears the reason");
+  await rental.status({ probe: false });
+  await rental.status({ probe: false });
+  writeEnv(file, { RUNPOD_MAX_SPEND: "0.3" });
+  for (let i = 0; i < 6; i++) await rental.status({ probe: false });
+  assert.ok((await rental.status({ probe: false })).spent >= 0.3, "the stand-in machine has run long enough to pass the cap");
+  rental.touch();
+  clock += 6 * 60e3;
+  assert.equal(await rental.checkIdle(), true, "stopped at the cap although it was just used");
+  assert.equal(readEnv(file).RUNPOD_LAST_STOP, "cap:0.3");
+  writeEnv(file, { RUNPOD_MAX_SPEND: "0" });
   // Turned off, it never stops; quitting still does unless that is off too.
   await rental.start();
   await rental.status({ probe: false });

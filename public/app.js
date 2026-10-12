@@ -67,6 +67,8 @@ async function load() {
   renderHiddenList();
   state.rental = s.rental;
   state.rentTiers = s.rentTiers ?? [];
+  state.idleMinutes = s.idleMinutes ?? 30;
+  state.maxSpend = s.maxSpend ?? 50;
   state.runpodKey = s.runpodKey;
   state.registryAuth = s.registryAuth || "";
   state.stopOnQuit = s.stopOnQuit;
@@ -840,7 +842,7 @@ function wireRentAsk(body, model, choice) {
     const offer = (state.rentOptions ?? []).find((t) => t.gb === gb);
     if (!offer) return;
     const diskGb = state.rentDisk ?? 50;
-    if (!confirm(`Rent a ${offer.gpu.name} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\nRunPod bills your account while it runs. It stops by itself after sitting idle, and you can stop or delete it from the bar at any time.`)) return;
+    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${safeguardText(offer.pricePerHour)}`)) return;
     const btn = body.querySelector("#ask-rent");
     const note = body.querySelector("#ask-rent-note");
     btn.disabled = true;
@@ -2709,7 +2711,8 @@ function renderRental() {
     const running = ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(r.status);
     const cost = r.costPerHour != null ? `${money(r.costPerHour)} an hour. ` : "";
     const time = running && r.uptimeSeconds ? `Running for ${minutesText(r.uptimeSeconds)}${r.spent != null ? `, about ${money(r.spent)} this time` : ""}. ` : "";
-    const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for a small charge a day; Start brings it back in a minute or two, Delete removes it and the models.` : "";
+    const why = r.stopReason?.startsWith("idle:") ? `It stopped itself after ${r.stopReason.slice(5)} idle minutes. ` : r.stopReason?.startsWith("cap:") ? `It stopped itself at the ${money(Number(r.stopReason.slice(4)))} spend cap. ` : "";
+    const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. ${why}The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for a small charge a day; Start brings it back in a minute or two, Delete removes it and the models.` : "";
     const trouble = r.imageProblem ? ` The image server on it cannot start (${r.imageProblem}); chat still works, and a machine rented after the image is fixed will make pictures.` : "";
     const older = r.agentVersion != null && r.agentCurrent != null && r.agentVersion < r.agentCurrent;
     const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a ${state.hosted ? "download" : "chat or download"}${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.${state.hosted ? " Chats go straight from your browser to the machine, so the site cannot see them; each message you send counts as use." : ""}` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
@@ -2727,7 +2730,12 @@ function renderRental() {
       <label class="field">
         <span>Stop after this many idle minutes</span>
         <input type="number" id="rent-idle" min="0" max="1440" step="1" value="${Number(r.idleMinutes ?? 30)}">
-        <small class="muted">0 keeps it running until you stop it. A download in progress always keeps it awake.</small>
+        <small class="muted">0 keeps it running until you stop it, though the machine itself gives up after a day without the site. A download in progress keeps it awake, up to six hours.</small>
+      </label>
+      <label class="field">
+        <span>Stop once a session has cost this many dollars</span>
+        <input type="number" id="rent-cap" min="0" max="10000" step="1" value="${Number(r.maxSpend ?? 50)}">
+        <small class="muted">Counted from the last start; 0 removes the cap. ${r.costPerHour ? `At ${money(r.costPerHour)} an hour, ${money(r.maxSpend ?? 50)} is about ${((r.maxSpend ?? 50) / r.costPerHour).toFixed(1)} hours.` : ""}</small>
       </label>
       ${state.hosted ? "" : `<label class="check"><input type="checkbox" id="rent-quit" ${state.stopOnQuit ? "checked" : ""}> Stop it when HuggingFound quits</label>`}
       <div class="actions"><button class="ghost" id="rent-save-idle">Save</button></div>
@@ -2741,7 +2749,7 @@ function renderRental() {
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
     panel.querySelector("#rent-save-idle").addEventListener("click", async () => {
       try {
-        await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), ...(state.hosted ? {} : { RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked }) });
+        await api.post("/api/settings", { RUNPOD_IDLE_MINUTES: Number($("#rent-idle").value), RUNPOD_MAX_SPEND: Number($("#rent-cap").value), ...(state.hosted ? {} : { RUNPOD_STOP_ON_QUIT: $("#rent-quit").checked }) });
       } catch (err) {
         alert(err.message);
         return;
@@ -2790,7 +2798,7 @@ function renderRental() {
     const offer = state.rentOptions.find((t) => t.gb === gb);
     if (!offer) return;
     state.rentDisk = diskGb;
-    if (!confirm(`Rent a ${offer.gpu.name} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\nRunPod bills your account while it runs. It stops by itself after sitting idle, and you can stop or delete it here at any time.`)) return;
+    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${safeguardText(offer.pricePerHour)}`)) return;
     const btn = panel.querySelector("#rent-go");
     btn.disabled = true;
     btn.textContent = "Renting";
@@ -2890,6 +2898,17 @@ async function rentAction(action, question) {
   state.rentError = null;
   await load();
   afterRentalChange();
+}
+
+// What stops the bill if the machine is forgotten, in the words of the
+// confirm before renting: the idle time, the spend cap, and what a day
+// would cost without them when the price makes that worth saying.
+function safeguardText(pricePerHour) {
+  const idle = state.idleMinutes ?? 30;
+  const cap = state.maxSpend ?? 50;
+  const guards = [idle ? `after ${idle} minutes without a chat, picture or download` : "", cap ? `once this session has cost ${money(cap)}` : ""].filter(Boolean);
+  const day = pricePerHour >= 3 ? ` Left running, it would cost about ${money(pricePerHour * 24)} a day.` : "";
+  return `RunPod bills your account while it runs.${day} It stops by itself ${guards.join(", or ") || "only when you stop it"}${guards.length ? ", whichever comes first" : ""}, and the machine itself stops when the site has not seen it used; you can stop or delete it from the bar at any time. Both limits are in Settings.`;
 }
 
 // Deletes the machine, then opens renting with the same size chosen, so

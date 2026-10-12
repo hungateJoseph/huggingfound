@@ -49,7 +49,7 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "HF_TOKEN"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "HF_TOKEN"]);
 // Models a person has hidden from search and Browse: ids, comma-separated.
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
@@ -342,6 +342,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         registryAuth: saved.RUNPOD_REGISTRY_AUTH || "",
         rental: ctx.rental ? ctx.rental.cached() : hosted ? null : { rented: false },
         rentTiers: TIERS,
+        // The two safeguards every rental has, for the page to say so before renting.
+        idleMinutes: ctx.rental ? ctx.rental.idleMinutes() : 30,
+        maxSpend: ctx.rental ? ctx.rental.maxSpend() : 50,
         hidden: hiddenList(saved.HIDDEN_MODELS),
         stopOnQuit: !hosted && saved.RUNPOD_STOP_ON_QUIT !== "0",
         redditApp: saved.REDDIT_CLIENT_ID ? mask(saved.REDDIT_CLIENT_ID) : "",
@@ -451,6 +454,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         const minutes = Number(body.RUNPOD_IDLE_MINUTES);
         if (!(Number.isInteger(minutes) && minutes >= 0 && minutes <= 1440)) return send(res, 400, { error: "The idle time must be a whole number of minutes, 0 to 1440; 0 never stops the machine" });
         updates.RUNPOD_IDLE_MINUTES = String(minutes);
+      }
+      if ("RUNPOD_MAX_SPEND" in body) {
+        const dollars = Number(body.RUNPOD_MAX_SPEND);
+        if (!(Number.isFinite(dollars) && dollars >= 0 && dollars <= 10000)) return send(res, 400, { error: "The spend cap must be a number of dollars, 0 to 10000; 0 removes the cap" });
+        updates.RUNPOD_MAX_SPEND = String(Math.round(dollars * 100) / 100);
       }
       if ("RUNPOD_STOP_ON_QUIT" in body) updates.RUNPOD_STOP_ON_QUIT = body.RUNPOD_STOP_ON_QUIT ? "" : "0";
       if ("RUNPOD_REGISTRY_AUTH" in body) {

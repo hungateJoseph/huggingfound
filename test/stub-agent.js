@@ -8,7 +8,7 @@ import http from "node:http";
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 export function startStubAgent() {
-  const state = { files: [], addons: [], downloads: [], jobs: [], deleted: [], origins: [], down: false, loaded: null };
+  const state = { files: [], addons: [], downloads: [], jobs: [], deleted: [], origins: [], leases: [], down: false, loaded: null };
   const polls = new Map();
   const server = http.createServer((req, res) => {
     let body = "";
@@ -30,8 +30,12 @@ export function startStubAgent() {
       }
       const data = body ? JSON.parse(body) : {};
       res.setHeader("Content-Type", "application/json");
-      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 5), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
+      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 6), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
       if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files, addons: state.addons }));
+      if (req.url === "/lease") {
+        state.leases.push(data.minutes ?? null);
+        return res.end(JSON.stringify({ ok: true, leaseUntil: Date.now() + (data.minutes ?? 30) * 60e3 }));
+      }
       if (req.url === "/models" && req.method === "DELETE" && data.addon) {
         const before = state.addons.length;
         state.addons = state.addons.filter((f) => !(f.repo === data.repo && f.file === data.file));

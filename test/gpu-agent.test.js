@@ -77,7 +77,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
     await new Promise((r) => setTimeout(r, 50));
   }
   const h = await (await get("/health")).json();
-  assert.deepEqual(h, { ok: true, version: "5", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0 }, "both engines' startup checks passed");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "6", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -279,6 +279,43 @@ test("a model the image server cannot load is explained with the server's own wo
   const short = (await (await post("/download", { repo: REPO, file: "short.bin" })).text()).trim().split("\n").map((l) => JSON.parse(l));
   assert.match(short.at(-1).error, /ended early \(0\.00 of 0\.00 GB\); try again/);
   assert.ok(!fs.existsSync(path.join(modelsDir, "second-state", "stable-diffusion-v1-5-GGUF", "short.bin")), "nothing half-written is kept");
+});
+
+test("the machine stops itself when nothing has used it and the site has not renewed its lease; a lease or a download keeps it up", async () => {
+  const spawnAgent = (env) => {
+    const child = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], { env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: path.join(home, "idle-models"), SD_SERVER: path.join(home, "sd-server"), HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), HF_IDLE_CHECK_MS: "100", ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    const url = new Promise((resolve) => child.stdout.on("data", () => {
+      const m = /listening on 127\.0\.0\.1:(\d+)/.exec(out);
+      if (m) resolve(`http://127.0.0.1:${m[1]}`);
+    }));
+    const exit = new Promise((resolve) => child.on("exit", (code) => resolve({ code, out })));
+    return { child, url, exit };
+  };
+  // Half a second of idle time: it exits on its own, saying why.
+  const a = spawnAgent({ HF_IDLE_MINUTES: "0.01" });
+  await a.url;
+  const ended = await Promise.race([a.exit, new Promise((r) => setTimeout(() => r(null), 5000))]);
+  assert.ok(ended, "the agent stopped itself");
+  assert.equal(ended.code, 0);
+  assert.match(ended.out, /No activity .* stopping the machine to end the bill/);
+  // With a lease from the site it stays up past its idle time (a lease is at most the idle time, renewed by the site while there is activity).
+  const b = spawnAgent({ HF_IDLE_MINUTES: "0.05" });
+  const burl = await b.url;
+  const lease = await (await fetch(`${burl}/lease`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes: 1 }) })).json();
+  assert.ok(lease.leaseUntil > Date.now());
+  const h = await (await fetch(`${burl}/health`)).json();
+  assert.equal(h.idleMinutes, 0.05);
+  const early = await Promise.race([b.exit, new Promise((r) => setTimeout(() => r(null), 1500))]);
+  assert.equal(early, null, "still up under the lease");
+  const later = await Promise.race([b.exit, new Promise((r) => setTimeout(() => r(null), 5000))]);
+  assert.ok(later && later.code === 0, "and gone once the lease has run out without renewal");
+  // Idle time 0 means the day-long ceiling, not for ever.
+  const c = spawnAgent({ HF_IDLE_MINUTES: "0", HF_IDLE_CEILING_MINUTES: "0.01" });
+  await c.url;
+  const ceiling = await Promise.race([c.exit, new Promise((r) => setTimeout(() => r(null), 5000))]);
+  assert.ok(ceiling && ceiling.code === 0, "the ceiling ends it");
 });
 
 test("removing a model unloads it and frees the disk", async () => {

@@ -109,7 +109,40 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   let throttledUntil = 0;
   let throttledKey = "";
   const spent = [];
-  let lastActivity = now();
+  // When the machine was last used, kept in the settings so a restart of
+  // this server does not hand the machine another idle period.
+  let lastActivity = Number(env().RUNPOD_LAST_ACTIVITY) || now();
+  let lastActivitySaved = 0;
+  let lastLease = 0;
+  let lastSpendCheck = 0;
+  const noteActivity = () => {
+    lastActivity = now();
+    if (now() - lastActivitySaved > 60e3) {
+      lastActivitySaved = now();
+      try {
+        save({ RUNPOD_LAST_ACTIVITY: String(lastActivity) });
+      } catch {
+        // the settings file is not essential here
+      }
+    }
+    renewLease();
+  };
+  // Dollars a running session may cost before it is stopped; 0 for no cap.
+  const maxSpend = () => {
+    const raw = env().RUNPOD_MAX_SPEND;
+    if (raw === undefined || raw === "") return 50;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 50;
+  };
+  // The machine keeps its own idle watch and stops itself unless the site
+  // renews a lease; the site renews it while it sees activity, at most
+  // once a minute, straight to the machine, never through RunPod.
+  function renewLease() {
+    const id = podId();
+    if (!id || !hasAgent() || now() - lastLease < 60e3) return;
+    lastLease = now();
+    fetchImpl(`${agentFor(id)}/lease`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes: idleMinutes() || 60 }), signal: AbortSignal.timeout(4000) }).catch(() => {});
+  }
   // Downloads in progress, each with when it began: one that never ends
   // (a stuck connection, a lost page) cannot keep the machine awake and
   // billing for ever.
@@ -246,6 +279,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       agentCurrent: AGENT_VERSION,
       idleMinutes: idleMinutes(),
       idleSeconds: Math.round((now() - lastActivity) / 1000),
+      maxSpend: maxSpend(),
+      // Why it last stopped by itself: "idle:30" or "cap:50".
+      stopReason: pod.status === "EXITED" ? env().RUNPOD_LAST_STOP || null : null,
       dataCenter: pod.dataCenterId ?? null,
       startedAt: pod.startedAt ?? null,
     };
@@ -306,16 +342,18 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     // without asking RunPod (the idle time) read live.
     cached: () => (podId() ? { ...(last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null }), idleMinutes: idleMinutes(), idleSeconds: Math.round((now() - lastActivity) / 1000) } : { rented: false }),
     touch() {
-      lastActivity = now();
+      noteActivity();
     },
-    // A download in progress keeps the machine awake however long it takes.
+    idleMinutes,
+    maxSpend,
+    // A download in progress keeps the machine awake however long it takes (within the hold limit).
     hold() {
       const h = { at: now() };
       holdList.push(h);
-      lastActivity = now();
+      noteActivity();
       return () => {
         holdList = holdList.filter((x) => x !== h);
-        lastActivity = now();
+        noteActivity();
       };
     },
 
@@ -382,7 +420,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // Browsers may talk to the machine directly from these origins (the
       // hosted site's address, or the app's own); Ollama and the agent
       // refuse other sites' pages.
-      const env = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h" };
+      // The machine's own idle watch gets the same idle time.
+      const env = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h", HF_IDLE_MINUTES: String(idleMinutes()) };
       const allowed = origins.filter((o) => /^https?:\/\/[\w.-]+(?::\d+|:\*)?$/.test(String(o)));
       if (allowed.length) {
         env.OLLAMA_ORIGINS = allowed.join(",");
@@ -407,7 +446,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       });
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
       const totalGb = (offer.gpu.memory || tier.gb / (tier.count ?? 1)) * (tier.count ?? 1);
-      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "" });
+      lastActivity = now();
+      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
       point(pod.id, totalGb);
       lastActivity = now();
       last = summarize(pod, false);
@@ -436,6 +476,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     async start() {
       const id = podId();
       if (!id) throw new RentError("Nothing is rented.", 404);
+      save({ RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      lastActivity = now();
       try {
         await request("POST", `/pods/${encodeURIComponent(id)}/action`, { action: "start" });
       } catch (err) {
@@ -474,14 +516,33 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     // a download in progress or an idle time of 0 keeps it running.
     async checkIdle() {
       const minutes = idleMinutes();
-      if (!podId() || !minutes || holds() > 0) return false;
-      if (now() - lastActivity < minutes * 60e3) return false;
+      if (!podId()) return false;
+      const active = holds() > 0 || (minutes ? now() - lastActivity < minutes * 60e3 : true);
+      // A session costing more than the cap stops whether or not it is in
+      // use; looked at every few minutes, on what RunPod last said.
+      const cap = maxSpend();
+      if (cap && now() - lastSpendCheck > 5 * 60e3 && (!last || last.id !== podId() || ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status))) {
+        lastSpendCheck = now();
+        const current = await this.status({ probe: false }).catch(() => null);
+        if (current?.rented && current.status === "RUNNING" && current.spent != null && current.spent >= cap) {
+          save({ RUNPOD_LAST_STOP: `cap:${cap}` });
+          await this.stop();
+          return true;
+        }
+      }
+      if (active) {
+        // In use: the machine's own watch is told so.
+        renewLease();
+        return false;
+      }
+      if (!minutes) return false;
       // A machine last seen stopped has nothing to stop; asking RunPod about
       // it every minute would only spend the account's allowance. It is
       // looked at again now and then, in case it was started elsewhere.
       if (last && last.id === podId() && !["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status) && now() - lastAt < 15 * 60e3) return false;
       const current = await this.status({ probe: false }).catch(() => null);
       if (!current?.rented || current.status !== "RUNNING") return false;
+      save({ RUNPOD_LAST_STOP: `idle:${minutes}` });
       await this.stop();
       return true;
     },

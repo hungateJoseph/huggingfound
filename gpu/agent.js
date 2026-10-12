@@ -16,6 +16,10 @@
 //   HF_PYTHON       the Python that has torch and diffusers; HF_WORKER the
 //                   worker script it runs (worker.py next to this file)
 //   HF_TOKEN        a Hugging Face token for gated downloads (optional)
+//   HF_IDLE_MINUTES minutes without activity before the machine stops
+//                   itself (30); the site renews a lease while there is
+//                   activity, so a site that cannot reach RunPod, a lost
+//                   key or a closed laptop still ends the bill
 //
 // Two engines: stable-diffusion.cpp for single-file checkpoints (fast,
 // small), and the diffusers library through worker.py for the families
@@ -42,10 +46,40 @@ const HUB = process.env.HF_HUB || "https://huggingface.co";
 const PYTHON = process.env.HF_PYTHON || "/opt/huggingfound/py/bin/python3";
 const WORKER = process.env.HF_WORKER || path.join(path.dirname(fileURLToPath(import.meta.url)), "worker.py");
 const INDEX = "model_index.json";
+// The machine's own idle watch. It counts picture jobs, downloads and
+// lease renewals from the site as activity; when none has come for the
+// idle time it exits, which stops the pod and its billing, with the disk
+// kept. A hard ceiling applies even when the idle time is turned off.
+const IDLE_MINUTES = Math.max(0, Number(process.env.HF_IDLE_MINUTES ?? 30)) || 0;
+const IDLE_CEILING_MINUTES = Number(process.env.HF_IDLE_CEILING_MINUTES ?? 24 * 60);
+const IDLE_CHECK_MS = Number(process.env.HF_IDLE_CHECK_MS ?? 30e3);
+let lastActivity = Date.now();
+let leaseUntil = 0;
+function touchActivity() {
+  lastActivity = Date.now();
+}
+function idleLimitMs() {
+  return (IDLE_MINUTES > 0 ? IDLE_MINUTES : IDLE_CEILING_MINUTES) * 60e3;
+}
+function busy() {
+  return downloading.size > 0 || [...jobs.values()].some((j) => ["loading", "queued", "generating"].includes(j.status));
+}
+function idleWatch() {
+  if (busy()) {
+    touchActivity();
+    return;
+  }
+  const since = Date.now() - Math.max(lastActivity, leaseUntil - idleLimitMs());
+  if (since < idleLimitMs() || Date.now() < leaseUntil) return;
+  console.log(`No activity for ${Math.round(since / 60e3)} minutes and no lease from the site: stopping the machine to end the bill.`);
+  stopServer();
+  stopWorker();
+  process.exit(0);
+}
 // Add-ons (IP-Adapters, LoRAs) live apart from models; they are applied to one.
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
-const VERSION = "5";
+const VERSION = "6";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -468,6 +502,7 @@ function folderSize(dir) {
 }
 
 const downloading = new Set();
+setInterval(idleWatch, IDLE_CHECK_MS).unref();
 
 // Streams a file from Hugging Face onto the disk, reporting progress as
 // lines of JSON in Ollama's style: status, total, completed. `saveAs` is
@@ -653,13 +688,23 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/health") {
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
       const loaded = sd.file ? rel(sd.file) : py.dir ? (py.dir.endsWith(".safetensors") || py.dir.endsWith(".ckpt") ? rel(py.dir) : `${rel(py.dir)}/${INDEX}`) : null;
-      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length });
+      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
     // The image server's recent output and the Python side's, for a look
     // when a picture fails.
     if (req.method === "GET" && url.pathname === "/log") return send(res, 200, { sd: sd.tail, lastFailure: sd.lastFailure ?? null, python: py.tail, loaded: sd.file ? path.relative(MODELS_DIR, sd.file).split(path.sep).join("/") : null });
+    // The site renews the lease while it sees activity (a chat sent from the
+    // browser, a download it is relaying). A lease is at most the idle time.
+    if (req.method === "POST" && url.pathname === "/lease") {
+      const body = await readJson(req, 4 * 1024);
+      const minutes = Math.min(IDLE_MINUTES > 0 ? IDLE_MINUTES : IDLE_CEILING_MINUTES, Math.max(1, Number(body.minutes) || IDLE_MINUTES || 30));
+      touchActivity();
+      leaseUntil = Date.now() + minutes * 60e3;
+      return send(res, 200, { ok: true, leaseUntil, idleMinutes: IDLE_MINUTES, ceilingMinutes: IDLE_CEILING_MINUTES });
+    }
     if (req.method === "POST" && url.pathname === "/download") {
+      touchActivity();
       const body = await readJson(req, 64 * 1024);
       const repo = String(body.repo ?? "");
       const file = String(body.file ?? "");
@@ -674,6 +719,7 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
     if (req.method === "POST" && url.pathname === "/download-addon") {
+      touchActivity();
       const body = await readJson(req, 64 * 1024);
       const repo = String(body.repo ?? "");
       const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
@@ -688,6 +734,7 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
     if (req.method === "POST" && url.pathname === "/download-repo") {
+      touchActivity();
       const body = await readJson(req, 256 * 1024);
       const repo = String(body.repo ?? "");
       const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
@@ -702,6 +749,7 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
     if (req.method === "POST" && url.pathname === "/download-folder") {
+      touchActivity();
       const body = await readJson(req, 64 * 1024);
       const repo = String(body.repo ?? "");
       const into = String(body.into ?? "");
@@ -758,6 +806,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/jobs") {
+      touchActivity();
       const body = await readJson(req);
       const repo = String(body.repo ?? "");
       const file = String(body.file ?? "");
@@ -824,5 +873,6 @@ for (const sig of ["SIGINT", "SIGTERM"]) {
 }
 
 server.listen(PORT, HOST, () => {
+  touchActivity();
   console.log(`HuggingFound GPU agent listening on ${HOST}:${server.address().port}; models in ${MODELS_DIR}; origins: ${ORIGINS.join(", ") || "none (same-machine only)"}`);
 });
