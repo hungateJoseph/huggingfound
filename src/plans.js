@@ -159,8 +159,10 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       return [q, { steps: n, size: s.size, cfg: s.cfg, sampler: s.samplerName, scheduler: s.schedulerName, ...estimate({ runnerId: "sd", sizeGb: file.gb, fileName: file.name, machine, xl: file.xl, steps: n }) }];
     }));
     // On the rented GPU the only step is the download, done by the machine;
-    // pictures are then made there, asked for by the browser itself.
+    // pictures are then made there, asked for by the browser itself, in a
+    // card's time rather than this computer's.
     if (detected.gpu?.url) {
+      for (const q of Object.values(qualities)) q.seconds = gpuSeconds({ width: q.size, height: q.size, steps: q.steps });
       if (model.gated && !hasToken) {
         return { runnable: false, gated: true, reason: `${model.name} is gated: accept its licence on Hugging Face and add a read token in Settings, and the rented GPU fetches it with that token.`, steps: [], link: model.url };
       }
@@ -394,7 +396,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const done = detected.gpu.files.includes(`${model.id}/model_index.json`);
   const fast = /turbo|lightning|schnell|distill|hyper|rapid|fast|step/i.test(model.id);
   const cfg = /flux/i.test(model.id) ? 3.5 : /qwen/i.test(model.id) ? 4 : 5;
-  const qualities = video
+  const qualities = withGpuSeconds(video
     ? {
         fast: { steps: 20, width: 832, height: 480, frames: 33, fps: 16, cfg, text: "a 2-second clip at 480p" },
         default: { steps: 30, width: 832, height: 480, frames: 49, fps: 16, cfg, text: "a 3-second clip at 480p" },
@@ -404,7 +406,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
         fast: { steps: fast ? 4 : 12, size: 768, width: 768, height: 768, cfg, text: "768 by 768, fewer steps" },
         default: { steps: fast ? 4 : 28, size: 1024, width: 1024, height: 1024, cfg, text: "1024 by 1024" },
         max: { steps: fast ? 8 : 40, size: 1024, width: 1024, height: 1024, cfg, text: "1024 by 1024, more steps" },
-      };
+      }, repo.gb);
   const steps = [{
     kind: "pull-image-repo",
     args: { repo: model.id, files: repo.files.map((f) => f.from) },
@@ -487,4 +489,20 @@ export function imageStyle(model) {
     return { kind: "anime", text: "Trained on anime and illustration. Asking it for a photograph will not work; a realistic model is a better fit for that (search for realistic, photoreal or juggernaut)." };
   }
   return null;
+}
+
+// A rough guess at how long a data-centre card takes for one picture or
+// clip: a pixel-step for a picture, a pixel-step per frame for a clip,
+// and more for a model too big to sit on one card in full precision. The
+// page replaces it with the measured time once a picture has been made,
+// and prices it at the machine's hourly rate.
+export function gpuSeconds({ width = 1024, height = 1024, frames = 0, steps = 20, gb = 0 } = {}) {
+  const megapixels = (width * height) / 1e6;
+  const heavy = gb > 60 ? 1.6 : gb > 30 ? 1.25 : 1;
+  const seconds = frames ? 0.5 * megapixels * frames * steps * heavy : 0.15 * megapixels * steps * heavy + 2;
+  return Math.round(seconds);
+}
+function withGpuSeconds(qualities, gb) {
+  for (const q of Object.values(qualities)) q.seconds = gpuSeconds({ width: q.width, height: q.height, frames: q.frames ?? 0, steps: q.steps, gb });
+  return qualities;
 }

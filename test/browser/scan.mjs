@@ -71,6 +71,13 @@ let acceptDialogs = false;
 page.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));
 
 let failed = 0;
+// Settings open with only the rental section unfolded; the tests unfold the rest.
+async function openSettings(p = page) {
+  await p.click("#open-settings");
+  await unfoldSettings(p);
+}
+const unfoldSettings = (p = page) => p.$$eval("#settings details", (ds) => ds.forEach((d) => (d.open = true)));
+
 async function step(name, fn) {
   try {
     await fn();
@@ -295,7 +302,7 @@ await step("a gated model explains the token and links to the model page", async
 });
 
 await step("saving a token masks it and it lands in the env file", async () => {
-  await page.click("#open-settings");
+  await openSettings();
   await page.waitForSelector("#settings:not([hidden])");
   assert.match(await page.locator("#runner-list").innerText(), /Ollama/);
   await page.fill("#token", "hf_browsertesttoken12345");
@@ -303,7 +310,7 @@ await step("saving a token masks it and it lands in the env file", async () => {
   await page.waitForSelector("#notice:not([hidden])");
   assert.match(await page.locator("#notice").innerText(), /Token saved/);
   assert.match(fs.readFileSync(envFile, "utf8"), /HF_TOKEN=hf_browsertesttoken12345/);
-  await page.click("#open-settings");
+  await openSettings();
   assert.match(await page.locator("#token-current").innerText(), /hf_b\*+2345/);
   await page.click("#close-settings");
 });
@@ -324,7 +331,7 @@ await step("settings lists downloaded models with sizes and removes one", async 
   const dir = path.join(MODELS_DIR, "second-state", "stable-diffusion-v1-5-GGUF");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf"), Buffer.alloc(2 * 1024 * 1024));
-  await page.click("#open-settings");
+  await openSettings();
   const row = page.locator("#storage-list li", { hasText: "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf" });
   await row.waitFor();
   assert.match(await row.locator(".size").innerText(), /0\.00 GB/);
@@ -430,7 +437,7 @@ await step("an image model offers Fast, Default and Max with Default chosen", as
 });
 
 await step("settings has the image server field and rejects a bad address", async () => {
-  await page.click("#open-settings");
+  await openSettings();
   await page.waitForSelector("#settings:not([hidden])");
   assert.match(await page.locator("#image-server-status").innerText(), /on this computer/);
   await page.fill("#image-server", "not an address");
@@ -501,9 +508,6 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(chatBodies.at(-1).messages.at(-1).content, "hello there");
   assert.equal(await page.evaluate(() => localStorage.getItem("effort:chat")), "thorough", "remembered for next time");
 
-  // A click beside the window used to close it and throw the conversation away.
-  await page.mouse.click(8, 8);
-  assert.equal(await page.locator("#modal").isVisible(), true, "the model window stays open");
   // Re-drawing the try box, as a finished step does, keeps the reply that is still streaming.
   await page.evaluate(() => renderTry(state.model, state.plan));
   await page.waitForSelector("#chat-live");
@@ -512,6 +516,16 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
   assert.equal(await page.locator("#chat-live").count(), 0);
   assert.match(await page.locator("#messages .msg").last().innerText(), /word0 .*word39 /s, "the whole reply landed in the transcript");
+  // A click beside the window closes it; the conversation is kept and is back when the window reopens.
+  await page.mouse.click(8, 8);
+  await page.waitForFunction(() => document.querySelector("#modal").hidden);
+  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
+  await page.waitForSelector("#chat-send");
+  assert.equal(await page.locator("#messages .msg").count(), 26, "the earlier conversation and the new exchange are back");
+  await page.evaluate(() => {
+    const m = document.querySelector("#messages");
+    m.scrollTop = m.scrollHeight;
+  });
   const scrolled = await page.evaluate(() => {
     const m = document.querySelector("#messages");
     m.scrollTop = m.scrollHeight;
@@ -667,6 +681,7 @@ await step("renting from the model window preselects its size, and the bar shows
   // Settings, opened again, show the machine and the chat server pointing at it.
   await page.evaluate(() => document.querySelector("#open-settings").click());
   await page.waitForSelector("#settings:not([hidden])");
+  await unfoldSettings(page);
   assert.match(await page.locator("#rent-panel .rent-card").innerText(), /starting[\s\S]*Stops by itself after 30 minutes/);
   assert.equal(await page.locator("#chat-server").inputValue(), rentedOllama.url, "the chat server is the rented machine");
   assert.match(await page.locator("#chat-server-status").innerText(), /rented GPU; Ollama on it is not answering yet/);
@@ -688,7 +703,7 @@ await step("renting from the model window preselects its size, and the bar shows
 
 await step("left alone while the machine runs, the page asks whether anyone is there and stops the machine when nobody answers", async () => {
   // Six seconds for the test; the default is ten minutes.
-  await page.click("#open-settings");
+  await openSettings();
   await page.waitForSelector("#rent-presence");
   await page.fill("#rent-presence", "0.1");
   await page.click("#rent-save-idle");
@@ -705,7 +720,7 @@ await step("left alone while the machine runs, the page asks whether anyone is t
   await page.waitForFunction(() => /stopped/.test(document.querySelector("#rent-bar").textContent), null, { timeout: 20000 });
   assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
   await page.waitForFunction(() => /without anyone here/.test(document.querySelector("#notice")?.textContent ?? ""), null, { timeout: 10000 });
-  await page.click("#open-settings");
+  await openSettings();
   await page.waitForSelector("#rent-panel .rent-card");
   assert.match(await page.locator("#rent-panel .rent-card").innerText(), /stopped when nobody answered the still-there check/);
   await page.fill("#rent-presence", "10");
@@ -725,7 +740,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.waitForFunction(() => /Stopped the rented GPU: the hourly charge has ended/.test(document.querySelector("#notice")?.textContent ?? ""));
   assert.equal(await page.locator("#bar-start").count(), 1);
   assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
-  await page.click("#open-settings");
+  await openSettings();
   await page.waitForSelector("#rent-panel .rent-card");
   assert.match(await page.locator("#rent-panel .rent-card").innerText(), /Stopped: no hourly charge\. The 50 GB disk keeps its models for about \$0\.33 a day \(\$10\.00 a month\)/);
   // The account's bill, GPU apart from disks, and the day's total.
@@ -757,7 +772,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.waitForFunction(() => document.querySelector(".where-opt.on")?.textContent === "On a rented GPU");
   assert.equal(await page.locator("#steps .step").count(), 1, "planned for the machine again");
   await page.keyboard.press("Escape");
-  await page.click("#open-settings");
+  await openSettings();
   await page.waitForSelector("#rent-panel .rent-card");
   assert.equal(await page.locator("#chat-server").inputValue(), rentedOllama.url, "pointed back at it");
   // Two machines left on the account from before, which the delete below brings to light.
@@ -843,7 +858,7 @@ await step("a model can be hidden from search and Browse, listed in Settings, an
   await page.click("#trait-go");
   await page.waitForFunction(() => document.querySelector("#results").hidden);
   // Settings lists it, and Show again brings it back everywhere.
-  await page.click("#open-settings");
+  await openSettings();
   await page.waitForSelector("#hidden-list li");
   assert.match(await page.locator("#hidden-list").innerText(), /Cydonia-24B-v2-GGUF/);
   await page.click('#hidden-list [data-unhide="TheDrummer/Cydonia-24B-v2-GGUF"]');
@@ -923,7 +938,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
   assert.match(await visitor.locator("#account").innerText(), /Ana/);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false);
   assert.equal(await visitor.locator("#delete-account").innerText(), "Delete my account");
-  await visitor.click("#open-settings");
+  await openSettings(visitor);
   await visitor.waitForSelector("#settings:not([hidden])");
   assert.equal(await visitor.locator("#token").isVisible(), true, "a Hugging Face token is kept with the account, for gated models on the rented GPU");
   assert.equal(await visitor.locator("#chat-server").isVisible(), false, "no hand-set chat server on the site");
@@ -1087,7 +1102,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
 await step("hosted: deleting the account deletes the machine and signs out", async () => {
   await visitor.keyboard.press("Escape");
   const podId = (await (await visitor.request.get(`${hostedBase}/api/rent`)).json()).id;
-  await visitor.click("#open-settings");
+  await openSettings(visitor);
   await visitor.waitForSelector("#delete-account");
   acceptDialogs = true;
   await visitor.click("#delete-account");

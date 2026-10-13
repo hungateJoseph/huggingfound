@@ -294,6 +294,7 @@ body[data-mode="results"] .trait-search.big, body[data-mode="browse"] .trait-sea
    install, download, chat or change settings are not shown. */
 .hosted-only { display: none; }
 body[data-hosted="1"] .hosted-only { display: block; }
+body[data-hosted="1"] details.hosted-only { display: block; }
 body[data-hosted="1"] .local-only { display: none !important; }
 .get-app { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; }
 .get-app code { display: block; margin-top: 8px; padding: 8px 10px; background: var(--bg); border-radius: 6px; white-space: pre; overflow-x: auto; }
@@ -450,3 +451,15 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .notice ul.small { margin: 8px 0; padding-left: 18px; }
 .notice .primary { margin-top: 6px; }
 .step-buttons .stop-after, .try .stop-after { margin: 6px 0 0; }
+
+/* Settings in sections: the rental open, the rest a click away. */
+.section { border-top: 1px solid var(--line); padding: 10px 0 4px; }
+.section > summary { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; cursor: pointer; list-style: none; padding: 6px 0; }
+.section > summary::-webkit-details-marker { display: none; }
+.section > summary::before { content: "▸"; color: var(--muted); font-size: 12px; }
+.section[open] > summary::before { content: "▾"; }
+.section > summary h3 { margin: 0; font-size: 16px; }
+.section[open] > summary { margin-bottom: 6px; }
+.section .rent { margin-top: 0; }
+#rent-bar .others-note { margin-left: 8px; }
+.section .rent, .section.account-box, .section.hidden-models { margin-top: 0; padding-top: 0; border-top: 0; }

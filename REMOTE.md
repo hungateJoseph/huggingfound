@@ -91,6 +91,15 @@ The machine takes two to four minutes to start. Meanwhile:
 - A **spend cap** stops the machine once the day's machines have cost the
   amount you set ($50 unless changed), counted across stops, starts and
   replaced machines from midnight UTC.
+- **One machine at a time.** Renting is refused while another HuggingFound
+  machine is running on the account, and stopped ones left from before are
+  offered for deletion first, since each bills for its disk. The bar says
+  when such machines exist even with nothing rented.
+- **What a picture or clip costs** is said before you pay: each preset in
+  the try box shows its time and machine cost at the rented card's price,
+  from a guess at first and from the measured time after the first one;
+  the rent confirm says the same for the model you opened, with the cost of
+  loading a big model the first time.
 - The Settings card shows **RunPod's bill for the account** for the last
   week, GPU time apart from disks and by machine, and lists any **other
   HuggingFound machines** on the account that this app no longer manages

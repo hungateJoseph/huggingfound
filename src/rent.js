@@ -569,6 +569,11 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         const current = await this.status({ probe: false });
         if (current.rented) throw new RentError("A machine is already rented. Stop or delete it first.", 409);
       }
+      // One machine at a time on the account: another HuggingFound machine
+      // running there, from an earlier session or another key, would bill
+      // alongside this one. It is stopped or deleted first, from Settings.
+      const running = (await others({ fresh: true }).catch(() => [])).filter((o) => o.running);
+      if (running.length) throw new RentError(`Another HuggingFound machine is already running on this RunPod account (${running.map((o) => `${o.gpu || "GPU"}, ${o.costPerHour != null ? `$${o.costPerHour.toFixed(2)} an hour` : "billing"}, ${o.id}`).join("; ")}). One machine at a time: stop or delete it under Settings first.`, 409);
       const offer = (await tiers()).find((t) => t.gb === tier.gb);
       if (!offer?.gpu) throw new RentError(`RunPod lists no ${tier.gb} GB card right now.`, 503);
       if (!offer.available) throw new RentError(`Every ${tier.gb} GB card at RunPod is taken right now. Try another size or try again later.`, 503);

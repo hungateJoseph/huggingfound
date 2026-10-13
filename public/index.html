@@ -287,7 +287,25 @@ npm start</code>
         </div>
         <button class="ghost" id="close-settings" aria-label="Close">Close</button>
       </div>
-      <div>
+      <details class="section" id="sec-rent" open>
+        <summary><h3>Rent a GPU by the hour</h3><span class="muted small">RunPod key, sizes, the rented machine and its bill</span></summary>
+        <div class="rent" id="rent">
+        <p class="muted small">With a RunPod key saved, pick a size: HuggingFound rents a machine there, runs chat and image models on it, stops it once it has sat idle, and deletes it when you say so. RunPod bills you by the hour while it runs; HuggingFound charges nothing.</p>
+        <label class="field">
+          <span>RunPod API key</span>
+          <input type="password" id="runpod-key" autocomplete="off" placeholder="rpa_...">
+          <small class="muted">Make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a> and add some credit, then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods, since it has to make and stop machines. It is kept in the settings file on this computer and sent only to RunPod.</small>
+        </label>
+        <p class="muted small" id="runpod-status"></p>
+        <div class="actions">
+          <button class="primary" id="save-runpod">Save</button>
+          <button class="ghost" id="clear-runpod">Remove</button>
+        </div>
+        <div id="rent-panel"></div>
+        </div>
+      </details>
+      <details class="section" id="sec-hf">
+        <summary><h3>Hugging Face token</h3><span class="muted small">Optional; unlocks gated models</span></summary>
       <label class="field">
         <span>Hugging Face token (optional)</span>
         <input type="password" id="token" autocomplete="off" placeholder="hf_...">
@@ -298,8 +316,9 @@ npm start</code>
         <button class="primary" id="save-token">Save</button>
         <button class="ghost" id="clear-token">Remove token</button>
       </div>
-      </div>
-      <div class="local-only">
+      </details>
+      <details class="section local-only" id="sec-servers">
+        <summary><h3>Servers of your own</h3><span class="muted small">Optional; a chat server or image server you set up yourself</span></summary>
       <label class="field">
         <span>Chat server (optional)</span>
         <input type="url" id="chat-server" autocomplete="off" placeholder="http://127.0.0.1:11435">
@@ -315,23 +334,6 @@ npm start</code>
         <button class="primary" id="save-chat-server">Save</button>
         <button class="ghost" id="clear-chat-server">Use this computer</button>
       </div>
-      </div>
-      <div class="rent" id="rent">
-        <h3>Rent a GPU by the hour</h3>
-        <p class="muted small">Or have HuggingFound set the chat server up for you. With a RunPod key saved, pick a size below: HuggingFound rents a machine there with Ollama on it, points the chat server at it, stops it once it has sat idle, and deletes it when you say so. RunPod bills you by the hour while it runs; HuggingFound charges nothing.</p>
-        <label class="field">
-          <span>RunPod API key</span>
-          <input type="password" id="runpod-key" autocomplete="off" placeholder="rpa_...">
-          <small class="muted">Make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a> and add some credit, then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods, since it has to make and stop machines. It is kept in the settings file on this computer and sent only to RunPod.</small>
-        </label>
-        <p class="muted small" id="runpod-status"></p>
-        <div class="actions">
-          <button class="primary" id="save-runpod">Save</button>
-          <button class="ghost" id="clear-runpod">Remove</button>
-        </div>
-        <div id="rent-panel"></div>
-      </div>
-      <div class="local-only">
       <label class="field">
         <span>Image server (optional)</span>
         <input type="url" id="image-server" autocomplete="off" placeholder="http://192.168.1.20:1234">
@@ -342,7 +344,9 @@ npm start</code>
         <button class="primary" id="save-image-server">Save</button>
         <button class="ghost" id="clear-image-server">Use this computer</button>
       </div>
-      </div>
+      </details>
+      <details class="section" id="sec-claude">
+        <summary><h3>Anthropic API key</h3><span class="muted small">Optional; lets Claude check answers and pictures</span></summary>
       <label class="field">
         <span>Anthropic API key (optional)</span>
         <input type="password" id="claude-key" autocomplete="off" placeholder="sk-ant-...">
@@ -353,7 +357,9 @@ npm start</code>
         <button class="primary" id="save-claude">Save</button>
         <button class="ghost" id="clear-claude">Remove</button>
       </div>
-      <div class="local-only">
+      </details>
+      <details class="section local-only" id="sec-sources">
+        <summary><h3>Outside sources</h3><span class="muted small">Optional keys for GitHub, YouTube and Reddit searches</span></summary>
       <label class="field">
         <span>GitHub token (optional)</span>
         <input type="password" id="github-token" autocomplete="off" placeholder="github_pat_... or ghp_...">
@@ -384,31 +390,26 @@ npm start</code>
         <button class="primary" id="save-reddit">Save</button>
         <button class="ghost" id="clear-reddit">Remove</button>
       </div>
-      </div>
-      <div class="hidden-models">
-        <h3>Hidden models</h3>
-        <p class="muted small" id="hidden-note"></p>
+      </details>
+      <details class="section hidden-models" id="sec-hidden">
+        <summary><h3>Hidden models</h3><span class="muted small" id="hidden-note"></span></summary>
         <ul id="hidden-list"></ul>
-      </div>
-      <div class="local-only">
-      <div class="runners">
-        <h3>What is installed</h3>
+      </details>
+      <details class="section local-only runners" id="sec-installed">
+        <summary><h3>What is installed</h3><span class="muted small">The runners on this computer</span></summary>
         <ul id="runner-list"></ul>
-      </div>
-      <div class="storage">
-        <h3>Space used by models</h3>
-        <p class="muted small" id="storage-total"></p>
+      </details>
+      <details class="section local-only storage" id="sec-storage">
+        <summary><h3>Space used by models</h3><span class="muted small" id="storage-total"></span></summary>
         <ul id="storage-list"></ul>
-      </div>
-      </div>
-      <div class="hosted-only account-box" id="account-box">
-        <h3>Your account</h3>
-        <p class="muted small" id="account-line"></p>
+      </details>
+      <details class="section hosted-only account-box" id="account-box">
+        <summary><h3>Your account</h3><span class="muted small" id="account-line"></span></summary>
         <div class="actions">
           <button class="ghost" id="delete-account">Delete my account</button>
         </div>
         <small class="muted">Deletes the keys, the rented GPU and everything on it. Nothing else is kept about you.</small>
-      </div>
+      </details>
     </div>
   </div>
 

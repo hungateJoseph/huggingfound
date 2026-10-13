@@ -71,8 +71,10 @@ async function load() {
   state.idleSet = Boolean(s.idleSet);
   state.maxSpend = s.maxSpend ?? 50;
   state.presenceMinutes = s.presenceMinutes ?? 10;
+  if (state.runpodKey !== s.runpodKey) state.others = null;
   state.runpodKey = s.runpodKey;
   state.registryAuth = s.registryAuth || "";
+  if (state.others == null) loadOthersState();
   state.stopOnQuit = s.stopOnQuit;
   $("#runpod-status").textContent = s.runpodKey ? `A key is saved (${s.runpodKey}).` : s.rental?.rented ? "No key saved, but a machine is still rented: enter the key of the account that rented it to stop or delete it." : state.hosted ? "No key saved; renting is off." : "No key saved; renting is off. The chat server above can still be set by hand.";
   state.runpodKey = s.runpodKey || "";
@@ -833,10 +835,20 @@ function wireRentAsk(body, model, choice) {
     replaceMachine();
   });
   if (body.querySelector(".rent-offer") && state.rentOptions == null && !state.rentOptionsLoading) loadRentOptions();
+  // Under the offer: what one picture or clip would cost at the chosen size.
+  const sayPerQuery = () => {
+    const note = body.querySelector("#ask-rent-note");
+    const gb = Number(body.querySelector("#ask-size")?.value);
+    const offer = (state.rentOptions ?? []).find((t) => t.gb === gb);
+    if (note && offer) note.textContent = perQueryText(offer.pricePerHour).trim();
+  };
+  sayPerQuery();
+  body.querySelector("#ask-size")?.addEventListener("change", sayPerQuery);
   body.querySelector("#ask-sizes")?.addEventListener("click", () => {
     state.rentWant = Number(body.querySelector("#ask-size")?.value) || choice.tier;
     state.rentFrom = model.id;
     $("#settings").hidden = false;
+    $("#sec-rent").open = true;
     renderRental();
     $("#rent").scrollIntoView({ block: "start" });
   });
@@ -845,7 +857,8 @@ function wireRentAsk(body, model, choice) {
     const offer = (state.rentOptions ?? []).find((t) => t.gb === gb);
     if (!offer) return;
     const diskGb = state.rentDisk ?? 50;
-    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${safeguardText(offer.pricePerHour)}`)) return;
+    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${perQueryText(offer.pricePerHour)}${safeguardText(offer.pricePerHour)}`)) return;
+    if (!(await guardOthers())) return;
     const btn = body.querySelector("#ask-rent");
     const note = body.querySelector("#ask-rent-note");
     btn.disabled = true;
@@ -2124,10 +2137,17 @@ function pictureLink(url, alt) {
 
 function qualityLabel(q, info, fast) {
   const names = { fast: "Fast", default: "Default", max: "Max" };
+  // On the rented GPU each preset says what it costs: the measured time
+  // here if there is one, else the preset's guess, at the machine's price.
+  const repo = state.plan?.tryWith?.repo;
+  const measured = repo ? tookSeconds(repo, q) : null;
+  const seconds = measured ?? info.seconds;
+  const price = state.plan?.remote && state.rental?.rented ? state.rental.costPerHour : null;
+  const cost = price && seconds ? `, about ${esc(shortDuration(seconds))} and ${money((price * seconds) / 3600)} of machine time${measured ? " (measured)" : ""}` : seconds ? `, about ${esc(shortDuration(seconds))}` : "";
   // The diffusers presets say what they make in their own words.
-  if (info.text) return `<b>${names[q]}</b> <span class="muted">${esc(info.text)}, ${info.steps} steps</span>`;
+  if (info.text) return `<b>${names[q]}</b> <span class="muted">${esc(info.text)}, ${info.steps} steps${cost}</span>`;
   const what = fast ? `${info.steps} steps` : q === "default" ? `${info.steps} steps, the standard settings` : q === "fast" ? `${info.steps} steps, sharper sampler` : `${info.steps} steps, for the most detail`;
-  return `<b>${names[q]}</b> <span class="muted">${what}${info.seconds ? `, about ${esc(shortDuration(info.seconds))}` : ""}</span>`;
+  return `<b>${names[q]}</b> <span class="muted">${what}${cost}</span>`;
 }
 
 function shortDuration(seconds) {
@@ -2252,6 +2272,17 @@ function renderImage(box, t) {
           // bill ends with the work, not after an idle wait.
           if (stopAfter) stopAfterJob(log);
         }
+        // What this one cost, and the presets now say the measured time.
+        if (job.took) {
+          rememberTook(target.repo, quality, job.took);
+          const price = state.rental?.costPerHour;
+          if (price) log.textContent += `This ${video ? "clip" : "picture"} took ${shortDuration(job.took)} of machine time, about ${money((price * job.took) / 3600)} at ${money(price)} an hour${job.loadSeconds > 5 ? `; loading the model first took ${shortDuration(job.loadSeconds)}, about ${money((price * job.loadSeconds) / 3600)}` : ""}.\n`;
+          const chosen = box.querySelector("input[name=quality]:checked")?.value;
+          const qbox = box.querySelector("#quality");
+          if (qbox && plan?.qualities) {
+            qbox.innerHTML = Object.entries(plan.qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === chosen ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
+          }
+        }
         const show = (out) => {
           if (job.video) showClip(out, { data: job.video, prompt });
           else showPicture(out, { data: job.image, prompt, negative, model: t.repo, madeBy: addon ? `${t.repo.split("/").pop()} on ${target.repo.split("/").pop()}` : t.file, agent: t.agent, repo: target.repo, modelFile: target.file, chain: [] });
@@ -2369,6 +2400,8 @@ async function agentJob(agent, { repo, file, prompt, negative, quality, init = n
   let noted = false;
   let misses = 0;
   const started = Date.now();
+  // When the machine began the picture itself, after any loading.
+  let genStarted = 0;
   for (;;) {
     await new Promise((r) => setTimeout(r, 1500));
     let job;
@@ -2385,6 +2418,7 @@ async function agentJob(agent, { repo, file, prompt, negative, quality, init = n
       if (misses > 200) throw new Error(`lost the machine for five minutes while waiting (${err.message}); the job may still finish there`);
       continue;
     }
+    if (!genStarted && ["generating", "completed"].includes(job.status)) genStarted = Date.now();
     const word = { loading: "Loading the model into the GPU (the first picture with a model takes longer)", queued: "Waiting for the GPU", generating: job.progress ? `Generating, ${Math.round(job.progress * 100)}%` : "Generating" }[job.status];
     if (word && word !== last) {
       onLine(word);
@@ -2395,7 +2429,9 @@ async function agentJob(agent, { repo, file, prompt, negative, quality, init = n
       noted = true;
     }
     if (job.status === "completed") {
-      onLine(`Done in ${Math.round((Date.now() - started) / 1000)} s.`);
+      job.took = (Date.now() - (genStarted || started)) / 1000;
+      job.loadSeconds = genStarted ? (genStarted - started) / 1000 : 0;
+      onLine(`Done in ${Math.round((Date.now() - started) / 1000)} s${job.loadSeconds > 5 ? ` (${Math.round(job.loadSeconds)} s of it loading the model)` : ""}.`);
       return job;
     }
     if (job.status === "failed") throw new Error(job.error || "the machine could not make the picture");
@@ -2548,11 +2584,23 @@ $("#close-modal").addEventListener("click", () => {
   $("#modal").hidden = true;
   state.open = null;
 });
-// A click beside the model window used to close it; now only Close and
-// Escape do, so a stray click does not take a conversation away.
-$("#settings").addEventListener("click", (e) => {
-  if (e.target === e.currentTarget) e.currentTarget.hidden = true;
-});
+// A click beside a window closes it, as Close and Escape do. A conversation
+// is kept in this browser, so closing the model window loses nothing; a
+// drag that ends outside (selecting text) does not count, only a click
+// that began there.
+let pressedBackdrop = null;
+for (const id of ["#settings", "#modal", "#gpu-models"]) {
+  const el = $(id);
+  if (!el) continue;
+  el.addEventListener("pointerdown", (e) => {
+    pressedBackdrop = e.target === e.currentTarget ? e.currentTarget : null;
+  });
+  el.addEventListener("click", (e) => {
+    if (e.target !== e.currentTarget || pressedBackdrop !== e.currentTarget) return;
+    e.currentTarget.hidden = true;
+    if (id === "#modal") state.open = null;
+  });
+}
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     $("#modal").hidden = true;
@@ -2874,7 +2922,8 @@ function renderRental() {
     const offer = state.rentOptions.find((t) => t.gb === gb);
     if (!offer) return;
     state.rentDisk = diskGb;
-    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${safeguardText(offer.pricePerHour)}`)) return;
+    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${perQueryText(offer.pricePerHour)}${safeguardText(offer.pricePerHour)}`)) return;
+    if (!(await guardOthers())) return;
     const btn = panel.querySelector("#rent-go");
     btn.disabled = true;
     btn.textContent = "Renting";
@@ -2986,6 +3035,37 @@ async function rentAction(action, question) {
 // What stops the bill if the machine is forgotten, in the words of the
 // confirm before renting: the idle time, the spend cap, and what a day
 // would cost without them when the price makes that worth saying.
+// What one picture or clip of the open model would cost at a price an hour,
+// from the preset's guessed time or the time measured here, for the rent
+// confirm and the offer: the hourly rate alone says little about a clip.
+function perQueryText(pricePerHour) {
+  const plan = state.plan;
+  const t = plan?.tryWith;
+  if (!pricePerHour || !t || !["image", "video"].includes(t.kind) || !plan.qualities?.default) return "";
+  const clip = t.kind === "video";
+  const seconds = tookSeconds(t.repo, "default") ?? plan.qualities.default.seconds;
+  if (!seconds) return "";
+  const load = plan.file?.gb > 20 ? ` The first ${clip ? "clip" : "picture"} after a start adds the minutes it takes to load the model (${money((pricePerHour * Math.max(60, plan.file.gb * 3)) / 3600)} or so for ${plan.file.gb.toFixed(0)} GB).` : "";
+  return `One ${clip ? "clip" : "picture"} at the Default setting takes about ${shortDuration(seconds)} on such a card, about ${money((pricePerHour * seconds) / 3600)} of machine time; the machine bills while it loads and waits too.${load}\n\n`;
+}
+
+// The time a picture or clip of a model took here, by preset, kept in this browser.
+function tookSeconds(repo, q) {
+  try {
+    const n = Number(localStorage.getItem(`took:${repo}|${q}`));
+    return n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+function rememberTook(repo, q, seconds) {
+  try {
+    localStorage.setItem(`took:${repo}|${q}`, String(Math.round(seconds)));
+  } catch {
+    // no storage
+  }
+}
+
 function safeguardText(pricePerHour) {
   const idle = state.idleSet ? state.idleMinutes ?? 30 : pricePerHour >= 2 ? 10 : 30;
   const cap = state.maxSpend ?? 50;
@@ -3057,6 +3137,8 @@ async function loadOthers(panel) {
     return;
   }
   if (!panel.contains(box)) return;
+  state.others = others;
+  renderRentBar(state.rental);
   if (!others.length) {
     box.innerHTML = "";
     return;
@@ -3079,6 +3161,8 @@ async function loadOthers(panel) {
       const { deleted } = await api.post("/api/rent/others/delete", { ids: others.map((o) => o.id) });
       notice(`Deleted ${deleted.length} machine${deleted.length === 1 ? "" : "s"} at RunPod; about ${money(perDay)} a day no longer charged.`, "ok");
       box.innerHTML = "";
+      state.others = [];
+      renderRentBar(state.rental);
     } catch (err) {
       btn.disabled = false;
       btn.textContent = "Try again";
@@ -3113,9 +3197,23 @@ async function replaceMachine() {
 // The bar under the header: a machine is being paid for, and here is how to stop it.
 function renderRentBar(r) {
   const bar = $("#rent-bar");
+  const others = state.others ?? [];
   if (!r?.rented) {
-    bar.hidden = true;
-    bar.innerHTML = "";
+    // Nothing rented, but machines from before may sit on the account billing for their disks.
+    if (!others.length) {
+      bar.hidden = true;
+      bar.innerHTML = "";
+      return;
+    }
+    const perDay = others.reduce((a, o) => a + (o.diskPerDay || 0), 0);
+    const running = others.filter((o) => o.running);
+    bar.hidden = false;
+    bar.innerHTML = `<div class="wrap"><span>No GPU rented, but ${others.length} other HuggingFound machine${others.length === 1 ? "" : "s"} ${others.length === 1 ? "sits" : "sit"} on your RunPod account${running.length ? `, ${running.length} running at ${money(running.reduce((a, o) => a + (o.costPerHour || 0), 0))} an hour` : ""}, costing about ${money(perDay)} a day for ${others.length === 1 ? "its disk" : "their disks"}.</span><span class="buttons"><button id="bar-others">See and delete them</button></span></div>`;
+    bar.querySelector("#bar-others").addEventListener("click", () => {
+      $("#settings").hidden = false;
+      $("#sec-rent").open = true;
+      $("#rent").scrollIntoView({ block: "start" });
+    });
     return;
   }
   const [word] = rentalPhase(r);
@@ -3125,14 +3223,71 @@ function renderRentBar(r) {
   bar.hidden = false;
   const held = (r.chatModels ?? 0) + (r.imageModels ?? 0);
   const busy = r.downloading ? `<span class="pill live">${r.downloading} downloading</span>` : "";
-  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}, ${esc(word)}${cost}${time}.</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}${busy ? ` ${busy}` : ""}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-settings">Manage</button></span></div>`;
+  const disk = !running && r.diskPerDay ? `, disk ${money(r.diskPerDay)} a day` : "";
+  const extra = others.length ? `<button class="ghost others-note" id="bar-others" title="Machines from before that this site no longer manages, each billing for its disk">${others.length} other machine${others.length === 1 ? "" : "s"} on the account</button>` : "";
+  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}, ${esc(word)}${cost}${time}${disk}.${extra}</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}${busy ? ` ${busy}` : ""}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-delete" title="Delete the machine, its disk and its models; nothing is charged after">Delete</button><button class="ghost" id="bar-settings">Manage</button></span></div>`;
   bar.querySelector("#bar-models").addEventListener("click", openGpuModels);
   bar.querySelector("#bar-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
   bar.querySelector("#bar-start")?.addEventListener("click", () => rentAction("start", null));
-  bar.querySelector("#bar-settings").addEventListener("click", () => {
+  bar.querySelector("#bar-delete").addEventListener("click", () => rentAction("delete", `Delete the rented machine${running ? ", which is running," : ""} with its ${r.diskGb ? `${r.diskGb} GB ` : ""}disk and every model on it?\n\nNothing is charged after this${r.diskPerDay ? `, not even the ${money(r.diskPerDay)} a day for the disk` : ""}. The models can be downloaded again on a new machine.`));
+  bar.querySelector("#bar-others")?.addEventListener("click", () => {
     $("#settings").hidden = false;
+    $("#sec-rent").open = true;
     $("#rent").scrollIntoView({ block: "start" });
   });
+  bar.querySelector("#bar-settings").addEventListener("click", () => {
+    $("#settings").hidden = false;
+    $("#sec-rent").open = true;
+    $("#rent").scrollIntoView({ block: "start" });
+  });
+}
+
+// The other HuggingFound machines on the RunPod account, asked for once in
+// a while (the server remembers the answer for a few minutes), so the bar
+// and the rent panel can say they are there and what they cost.
+async function loadOthersState() {
+  if (!state.runpodKey) {
+    state.others = [];
+    return;
+  }
+  try {
+    ({ others: state.others } = await api.get("/api/rent/others"));
+  } catch {
+    // RunPod not answering: nothing to say
+  }
+  renderRentBar(state.rental);
+}
+
+// One machine at a time on the account. Before renting, any other
+// HuggingFound machine there is shown: a running one blocks (the server
+// refuses too), stopped ones are offered for deletion first, since each
+// bills for its disk and the person is about to pay for a new one.
+async function guardOthers() {
+  let others;
+  try {
+    ({ others } = await api.get("/api/rent/others"));
+  } catch {
+    return true;
+  }
+  state.others = others;
+  if (!others.length) return true;
+  const list = others.map((o) => `${o.gpu || "GPU"}${o.gpuCount > 1 ? ` × ${o.gpuCount}` : ""}, ${o.diskGb} GB disk, ${o.running ? `running at ${money(o.costPerHour || 0)} an hour` : "stopped"} (${o.id})`).join("\n");
+  const running = others.filter((o) => o.running);
+  if (running.length) {
+    alert(`Another HuggingFound machine is already running on this RunPod account:\n\n${list}\n\nOne machine at a time. Stop or delete it under Settings, Rent a GPU, before renting another.`);
+    return false;
+  }
+  const perDay = others.reduce((a, o) => a + (o.diskPerDay || 0), 0);
+  if (!confirm(`${others.length} other HuggingFound machine${others.length === 1 ? "" : "s"} from before ${others.length === 1 ? "sits" : "sit"} stopped on this RunPod account, costing about ${money(perDay)} a day for ${others.length === 1 ? "its disk" : "their disks"}:\n\n${list}\n\nDelete ${others.length === 1 ? "it" : "them"} now and rent the new machine? Cancel keeps everything as it is.`)) return false;
+  try {
+    const { deleted } = await api.post("/api/rent/others/delete", { ids: others.map((o) => o.id) });
+    state.others = [];
+    notice(`Deleted ${deleted.length} machine${deleted.length === 1 ? "" : "s"} at RunPod.`, "ok");
+  } catch (err) {
+    alert(`Could not delete them: ${err.message}`);
+    return false;
+  }
+  return true;
 }
 
 // ---- the models on the rented machine --------------------------------------------

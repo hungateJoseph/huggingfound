@@ -871,3 +871,25 @@ test("a download asked to stop the machine when it is over does so, unless anoth
   await post("/api/rent/delete", {});
   own.close();
 });
+
+test("one machine at a time: renting is refused while another HuggingFound machine runs on the account", async () => {
+  const file = path.join(home, "second.env");
+  writeEnv(file, { RUNPOD_API_KEY: KEY });
+  const first = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0 });
+  const a = await first.rent({ gb: 24, diskGb: 50 });
+  await first.status({ probe: false });
+  await first.status({ probe: false });
+  assert.equal((await first.status({ probe: false })).status, "RUNNING");
+  const other = path.join(home, "second-b.env");
+  writeEnv(other, { RUNPOD_API_KEY: KEY });
+  const second = createRental({ env: () => readEnv(other), save: (u) => writeEnv(other, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0 });
+  await assert.rejects(second.rent({ gb: 24, diskGb: 50 }), /Another HuggingFound machine is already running on this RunPod account \(NVIDIA GeForce RTX 4090, \$0\.44 an hour, pod\d+abc\)\. One machine at a time/);
+  assert.equal(Object.values(runpod.state.pods).filter((p) => p.status !== "TERMINATED" && p.status !== "EXITED").length, 1, "nothing new was made");
+  await first.stop();
+  // Stopped, it no longer blocks; it is only listed as another machine.
+  const b = await second.rent({ gb: 24, diskGb: 50 });
+  assert.ok(b.id && b.id !== a.id);
+  assert.ok((await second.others()).some((o) => o.id === a.id && !o.running));
+  await second.remove();
+  await first.remove();
+});
