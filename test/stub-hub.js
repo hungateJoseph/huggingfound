@@ -211,6 +211,20 @@ export function startStubHub({ extraModels = [] } = {}) {
       if (!m) return json(res, 404, { error: "not found" });
       if (m.gated && !req.headers.authorization) return json(res, 401, { error: "gated" });
       // A diffusers index names the pipeline class, which says image or video.
+      // A file that takes a moment, for a download found still in flight.
+      if (/slow\.bin$/.test(dl[2])) {
+        res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": 64 * 1024 });
+        let sent = 0;
+        const tick = setInterval(() => {
+          res.write(Buffer.alloc(8 * 1024, 2));
+          sent += 8 * 1024;
+          if (sent >= 64 * 1024) {
+            clearInterval(tick);
+            res.end();
+          }
+        }, 150);
+        return;
+      }
       // A file that announces more than it sends, as a dropped connection does.
       if (/short\.bin$/.test(dl[2])) {
         res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": 64 * 1024 });

@@ -307,6 +307,28 @@ test("a download already going shows in the model's plan, in the list of runs an
   await post("/api/remove", { kind: "gpu-file", repo: SD, file: FILE });
 });
 
+test("a download the machine already has going is found by the model's window, and starting the same step twice is one run", async () => {
+  const SD = "second-state/stable-diffusion-v1-5-GGUF";
+  const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";
+  agent.state.slowMs = 200;
+  // Begun on the machine by someone this server does not remember (another tab, a restart).
+  const begun = await (await fetch(`${agent.url}/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: SD, file: FILE, detach: true }) })).json();
+  const plan = (await json(`/api/model?id=${SD}`)).plan;
+  assert.ok(plan.steps[0].running, "the step is shown running, attached to the machine's task");
+  const attached = (await json("/api/runs")).runs.find((r) => r.id === plan.steps[0].running);
+  assert.match(attached.first, /found going on the machine/);
+  assert.match(attached.title, /^Download the model on the rented GPU/);
+  assert.equal(attached.model, SD);
+  // Starting the step now joins that run rather than starting a second download.
+  const again = await (await post("/api/run", { kind: "pull-image-model", args: { repo: SD, file: FILE }, where: "rented", model: SD })).json();
+  assert.deepEqual(again, { id: plan.steps[0].running, attached: true });
+  const log = await (await get(`/api/runs/${plan.steps[0].running}`)).text();
+  assert.match(log, /Done\./);
+  assert.equal(agent.state.tasks.get(begun.id).status, "done");
+  agent.state.slowMs = 5;
+  await post("/api/remove", { kind: "gpu-file", repo: SD, file: FILE });
+});
+
 test("a machine from before a feature is told apart by its agent's version, and the plan says to replace it", async () => {
   agent.state.version = 1;
   const addon = (await json("/api/model?id=h94/IP-Adapter-FaceID")).plan;
@@ -316,8 +338,8 @@ test("a machine from before a feature is told apart by its agent's version, and 
   assert.equal((await json("/api/model?id=John6666/pony-realism-v23-sdxl")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=Qwen/Qwen-Image")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).plan.runnable, true, "a single-file model still runs on the old machine");
-  assert.equal((await json("/api/rent")).agentCurrent, 7, "the status says which version is current");
-  agent.state.version = 7;
+  assert.equal((await json("/api/rent")).agentCurrent, 8, "the status says which version is current");
+  agent.state.version = 8;
   assert.equal((await json("/api/model?id=h94/IP-Adapter-FaceID")).plan.runnable, true);
 });
 

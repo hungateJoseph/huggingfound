@@ -879,6 +879,68 @@ export async function agentAddons(agent, fetchImpl = fetch) {
   return ((await res.json()).addons ?? []).map((a) => `${a.repo}/${a.file}`);
 }
 
+// Follows a download task on the machine to its end, waiting out drops.
+async function pollAgentTask(agent, id, route, emit, cancelled, fetchImpl) {
+  const lineText = (j) => (j.total ? `${Math.floor(((j.completed ?? 0) / j.total) * 100)}% of ${(j.total / 1024 ** 3).toFixed(2)} GB${j.file && route !== "/download" ? ` (${j.file})` : ""}` : String(j.status ?? ""));
+  let cursor = 0;
+  let failures = 0;
+  let last = "";
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (cancelled()) return;
+    let state;
+    try {
+      const poll = await fetchImpl(`${agent}/downloads/${id}?after=${cursor}`, { signal: AbortSignal.timeout(10000) });
+      if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
+      state = await poll.json();
+      if (failures >= 6) emit("Reconnected to the machine.");
+      failures = 0;
+    } catch {
+      failures++;
+      // A machine pulling files at full speed answers slowly; a few
+      // misses are normal, and the download goes on regardless.
+      if (failures === 6) emit("The connection to the machine dropped; the download goes on there, waiting to reconnect");
+      if (failures > 150) throw new Error("the machine could not be reached for five minutes; the download may still be going there, and opening the model again shows what has arrived");
+      continue;
+    }
+    for (const j of state.lines) {
+      const text = lineText(j);
+      if (text && text !== last) emit(text);
+      last = text;
+    }
+    cursor = state.cursor;
+    if (state.status === "failed") throw new Error(state.error || "the download failed on the machine");
+    if (state.status === "done") return;
+  }
+}
+
+// The download tasks on the machine, running and recent.
+export async function agentTasks(agent, fetchImpl = fetch) {
+  try {
+    const res = await fetchImpl(`${agent}/downloads`, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return [];
+    return (await res.json()).tasks ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// The key the agent gives a download task, for a plan's step.
+export function agentTaskKey(kind, args = {}) {
+  if (kind === "pull-image-model") return `/download|${args.repo}|${args.file}`;
+  if (kind === "pull-image-folder") return `/download-folder|${args.repo}|${args.into}`;
+  if (kind === "pull-image-repo") return `/download-repo|${args.repo}`;
+  if (kind === "pull-addon") return `/download-addon|${args.repo}`;
+  return null;
+}
+
+// A run of this server that follows a task the machine already has going,
+// found again after this server forgot it (a restart, another tab).
+export function attachAgentTask(agent, task, title, fetchImpl = fetch, { owner = null } = {}) {
+  const route = String(task.key ?? "").split("|")[0] || "/download";
+  return startCustomRun(title, (emit, cancelled) => pollAgentTask(agent, task.id, route, emit, cancelled, fetchImpl), { owner });
+}
+
 function agentDownload(title, route, body, fetchImpl, agent, owner) {
   if (!agent) throw new Error("No rented GPU");
   return startCustomRun(title, async (emit, cancelled) => {
@@ -911,37 +973,9 @@ function agentDownload(title, route, body, fetchImpl, agent, owner) {
     if (version >= 7) {
       const started = await fetchImpl(`${agent}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, detach: true }), signal: AbortSignal.timeout(30000) });
       if (!started.ok) throw new Error(`the rented GPU answered HTTP ${started.status}`);
-      const { id } = await started.json();
-      let cursor = 0;
-      let failures = 0;
-      let last = "";
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 2000));
-        if (cancelled()) return;
-        let state;
-        try {
-          const poll = await fetchImpl(`${agent}/downloads/${id}?after=${cursor}`, { signal: AbortSignal.timeout(10000) });
-          if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
-          state = await poll.json();
-          if (failures >= 6) emit("Reconnected to the machine.");
-          failures = 0;
-        } catch {
-          failures++;
-          // A machine pulling files at full speed answers slowly; a few
-          // misses are normal, and the download goes on regardless.
-          if (failures === 6) emit("The connection to the machine dropped; the download goes on there, waiting to reconnect");
-          if (failures > 150) throw new Error("the machine could not be reached for five minutes; the download may still be going there, and opening the model again shows what has arrived");
-          continue;
-        }
-        for (const j of state.lines) {
-          const text = lineText(j);
-          if (text && text !== last) emit(text);
-          last = text;
-        }
-        cursor = state.cursor;
-        if (state.status === "failed") throw new Error(state.error || "the download failed on the machine");
-        if (state.status === "done") return;
-      }
+      const { id, attached } = await started.json();
+      if (attached) emit("This download was already going on the machine; following it from where it is.");
+      return pollAgentTask(agent, id, route, emit, cancelled, fetchImpl);
     }
     const stop = new AbortController();
     let res;

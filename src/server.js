@@ -17,6 +17,9 @@ import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, clearOutputs, describeIm
   removeAgentAddon,
   agentAddons,
   agentHealth,
+  agentTasks,
+  agentTaskKey,
+  attachAgentTask,
   listRuns,
   stepKey, pullOnChatServer, startCustomRun, startRun, stopImageServer, storage, which } from "./runners.js";
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
@@ -632,7 +635,22 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const owner = ctx.user?.id ?? null;
       for (const step of plan.steps ?? []) {
         const active = listRuns(owner).find((r) => r.status === "running" && r.key === stepKey(step.kind, step.args ?? {}));
-        if (active) step.running = active.id;
+        if (active) {
+          step.running = active.id;
+          continue;
+        }
+        // The machine may have the download going although this server has
+        // lost it (a restart, another tab): a run is attached to it, so the
+        // window shows its progress rather than offering to start it again.
+        const taskKey = agentTaskKey(step.kind, step.args ?? {});
+        const onMachine = taskKey && (detected.gpu?.tasks ?? []).find((t) => t.status === "running" && t.key === taskKey);
+        if (onMachine) {
+          const run = attachAgentTask(detected.gpu.url, onMachine, `${step.title} (found going on the machine)`, fetchImpl, { owner });
+          run.key = stepKey(step.kind, step.args ?? {});
+          run.model = id;
+          run.title = step.title;
+          step.running = run.id;
+        }
       }
       return send(res, 200, { model, plan, choice });
     }
@@ -790,6 +808,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (hosted && !(where === "rented" && ((remote && body.kind === "pull-model") || (agent && agentKinds.includes(body.kind))))) return send(res, 403, { error: "On this site the only step that runs is a download onto your rented GPU. Everything else runs in HuggingFound on your own computer." });
         if (where === "rented" && agentKinds.includes(body.kind)) {
           if (!agent) return send(res, 400, { error: "No GPU is rented. Rent one in Settings, or run the model on this computer." });
+          // The same step started twice is one download.
+          const going = listRuns(ctx.user?.id ?? null).find((r) => r.status === "running" && r.key === stepKey(String(body.kind ?? ""), args));
+          if (going) return send(res, 200, { id: going.id, attached: true });
           const release = ctx.rental?.hold() ?? (() => {});
           const owner = ctx.user?.id ?? null;
           const token = tokenFor(ctx);
@@ -966,13 +987,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     let addons = [];
     let running = false;
     let health = null;
+    let tasks = [];
     try {
-      [files, addons, health] = await Promise.all([agentModels(agent, fetchImpl), agentAddons(agent, fetchImpl), agentHealth(agent, fetchImpl)]);
+      [files, addons, health, tasks] = await Promise.all([agentModels(agent, fetchImpl), agentAddons(agent, fetchImpl), agentHealth(agent, fetchImpl), agentTasks(agent, fetchImpl)]);
       running = true;
     } catch {
       // not up yet, or stopped
     }
-    return { ...detected, gpu: { url: agent, running, files, addons, version: Number(health?.version) || (running ? 1 : null), rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
+    return { ...detected, gpu: { url: agent, running, files, addons, tasks, version: Number(health?.version) || (running ? 1 : null), rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
   }
 
   // When the chat server is the rented machine, the plan can say whether it

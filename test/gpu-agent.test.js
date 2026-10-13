@@ -77,7 +77,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
     await new Promise((r) => setTimeout(r, 50));
   }
   const h = await (await get("/health")).json();
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "7", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "8", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -344,6 +344,30 @@ test("a download can run detached: the site gets an id and polls for the lines, 
   const again = await (await get(`/downloads/${id}?after=${cursor}`)).json();
   assert.deepEqual(again.lines, [], "nothing new after the end");
   assert.equal((await del("/models", { repo: REPO, file: "ggml-tiny.bin" })).status, 200);
+});
+
+test("a download asked for twice is one task: the second request joins it, the list shows it, and a file in flight is waited for", async () => {
+  const first = await (await post("/download", { repo: REPO, file: "slow.bin", detach: true })).json();
+  const second = await (await post("/download", { repo: REPO, file: "slow.bin", detach: true })).json();
+  assert.equal(second.id, first.id, "the same task");
+  assert.equal(second.attached, true);
+  const { tasks: listed } = await (await get("/downloads")).json();
+  const mine = listed.find((t) => t.id === first.id);
+  assert.deepEqual([mine.key, mine.status], [`/download|${REPO}|slow.bin`, "running"]);
+  // A streamed request for the file meanwhile waits for the task's copy rather than failing.
+  const streamed = (await (await post("/download", { repo: REPO, file: "slow.bin" })).text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.match(streamed[0].status, /^waiting for slow\.bin, already being fetched/);
+  assert.equal(streamed.at(-1).status, "success");
+  assert.ok(streamed.some((l) => l.status === "already here"));
+  for (let i = 0; i < 100; i++) {
+    const state = await (await get(`/downloads/${first.id}`)).json();
+    if (state.status !== "running") {
+      assert.equal(state.status, "done", state.error);
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal((await del("/models", { repo: REPO, file: "slow.bin" })).status, 200);
 });
 
 test("removing a model unloads it and frees the disk", async () => {

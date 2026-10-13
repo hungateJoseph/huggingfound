@@ -51,7 +51,7 @@ export function startStubAgent() {
         Object.defineProperty(data, "__state", { value: state, enumerable: false });
       }
       res.setHeader("Content-Type", "application/json");
-      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 7), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
+      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 8), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
       if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files, addons: state.addons }));
       if (req.url === "/lease") {
         state.leases.push(data.minutes ?? null);
@@ -83,16 +83,20 @@ export function startStubAgent() {
           steps.done();
         };
         if (data.detach) {
+          const key = req.url === "/download" ? `/download|${data.repo}|${data.file}` : req.url === "/download-folder" ? `/download-folder|${data.repo}|${data.into}` : `${req.url}|${data.repo}`;
+          const running = [...state.tasks.values()].find((t) => t.key === key && t.status === "running");
+          res.statusCode = 202;
+          if (running) return res.end(JSON.stringify({ id: running.id, status: "running", attached: true }));
           const id = crypto.randomBytes(8).toString("hex");
-          const task = { id, status: "running", error: null, lines: [] };
+          const task = { id, key, status: "running", error: null, lines: [], startedAt: Date.now() };
           state.tasks.set(id, task);
           run((line) => task.lines.push(line)).then(() => (task.status = "done"));
-          res.statusCode = 202;
           return res.end(JSON.stringify({ id, status: "running" }));
         }
         await run((line) => res.write(`${JSON.stringify(line)}\n`));
         return res.end();
       }
+      if (req.url === "/downloads" && req.method === "GET") return res.end(JSON.stringify({ tasks: [...state.tasks.values()].map((t) => ({ id: t.id, key: t.key, status: t.status, error: t.error, startedAt: t.startedAt, last: t.lines.at(-1) ?? null })) }));
       const poll = req.url.match(/^\/downloads\/([a-f0-9]{16})(?:\?after=(\d+))?$/);
       if (poll && req.method === "GET") {
         const task = state.tasks.get(poll[1]);

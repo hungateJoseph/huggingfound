@@ -79,7 +79,7 @@ function idleWatch() {
 // Add-ons (IP-Adapters, LoRAs) live apart from models; they are applied to one.
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
-const VERSION = "7";
+const VERSION = "8";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -510,9 +510,9 @@ setInterval(idleWatch, IDLE_CHECK_MS).unref();
 // drops (the proxy caps long requests) costs nothing; the lines wait here.
 const tasks = new Map();
 const TASK_LINES = 400;
-function startTask(work) {
+function startTask(work, key = "") {
   const id = crypto.randomBytes(8).toString("hex");
-  const task = { id, status: "running", error: null, lines: [], first: 0, startedAt: Date.now(), finishedAt: null };
+  const task = { id, key, status: "running", error: null, lines: [], first: 0, startedAt: Date.now(), finishedAt: null };
   tasks.set(id, task);
   const write = (line) => {
     task.lines.push(line);
@@ -536,9 +536,14 @@ setInterval(() => {
 }, 10 * 60e3).unref();
 
 // Answers a download route either way: streamed, or detached with an id.
-function answerDownload(req, res, body, work) {
+// A detached request for a download already running joins it rather than
+// starting it twice: a step tried again, or opened from another tab, never
+// trips over its own first attempt.
+function answerDownload(req, res, body, work, key = "") {
   if (body.detach) {
-    const task = startTask(work);
+    const running = key ? [...tasks.values()].find((t) => t.key === key && t.status === "running") : null;
+    if (running) return send(res, 202, { id: running.id, status: running.status, attached: true });
+    const task = startTask(work, key);
     return send(res, 202, { id: task.id, status: task.status });
   }
   res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
@@ -554,7 +559,11 @@ function answerDownload(req, res, body, work) {
 // loses its .fp16 suffix so the merge finds it).
 async function download(repo, file, token, write, saveAs = file, dest = modelFile(repo, saveAs, true)) {
   const key = dest;
-  if (downloading.has(key)) throw new Error("that file is already being downloaded");
+  // Another task has this very file in hand: wait for it rather than fail.
+  if (downloading.has(key)) {
+    write({ status: `waiting for ${file}, already being fetched` });
+    while (downloading.has(key)) await sleep(1000);
+  }
   if (fs.existsSync(dest)) {
     write({ status: "already here" });
     write({ status: "success" });
@@ -753,7 +762,11 @@ const server = http.createServer(async (req, res) => {
       const repo = String(body.repo ?? "");
       const file = String(body.file ?? "");
       if (!REPO_RE.test(repo) || !FILE_RE.test(file)) return send(res, 400, { error: "Bad model name" });
-      return answerDownload(req, res, body, (write) => download(repo, file, typeof body.token === "string" ? body.token : "", write));
+      return answerDownload(req, res, body, (write) => download(repo, file, typeof body.token === "string" ? body.token : "", write), `/download|${repo}|${file}`);
+    }
+    // Every download task, for a site that has lost track of one.
+    if (req.method === "GET" && url.pathname === "/downloads") {
+      return send(res, 200, { tasks: [...tasks.values()].map((t) => ({ id: t.id, key: t.key, status: t.status, error: t.error, startedAt: t.startedAt, finishedAt: t.finishedAt, last: t.lines.at(-1) ?? null })) });
     }
     const taskMatch = url.pathname.match(/^\/downloads\/([a-f0-9]{16})$/);
     if (req.method === "GET" && taskMatch) {
@@ -768,7 +781,7 @@ const server = http.createServer(async (req, res) => {
       const repo = String(body.repo ?? "");
       const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
       if (!REPO_RE.test(repo) || files.length === 0 || files.length > 40 || !files.every((f) => SUBPATH_RE.test(f))) return send(res, 400, { error: "Bad add-on name" });
-      return answerDownload(req, res, body, (write) => downloadAddon(repo, files, typeof body.token === "string" ? body.token : "", write));
+      return answerDownload(req, res, body, (write) => downloadAddon(repo, files, typeof body.token === "string" ? body.token : "", write), `/download-addon|${repo}`);
     }
     if (req.method === "POST" && url.pathname === "/download-repo") {
       touchActivity();
@@ -776,7 +789,7 @@ const server = http.createServer(async (req, res) => {
       const repo = String(body.repo ?? "");
       const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
       if (!REPO_RE.test(repo) || files.length === 0 || files.length > 120 || !files.every((f) => SUBPATH_RE.test(f)) || !files.includes(INDEX)) return send(res, 400, { error: "Bad model name" });
-      return answerDownload(req, res, body, (write) => downloadRepo(repo, files, typeof body.token === "string" ? body.token : "", write));
+      return answerDownload(req, res, body, (write) => downloadRepo(repo, files, typeof body.token === "string" ? body.token : "", write), `/download-repo|${repo}`);
     }
     if (req.method === "POST" && url.pathname === "/download-folder") {
       touchActivity();
@@ -786,7 +799,7 @@ const server = http.createServer(async (req, res) => {
       const files = Array.isArray(body.files) ? body.files.map((f) => ({ from: String(f?.from ?? ""), to: String(f?.to ?? f?.from ?? "") })) : [];
       const partOk = (p) => SUBPATH_RE.test(p) && PART_DIRS.includes(p.split("/")[0]) && p.split("/").length === 2;
       if (!REPO_RE.test(repo) || !FILE_RE.test(into) || !into.endsWith(".safetensors") || files.length === 0 || files.length > 8 || !files.every((f) => partOk(f.from) && partOk(f.to))) return send(res, 400, { error: "Bad model name" });
-      return answerDownload(req, res, body, (write) => downloadFolder(repo, files, into, typeof body.token === "string" ? body.token : "", write));
+      return answerDownload(req, res, body, (write) => downloadFolder(repo, files, into, typeof body.token === "string" ? body.token : "", write), `/download-folder|${repo}|${into}`);
     }
     if (req.method === "DELETE" && url.pathname === "/models") {
       const body = await readJson(req, 64 * 1024);
