@@ -938,7 +938,7 @@ function stepHtml(s, i) {
       <div class="text">${esc(s.text)}</div>
       ${s.command ? `<code>${esc(s.command)}</code>` : ""}
     </div>
-    ${state.hosted && !state.plan?.remote ? "" : `<button class="go ${s.done ? "ghost" : "primary"}" data-index="${i}" ${s.done || s.running ? "disabled" : ""}>${s.done ? "Done" : s.running ? "Running" : "Run this step"}</button>`}
+    ${state.hosted && !state.plan?.remote ? "" : `<span class="step-buttons"><button class="go ${s.done ? "ghost" : "primary"}" data-index="${i}" ${s.done || s.running ? "disabled" : ""}>${s.done ? "Done" : s.running ? "Running" : "Run this step"}</button>${s.running ? `<button class="ghost refresh-step" title="Reopen this window and pick the running step up again">Refresh</button>` : ""}</span>`}
   </li>`;
 }
 
@@ -953,6 +953,16 @@ async function followStep(model, plan, index, id) {
   btn.textContent = "Running";
   li.classList.add("running");
   li.classList.remove("failed");
+  // Refresh: the window reopens and reattaches to whatever is running.
+  if (!li.querySelector(".refresh-step")) {
+    const refresh = document.createElement("button");
+    refresh.className = "ghost refresh-step";
+    refresh.title = "Reopen this window and pick the running step up again";
+    refresh.textContent = "Refresh";
+    if (btn.parentElement.classList.contains("step-buttons")) btn.parentElement.appendChild(refresh);
+    else btn.after(refresh);
+  }
+  li.querySelector(".refresh-step").onclick = () => openModel(model.id);
   let log = li.querySelector(".log");
   if (!log) {
     log = document.createElement("pre");
@@ -2335,12 +2345,24 @@ async function agentJob(agent, { repo, file, prompt, negative, quality, init = n
   const { id } = await res.json();
   let last = "";
   let noted = false;
+  let misses = 0;
   const started = Date.now();
   for (;;) {
     await new Promise((r) => setTimeout(r, 1500));
-    const poll = await fetch(`${agent}/jobs/${id}`);
-    if (!poll.ok) throw new Error(`lost the machine while waiting (HTTP ${poll.status})`);
-    const job = await poll.json();
+    let job;
+    try {
+      const poll = await fetch(`${agent}/jobs/${id}`, { signal: AbortSignal.timeout(10000) });
+      if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
+      job = await poll.json();
+      if (misses >= 4) onLine("Reconnected to the machine.");
+      misses = 0;
+    } catch (err) {
+      // The job goes on on the machine; a dropped connection is waited out.
+      misses++;
+      if (misses === 4) onLine("The connection to the machine dropped; the work goes on there, waiting to reconnect");
+      if (misses > 200) throw new Error(`lost the machine for five minutes while waiting (${err.message}); the job may still finish there`);
+      continue;
+    }
     const word = { loading: "Loading the model into the GPU (the first picture with a model takes longer)", queued: "Waiting for the GPU", generating: job.progress ? `Generating, ${Math.round(job.progress * 100)}%` : "Generating" }[job.status];
     if (word && word !== last) {
       onLine(word);

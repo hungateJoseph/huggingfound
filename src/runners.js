@@ -923,11 +923,13 @@ function agentDownload(title, route, body, fetchImpl, agent, owner) {
           const poll = await fetchImpl(`${agent}/downloads/${id}?after=${cursor}`, { signal: AbortSignal.timeout(10000) });
           if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
           state = await poll.json();
-          if (failures >= 3) emit("Reconnected to the machine.");
+          if (failures >= 6) emit("Reconnected to the machine.");
           failures = 0;
         } catch {
           failures++;
-          if (failures === 3) emit("The connection to the machine dropped; the download goes on there, waiting to reconnect");
+          // A machine pulling files at full speed answers slowly; a few
+          // misses are normal, and the download goes on regardless.
+          if (failures === 6) emit("The connection to the machine dropped; the download goes on there, waiting to reconnect");
           if (failures > 150) throw new Error("the machine could not be reached for five minutes; the download may still be going there, and opening the model again shows what has arrived");
           continue;
         }

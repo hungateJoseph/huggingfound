@@ -946,8 +946,9 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   await visitor.request.get(`${hostedBase}/api/rent`);
   acceptDialogs = true;
   await visitor.click("#steps .step .go");
-  // A running step says the work goes on without the window, with a way out and a way to stay.
+  // A running step says the work goes on without the window, with a way out and a way to stay, and a Refresh that reattaches.
   await visitor.waitForSelector(".bg-note");
+  assert.equal(await visitor.locator("#steps .step .refresh-step").count(), 1, "a running step offers Refresh");
   assert.match(await visitor.locator(".bg-note").innerText(), /keeps going if you leave this window/);
   await visitor.click("#bg-stay");
   assert.equal(await visitor.locator(".bg-note").count(), 0);

@@ -439,3 +439,5 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 #notice button { margin-left: 8px; }
 .presence-count { font-size: 32px; font-weight: 700; margin: 8px 0 14px; font-variant-numeric: tabular-nums; }
 #presence .modal-card { margin-top: 15vh; }
+.step-buttons { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.step-buttons .refresh-step { font-size: 13px; padding: 4px 10px; }
