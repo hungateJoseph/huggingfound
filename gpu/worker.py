@@ -321,6 +321,19 @@ def load_modular(model_dir, dtype, weights, n, first, total):
     else:
         pipe.load_components(**loaded)
     state["modular"] = True
+    # A component the blocks expect but that did not load would fail later
+    # with a bare error; say which it is now.
+    missing = []
+    with contextlib.suppress(Exception):
+        for name in pipe.component_names:
+            if getattr(pipe, name, None) is None:
+                missing.append(name)
+    if missing:
+        with contextlib.suppress(Exception):
+            pipe.load_components(names=missing, **loaded)
+        still = [n for n in missing if getattr(pipe, n, None) is None]
+        if still:
+            say({"progress": 0, "note": f"components not loaded: {', '.join(still)}"})
     return pipe, mode
 
 
@@ -548,10 +561,19 @@ def main():
             else:
                 say({"ok": False, "error": f"unknown op {op!r}"})
         except Exception as err:  # noqa: BLE001
+            import traceback
+
             msg = f"{type(err).__name__}: {err}"
             if "out of memory" in msg.lower():
                 msg = "the GPU ran out of memory for this model at this size; try a smaller picture, fewer frames, or a bigger card"
                 unload()
+            else:
+                # Where it broke, so a failure inside a model's own code can be followed.
+                frames = traceback.extract_tb(err.__traceback__)[-3:]
+                where = " < ".join(f"{os.path.basename(f.filename)}:{f.lineno} {f.name}" for f in reversed(frames))
+                if where:
+                    msg = f"{msg} (at {where})"
+            traceback.print_exc()
             say({"ok": False, "error": msg})
 
 

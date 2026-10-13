@@ -704,7 +704,7 @@ await step("left alone while the machine runs, the page asks whether anyone is t
   await page.waitForSelector("#presence:not([hidden])", { timeout: 20000 });
   await page.waitForFunction(() => /stopped/.test(document.querySelector("#rent-bar").textContent), null, { timeout: 20000 });
   assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
-  assert.match(await page.locator("#notice").innerText(), /stopped after 0 minutes without anyone here|without anyone here/);
+  await page.waitForFunction(() => /without anyone here/.test(document.querySelector("#notice")?.textContent ?? ""), null, { timeout: 10000 });
   await page.click("#open-settings");
   await page.waitForSelector("#rent-panel .rent-card");
   assert.match(await page.locator("#rent-panel .rent-card").innerText(), /stopped when nobody answered the still-there check/);
@@ -722,7 +722,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click("#bar-stop");
   await page.waitForFunction(() => /stopped/.test(document.querySelector("#rent-bar").textContent));
   acceptDialogs = false;
-  assert.match(await page.locator("#notice").innerText(), /Stopped the rented GPU: the hourly charge has ended/);
+  await page.waitForFunction(() => /Stopped the rented GPU: the hourly charge has ended/.test(document.querySelector("#notice")?.textContent ?? ""));
   assert.equal(await page.locator("#bar-start").count(), 1);
   assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
   await page.click("#open-settings");
@@ -760,7 +760,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.waitForFunction(() => document.querySelector("#rent-bar").hidden);
   acceptDialogs = false;
   // What the click did is said, and the sizes to rent again are right there.
-  assert.match(await page.locator("#notice").innerText(), /Deleted the rented machine and its models\. Nothing is charged any more\. Rent a new one below/);
+  await page.waitForFunction(() => /Deleted the rented machine and its models\. Nothing is charged any more\. Rent a new one below/.test(document.querySelector("#notice")?.textContent ?? ""));
   await page.waitForSelector("#rent-panel .tier");
   assert.equal(await page.locator("#chat-server").inputValue(), "");
   const saved = fs.readFileSync(envFile, "utf8");
@@ -996,10 +996,16 @@ await step("hosted: an image model is downloaded onto the rented GPU and picture
   assert.ok(rentedAgent.state.downloads.some((d) => /stable-diffusion-v1-5/.test(d.file)));
   await visitor.waitForSelector("#image-go");
   assert.match(await visitor.locator("#try .effort-title").innerText(), /Effort/);
+  // A picture that fails leaves a Try again right under the log.
+  await visitor.fill("#image-prompt", "fail please");
+  await visitor.click("#image-go");
+  await visitor.waitForSelector("#image-retry", { timeout: 20000 });
+  assert.match(await visitor.locator("#image-log").innerText(), /the model choked/);
   await visitor.fill("#image-prompt", "a lighthouse at dusk");
   await visitor.fill("#image-negative", "blurry");
-  await visitor.click("#image-go");
+  await visitor.click("#image-retry");
   await visitor.waitForSelector("#image-out .image-card", { timeout: 20000 });
+  assert.equal(await visitor.locator("#image-retry").count(), 0, "gone once a picture is made");
   const sent = rentedAgent.state.jobs.at(-1);
   assert.equal(sent.prompt, "a lighthouse at dusk");
   assert.equal(sent.negative, "blurry");

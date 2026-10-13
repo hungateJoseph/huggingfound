@@ -2244,6 +2244,17 @@ function renderImage(box, t) {
       }
     } catch (err) {
       log.textContent += `Could not start: ${err.message}\n`;
+      // The way to go again is right under the failure.
+      if (!box.querySelector("#image-retry")) {
+        const row = document.createElement("p");
+        row.className = "tools-row";
+        row.innerHTML = `<button class="primary" id="image-retry">Try again</button>`;
+        log.after(row);
+        row.querySelector("#image-retry").addEventListener("click", () => {
+          row.remove();
+          goBtn.click();
+        });
+      }
     } finally {
       goBtn.disabled = false;
     }
