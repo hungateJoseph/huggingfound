@@ -77,7 +77,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
     await new Promise((r) => setTimeout(r, 50));
   }
   const h = await (await get("/health")).json();
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "6", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "7", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -316,6 +316,34 @@ test("the machine stops itself when nothing has used it and the site has not ren
   await c.url;
   const ceiling = await Promise.race([c.exit, new Promise((r) => setTimeout(() => r(null), 5000))]);
   assert.ok(ceiling && ceiling.code === 0, "the ceiling ends it");
+});
+
+test("a download can run detached: the site gets an id and polls for the lines, so a dropped connection loses nothing", async () => {
+  assert.equal((await get("/downloads/0123456789abcdef")).status, 404);
+  const started = await post("/download", { repo: REPO, file: "ggml-tiny.bin", detach: true });
+  assert.equal(started.status, 202);
+  const { id, status } = await started.json();
+  assert.equal(status, "running");
+  let cursor = 0;
+  const seen = [];
+  let final;
+  for (let i = 0; i < 100; i++) {
+    const state = await (await get(`/downloads/${id}?after=${cursor}`)).json();
+    seen.push(...state.lines);
+    cursor = state.cursor;
+    if (state.status !== "running") {
+      final = state;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(final.status, "done", final.error);
+  assert.equal(seen[0].status, "starting");
+  assert.equal(seen.at(-1).status, "success");
+  assert.ok(seen.some((l) => l.total && l.completed === l.total), "the progress lines were kept for the poll");
+  const again = await (await get(`/downloads/${id}?after=${cursor}`)).json();
+  assert.deepEqual(again.lines, [], "nothing new after the end");
+  assert.equal((await del("/models", { repo: REPO, file: "ggml-tiny.bin" })).status, 200);
 });
 
 test("removing a model unloads it and frees the disk", async () => {

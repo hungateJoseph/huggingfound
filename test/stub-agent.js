@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import http from "node:http";
 
 // A stand-in for the agent on a rented GPU (gpu/agent.js): it lists the
@@ -7,8 +8,24 @@ import http from "node:http";
 // it can be taken down to play a machine that is still starting.
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
+function downloadSteps(route, data) {
+  if (route === "/download") {
+    const total = 1.1 * 1024 ** 3;
+    return { lines: [{ status: "starting" }, { status: `downloading ${data.file}`, total, completed: total / 2 }, { status: `downloading ${data.file}`, total, completed: total }, { status: "success" }], done: () => data.__state.files.push({ repo: data.repo, file: data.file, gb: 1.1 }) };
+  }
+  if (route === "/download-addon") {
+    return { lines: [{ status: `file 1 of ${data.files.length}: ${data.files[0]}` }, { status: "success" }], done: () => { for (const f of data.files) if (!data.__state.addons.some((a) => a.repo === data.repo && a.file === f)) data.__state.addons.push({ repo: data.repo, file: f, gb: 0.1 }); } };
+  }
+  if (route === "/download-repo") {
+    const total = 0.5 * 1024 ** 3;
+    return { lines: [{ status: `file 1 of ${data.files.length}: ${data.files[0]}` }, { status: `downloading ${data.files[0]}`, total, completed: total, file: data.files[0] }, { status: "success" }], done: () => data.__state.files.push({ repo: data.repo, file: "model_index.json", gb: 20.4, engine: "diffusers" }) };
+  }
+  const total = 1.3 * 1024 ** 3;
+  return { lines: [{ status: `file 1 of ${data.files.length}: ${data.files[0].from}` }, { status: `downloading ${data.files[0].from}`, total, completed: total, file: data.files[0].from }, { status: "merging the parts into one checkpoint" }, { status: "success" }], done: () => data.__state.files.push({ repo: data.repo, file: data.into, gb: 6.5 }) };
+}
+
 export function startStubAgent() {
-  const state = { files: [], addons: [], downloads: [], jobs: [], deleted: [], origins: [], leases: [], down: false, loaded: null };
+  const state = { files: [], addons: [], downloads: [], jobs: [], deleted: [], origins: [], leases: [], tasks: new Map(), down: false, loaded: null };
   const polls = new Map();
   const server = http.createServer((req, res) => {
     let body = "";
@@ -29,8 +46,12 @@ export function startStubAgent() {
         return res.end("not yet");
       }
       const data = body ? JSON.parse(body) : {};
+      if (["/download", "/download-addon", "/download-repo", "/download-folder"].includes(req.url)) {
+        state.downloads.push(req.url === "/download" ? { repo: data.repo, file: data.file, token: data.token ?? null } : req.url === "/download-addon" ? { repo: data.repo, files: data.files, addon: true, token: data.token ?? null } : req.url === "/download-repo" ? { repo: data.repo, files: data.files, token: data.token ?? null } : { repo: data.repo, files: data.files, into: data.into, token: data.token ?? null });
+        Object.defineProperty(data, "__state", { value: state, enumerable: false });
+      }
       res.setHeader("Content-Type", "application/json");
-      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 6), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
+      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 7), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length }));
       if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files, addons: state.addons }));
       if (req.url === "/lease") {
         state.leases.push(data.minutes ?? null);
@@ -50,44 +71,38 @@ export function startStubAgent() {
         if (state.files.length === before) res.statusCode = 404;
         return res.end("{}");
       }
-      if (req.url === "/download") {
-        state.downloads.push({ repo: data.repo, file: data.file, token: data.token ?? null });
-        const total = 1.1 * 1024 ** 3;
-        for (const line of [{ status: "starting" }, { status: `downloading ${data.file}`, total, completed: total / 2 }, { status: `downloading ${data.file}`, total, completed: total }, { status: "success" }]) {
-          res.write(`${JSON.stringify(line)}\n`);
-          await new Promise((r) => setTimeout(r, state.slowMs ?? 5));
+      // The four download routes stream their lines, or run detached with
+      // an id the site polls, as the real agent does.
+      if (["/download", "/download-addon", "/download-repo", "/download-folder"].includes(req.url)) {
+        const steps = downloadSteps(req.url, data);
+        const run = async (write) => {
+          for (const line of steps.lines) {
+            write(line);
+            await new Promise((r) => setTimeout(r, state.slowMs ?? 5));
+          }
+          steps.done();
+        };
+        if (data.detach) {
+          const id = crypto.randomBytes(8).toString("hex");
+          const task = { id, status: "running", error: null, lines: [] };
+          state.tasks.set(id, task);
+          run((line) => task.lines.push(line)).then(() => (task.status = "done"));
+          res.statusCode = 202;
+          return res.end(JSON.stringify({ id, status: "running" }));
         }
-        state.files.push({ repo: data.repo, file: data.file, gb: 1.1 });
+        await run((line) => res.write(`${JSON.stringify(line)}\n`));
         return res.end();
       }
-      if (req.url === "/download-addon") {
-        state.downloads.push({ repo: data.repo, files: data.files, addon: true, token: data.token ?? null });
-        for (const line of [{ status: `file 1 of ${data.files.length}: ${data.files[0]}` }, { status: "success" }]) {
-          res.write(`${JSON.stringify(line)}\n`);
-          await new Promise((r) => setTimeout(r, 5));
+      const poll = req.url.match(/^\/downloads\/([a-f0-9]{16})(?:\?after=(\d+))?$/);
+      if (poll && req.method === "GET") {
+        const task = state.tasks.get(poll[1]);
+        if (!task) {
+          res.statusCode = 404;
+          return res.end("{}");
         }
-        for (const f of data.files) if (!state.addons.some((a) => a.repo === data.repo && a.file === f)) state.addons.push({ repo: data.repo, file: f, gb: 0.1 });
-        return res.end();
-      }
-      if (req.url === "/download-repo") {
-        state.downloads.push({ repo: data.repo, files: data.files, token: data.token ?? null });
-        const total = 0.5 * 1024 ** 3;
-        for (const line of [{ status: `file 1 of ${data.files.length}: ${data.files[0]}` }, { status: `downloading ${data.files[0]}`, total, completed: total, file: data.files[0] }, { status: "success" }]) {
-          res.write(`${JSON.stringify(line)}\n`);
-          await new Promise((r) => setTimeout(r, 5));
-        }
-        state.files.push({ repo: data.repo, file: "model_index.json", gb: 20.4, engine: "diffusers" });
-        return res.end();
-      }
-      if (req.url === "/download-folder") {
-        state.downloads.push({ repo: data.repo, files: data.files, into: data.into, token: data.token ?? null });
-        const total = 1.3 * 1024 ** 3;
-        for (const line of [{ status: `file 1 of ${data.files.length}: ${data.files[0].from}` }, { status: `downloading ${data.files[0].from}`, total, completed: total, file: data.files[0].from }, { status: "merging the parts into one checkpoint" }, { status: "success" }]) {
-          res.write(`${JSON.stringify(line)}\n`);
-          await new Promise((r) => setTimeout(r, 5));
-        }
-        state.files.push({ repo: data.repo, file: data.into, gb: 6.5 });
-        return res.end();
+        const after = Number(poll[2] ?? 0);
+        state.polls = (state.polls ?? 0) + 1;
+        return res.end(JSON.stringify({ id: task.id, status: task.status, error: task.error, lines: task.lines.slice(after), cursor: task.lines.length }));
       }
       if (req.url === "/jobs" && req.method === "POST") {
         const id = `${state.jobs.length + 1}`.padStart(16, "0");

@@ -898,8 +898,56 @@ function agentDownload(title, route, body, fetchImpl, agent, owner) {
       await new Promise((r) => setTimeout(r, 5000));
     }
     if (said) emit("The machine is up.");
+    const lineText = (j) => (j.total ? `${Math.floor(((j.completed ?? 0) / j.total) * 100)}% of ${(j.total / 1024 ** 3).toFixed(2)} GB${j.file && route !== "/download" ? ` (${j.file})` : ""}` : String(j.status ?? ""));
+    // A machine whose agent runs the download as a task of its own is
+    // polled; the download survives any break in the connection, and so
+    // does the log.
+    let version = 0;
+    try {
+      version = Number((await (await fetchImpl(`${agent}/health`, { signal: AbortSignal.timeout(5000) })).json()).version) || 0;
+    } catch {
+      // treated as an old agent
+    }
+    if (version >= 7) {
+      const started = await fetchImpl(`${agent}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, detach: true }), signal: AbortSignal.timeout(30000) });
+      if (!started.ok) throw new Error(`the rented GPU answered HTTP ${started.status}`);
+      const { id } = await started.json();
+      let cursor = 0;
+      let failures = 0;
+      let last = "";
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (cancelled()) return;
+        let state;
+        try {
+          const poll = await fetchImpl(`${agent}/downloads/${id}?after=${cursor}`, { signal: AbortSignal.timeout(10000) });
+          if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
+          state = await poll.json();
+          if (failures >= 3) emit("Reconnected to the machine.");
+          failures = 0;
+        } catch {
+          failures++;
+          if (failures === 3) emit("The connection to the machine dropped; the download goes on there, waiting to reconnect");
+          if (failures > 150) throw new Error("the machine could not be reached for five minutes; the download may still be going there, and opening the model again shows what has arrived");
+          continue;
+        }
+        for (const j of state.lines) {
+          const text = lineText(j);
+          if (text && text !== last) emit(text);
+          last = text;
+        }
+        cursor = state.cursor;
+        if (state.status === "failed") throw new Error(state.error || "the download failed on the machine");
+        if (state.status === "done") return;
+      }
+    }
     const stop = new AbortController();
-    const res = await fetchImpl(`${agent}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: stop.signal });
+    let res;
+    try {
+      res = await fetchImpl(`${agent}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: stop.signal });
+    } catch (err) {
+      throw new Error(`the connection to the machine failed (${err.message}); the files already fetched are kept, so Try again continues from there`);
+    }
     if (res.status === 404 && route !== "/download") throw new Error("the rented machine runs an older HuggingFound image that cannot do this; replace the machine (Settings, Delete machine and models, then Rent it) and the new one has the current image");
     if (!res.ok) throw new Error(`the rented GPU answered HTTP ${res.status}`);
     const reader = res.body.getReader();
@@ -907,7 +955,15 @@ function agentDownload(title, route, body, fetchImpl, agent, owner) {
     let buf = "";
     let last = "";
     for (;;) {
-      const { value, done } = await reader.read();
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        // The proxy in front of the machine caps long requests; the machine
+        // keeps downloading, and the next try picks up the files it has.
+        throw new Error(`the connection to the machine dropped (${err.message}) while the machine went on downloading; Try again continues with the files it has, and a machine rented now keeps the connection out of it`);
+      }
+      const { value, done } = chunk;
       if (done) break;
       if (cancelled()) {
         stop.abort();
@@ -920,7 +976,7 @@ function agentDownload(title, route, body, fetchImpl, agent, owner) {
         if (!line.trim()) continue;
         const j = JSON.parse(line);
         if (j.error) throw new Error(j.error);
-        const text = j.total ? `${Math.floor(((j.completed ?? 0) / j.total) * 100)}% of ${(j.total / 1024 ** 3).toFixed(2)} GB${j.file && route !== "/download" ? ` (${j.file})` : ""}` : String(j.status ?? "");
+        const text = lineText(j);
         if (text && text !== last) emit(text);
         last = text;
       }

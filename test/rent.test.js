@@ -316,8 +316,8 @@ test("a machine from before a feature is told apart by its agent's version, and 
   assert.equal((await json("/api/model?id=John6666/pony-realism-v23-sdxl")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=Qwen/Qwen-Image")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).plan.runnable, true, "a single-file model still runs on the old machine");
-  assert.equal((await json("/api/rent")).agentCurrent, 6, "the status says which version is current");
-  agent.state.version = 6;
+  assert.equal((await json("/api/rent")).agentCurrent, 7, "the status says which version is current");
+  agent.state.version = 7;
   assert.equal((await json("/api/model?id=h94/IP-Adapter-FaceID")).plan.runnable, true);
 });
 

@@ -62,7 +62,7 @@ function idleLimitMs() {
   return (IDLE_MINUTES > 0 ? IDLE_MINUTES : IDLE_CEILING_MINUTES) * 60e3;
 }
 function busy() {
-  return downloading.size > 0 || [...jobs.values()].some((j) => ["loading", "queued", "generating"].includes(j.status));
+  return downloading.size > 0 || [...tasks.values()].some((t) => t.status === "running") || [...jobs.values()].some((j) => ["loading", "queued", "generating"].includes(j.status));
 }
 function idleWatch() {
   if (busy()) {
@@ -79,7 +79,7 @@ function idleWatch() {
 // Add-ons (IP-Adapters, LoRAs) live apart from models; they are applied to one.
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
-const VERSION = "6";
+const VERSION = "7";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -504,6 +504,50 @@ function folderSize(dir) {
 const downloading = new Set();
 setInterval(idleWatch, IDLE_CHECK_MS).unref();
 
+// ---- download tasks ---------------------------------------------------------------
+// A download runs on the machine whether or not anyone is connected: the
+// site starts it, gets an id, and polls for progress. A connection that
+// drops (the proxy caps long requests) costs nothing; the lines wait here.
+const tasks = new Map();
+const TASK_LINES = 400;
+function startTask(work) {
+  const id = crypto.randomBytes(8).toString("hex");
+  const task = { id, status: "running", error: null, lines: [], first: 0, startedAt: Date.now(), finishedAt: null };
+  tasks.set(id, task);
+  const write = (line) => {
+    task.lines.push(line);
+    if (task.lines.length > TASK_LINES) {
+      task.lines.shift();
+      task.first++;
+    }
+  };
+  work(write)
+    .then(() => (task.status = "done"))
+    .catch((err) => {
+      task.status = "failed";
+      task.error = err.message;
+    })
+    .finally(() => (task.finishedAt = Date.now()));
+  return task;
+}
+setInterval(() => {
+  const cutoff = Date.now() - 2 * 3600e3;
+  for (const [id, t] of tasks) if (t.finishedAt && t.finishedAt < cutoff) tasks.delete(id);
+}, 10 * 60e3).unref();
+
+// Answers a download route either way: streamed, or detached with an id.
+function answerDownload(req, res, body, work) {
+  if (body.detach) {
+    const task = startTask(work);
+    return send(res, 202, { id: task.id, status: task.status });
+  }
+  res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+  const write = (line) => res.write(`${JSON.stringify(line)}\n`);
+  return work(write)
+    .catch((err) => write({ error: err.message }))
+    .then(() => res.end());
+}
+
 // Streams a file from Hugging Face onto the disk, reporting progress as
 // lines of JSON in Ollama's style: status, total, completed. `saveAs` is
 // the path to keep it under when it differs (a half-precision variant
@@ -709,14 +753,14 @@ const server = http.createServer(async (req, res) => {
       const repo = String(body.repo ?? "");
       const file = String(body.file ?? "");
       if (!REPO_RE.test(repo) || !FILE_RE.test(file)) return send(res, 400, { error: "Bad model name" });
-      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
-      const write = (line) => res.write(`${JSON.stringify(line)}\n`);
-      try {
-        await download(repo, file, typeof body.token === "string" ? body.token : "", write);
-      } catch (err) {
-        write({ error: err.message });
-      }
-      return res.end();
+      return answerDownload(req, res, body, (write) => download(repo, file, typeof body.token === "string" ? body.token : "", write));
+    }
+    const taskMatch = url.pathname.match(/^\/downloads\/([a-f0-9]{16})$/);
+    if (req.method === "GET" && taskMatch) {
+      const task = tasks.get(taskMatch[1]);
+      if (!task) return send(res, 404, { error: "No such download" });
+      const after = Math.max(Number(url.searchParams.get("after")) || 0, task.first);
+      return send(res, 200, { id: task.id, status: task.status, error: task.error, lines: task.lines.slice(after - task.first), cursor: task.first + task.lines.length });
     }
     if (req.method === "POST" && url.pathname === "/download-addon") {
       touchActivity();
@@ -724,14 +768,7 @@ const server = http.createServer(async (req, res) => {
       const repo = String(body.repo ?? "");
       const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
       if (!REPO_RE.test(repo) || files.length === 0 || files.length > 40 || !files.every((f) => SUBPATH_RE.test(f))) return send(res, 400, { error: "Bad add-on name" });
-      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
-      const write = (line) => res.write(`${JSON.stringify(line)}\n`);
-      try {
-        await downloadAddon(repo, files, typeof body.token === "string" ? body.token : "", write);
-      } catch (err) {
-        write({ error: err.message });
-      }
-      return res.end();
+      return answerDownload(req, res, body, (write) => downloadAddon(repo, files, typeof body.token === "string" ? body.token : "", write));
     }
     if (req.method === "POST" && url.pathname === "/download-repo") {
       touchActivity();
@@ -739,14 +776,7 @@ const server = http.createServer(async (req, res) => {
       const repo = String(body.repo ?? "");
       const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
       if (!REPO_RE.test(repo) || files.length === 0 || files.length > 120 || !files.every((f) => SUBPATH_RE.test(f)) || !files.includes(INDEX)) return send(res, 400, { error: "Bad model name" });
-      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
-      const write = (line) => res.write(`${JSON.stringify(line)}\n`);
-      try {
-        await downloadRepo(repo, files, typeof body.token === "string" ? body.token : "", write);
-      } catch (err) {
-        write({ error: err.message });
-      }
-      return res.end();
+      return answerDownload(req, res, body, (write) => downloadRepo(repo, files, typeof body.token === "string" ? body.token : "", write));
     }
     if (req.method === "POST" && url.pathname === "/download-folder") {
       touchActivity();
@@ -756,14 +786,7 @@ const server = http.createServer(async (req, res) => {
       const files = Array.isArray(body.files) ? body.files.map((f) => ({ from: String(f?.from ?? ""), to: String(f?.to ?? f?.from ?? "") })) : [];
       const partOk = (p) => SUBPATH_RE.test(p) && PART_DIRS.includes(p.split("/")[0]) && p.split("/").length === 2;
       if (!REPO_RE.test(repo) || !FILE_RE.test(into) || !into.endsWith(".safetensors") || files.length === 0 || files.length > 8 || !files.every((f) => partOk(f.from) && partOk(f.to))) return send(res, 400, { error: "Bad model name" });
-      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
-      const write = (line) => res.write(`${JSON.stringify(line)}\n`);
-      try {
-        await downloadFolder(repo, files, into, typeof body.token === "string" ? body.token : "", write);
-      } catch (err) {
-        write({ error: err.message });
-      }
-      return res.end();
+      return answerDownload(req, res, body, (write) => downloadFolder(repo, files, into, typeof body.token === "string" ? body.token : "", write));
     }
     if (req.method === "DELETE" && url.pathname === "/models") {
       const body = await readJson(req, 64 * 1024);
