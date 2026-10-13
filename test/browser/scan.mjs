@@ -727,7 +727,12 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   assert.ok(runpod.state.actions.some((a) => a.endsWith(":stop")));
   await page.click("#open-settings");
   await page.waitForSelector("#rent-panel .rent-card");
-  assert.match(await page.locator("#rent-panel .rent-card").innerText(), /Stopped: no hourly charge\. The 50 GB disk keeps its models/);
+  assert.match(await page.locator("#rent-panel .rent-card").innerText(), /Stopped: no hourly charge\. The 50 GB disk keeps its models for about \$0\.33 a day \(\$10\.00 a month\)/);
+  // The account's bill, GPU apart from disks, and the day's total.
+  await page.waitForSelector("#rent-spend .spend");
+  assert.match(await page.locator("#rent-spend summary").innerText(), /RunPod's bill for this account: \$[\d.]+ in the last \d days?, \$[\d.]+ today/);
+  assert.match(await page.locator("#rent-spend").evaluate((e) => e.textContent), /GPU \$[\d.]+, disks \$[\d.]+/);
+  assert.match(await page.locator("#rent-panel").innerText(), /Stop once today's machines have cost this many dollars/);
   assert.equal(await page.locator("#chat-server").inputValue(), "", "chat models are back on this computer");
   assert.match(await page.locator("#chat-server-status").innerText(), /run on this computer/);
   await page.fill("#rent-idle", "45");
@@ -755,6 +760,9 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click("#open-settings");
   await page.waitForSelector("#rent-panel .rent-card");
   assert.equal(await page.locator("#chat-server").inputValue(), rentedOllama.url, "pointed back at it");
+  // Two machines left on the account from before, which the delete below brings to light.
+  runpod.state.pods.leftover1 = { id: "leftover1", name: "huggingfound", status: "EXITED", cost: 0.4, gpu: { id: "NVIDIA A40", count: 1, memory: 48 }, mounts: { persistent: { size: 50, path: "/root/.ollama" } }, createdAt: new Date().toISOString(), runtime: null };
+  runpod.state.pods.leftover2 = { id: "leftover2", name: "huggingfound", status: "EXITED", cost: 10.58, gpu: { id: "NVIDIA H200", count: 2, memory: 141 }, mounts: { persistent: { size: 200, path: "/root/.ollama" } }, createdAt: new Date().toISOString(), runtime: null };
   acceptDialogs = true;
   await page.click("#rent-delete");
   await page.waitForFunction(() => document.querySelector("#rent-bar").hidden);
@@ -767,6 +775,20 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   assert.doesNotMatch(saved, /RUNPOD_POD_ID|OLLAMA_SERVER/);
   assert.match(saved, /RUNPOD_API_KEY=/, "the key stays");
   rentedOllama.state.down = false;
+  // Machines left on the account from before, each billing for its disk,
+  // are listed under the offer with what they cost and one button to be rid of them.
+  await page.waitForSelector("#rent-others .notice", { timeout: 10000 });
+  const othersText = await page.locator("#rent-others").innerText();
+  assert.match(othersText, /2 other HuggingFound machines on this RunPod account/);
+  assert.match(othersText, /NVIDIA H200 × 2, 200 GB disk, stopped/);
+  assert.match(othersText, /Their disks cost about \$1\.67 a day \(\$50\.00 a month\)/);
+  acceptDialogs = true;
+  await page.click("#rent-others-delete");
+  await page.waitForFunction(() => /Deleted 2 machines at RunPod/.test(document.querySelector("#notice")?.textContent ?? ""));
+  acceptDialogs = false;
+  assert.equal(runpod.state.pods.leftover1.status, "TERMINATED");
+  assert.equal(runpod.state.pods.leftover2.status, "TERMINATED");
+  assert.equal(await page.locator("#rent-others .notice").count(), 0);
   await page.click("#close-settings");
 });
 

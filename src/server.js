@@ -83,6 +83,21 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}) }));
     return rentals.get(key);
   };
+  // Marks a run so that, when it is over, the person's machine stops unless
+  // another of their downloads is still going. Asked for from the page while
+  // the run goes; the flag can be taken back the same way.
+  const stopWhenDone = (ctx, run, on = true) => {
+    const rental = ctx.rental;
+    if (!rental || !run?.finished) return;
+    run.stopAfter = on;
+    if (run.stopAfterWatched) return;
+    run.stopAfterWatched = true;
+    run.finished.then(async () => {
+      if (!run.stopAfter) return;
+      if (listRuns(ctx.user?.id ?? null).some((r) => r.status === "running" && r.id !== run.id)) return;
+      await rental.stop({ reason: "done" }).catch(() => {});
+    });
+  };
   const localSettings = () => readEnv(envFile);
   const localSave = (updates) => writeEnv(envFile, updates);
   const rental = hosted ? null : rentalFor("local", localSettings, localSave);
@@ -252,7 +267,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     for (const id of accounts?.expiredGuests() ?? []) {
       const settings = () => accounts.settings(id);
       const mine = rentalFor(id, settings, (updates) => accounts.saveSettings(id, updates));
-      if (settings().RUNPOD_POD_ID) await mine.stop().catch(() => {});
+      // The key goes with the guest, so nothing could ever stop or delete the
+      // machine again: it is deleted now, before its disk bills for ever.
+      if (settings().RUNPOD_POD_ID) await mine.remove().catch(() => mine.stop().catch(() => {}));
       rentals.delete(id);
       accounts.remove(id);
       gone.push(id);
@@ -347,6 +364,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         rentTiers: TIERS,
         // The two safeguards every rental has, for the page to say so before renting.
         idleMinutes: ctx.rental ? ctx.rental.idleMinutes() : 30,
+        // Whether the idle time was set by hand; unset, it depends on the machine's price.
+        idleSet: saved.RUNPOD_IDLE_MINUTES !== undefined && saved.RUNPOD_IDLE_MINUTES !== "",
         // Minutes without a click or key before the page asks whether anyone is there; short by default.
         presenceMinutes: Number(saved.RUNPOD_PRESENCE_MINUTES) > 0 ? Number(saved.RUNPOD_PRESENCE_MINUTES) : 10,
         maxSpend: ctx.rental ? ctx.rental.maxSpend() : 50,
@@ -542,6 +561,17 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const run = gatherAll(ids);
       return send(res, 200, { id: run.id, todo: run.todo, total: run.total });
     }
+    // A download may be asked, while it runs, to stop the machine when it is
+    // over: the money stops the moment the work does, whether or not the page
+    // is still open.
+    if (req.method === "POST" && url.pathname.startsWith("/api/runs/") && url.pathname.endsWith("/stop-after")) {
+      const id = url.pathname.slice("/api/runs/".length, -"/stop-after".length);
+      const run = getRun(id);
+      if (!run || (hosted && run.owner !== ctx.user?.id)) return send(res, 404, { error: "No such run" });
+      const body = await json(req).catch(() => ({}));
+      stopWhenDone(ctx, run, body.on !== false);
+      return send(res, 200, { ok: true, stopAfter: Boolean(run.stopAfter) });
+    }
     if (req.method === "POST" && url.pathname.startsWith("/api/runs/") && url.pathname.endsWith("/cancel")) {
       const id = url.pathname.slice("/api/runs/".length, -"/cancel".length);
       if (hosted && getRun(id)?.owner !== ctx.user?.id) return send(res, 404, { error: "No such run" });
@@ -687,6 +717,16 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       try {
         if (req.method === "GET" && action === "options") return send(res, 200, { configured: mine.configured(), tiers: mine.configured() ? await mine.tiers() : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false })) });
         if (req.method === "GET" && action === "registries") return send(res, 200, { registries: mine.configured() ? await mine.registries() : [] });
+        // The other HuggingFound machines on the RunPod account, each still
+        // charging for its disk, and the way to be rid of them.
+        if (req.method === "GET" && action === "others") return send(res, 200, { others: await mine.others() });
+        if (req.method === "POST" && action === "others/delete") {
+          const body = await json(req).catch(() => ({}));
+          const ids = Array.isArray(body.ids) ? body.ids.map(String) : null;
+          return send(res, 200, { deleted: await mine.removeOthers(ids) });
+        }
+        // The account's pod bill for the week, GPU time apart from disks.
+        if (req.method === "GET" && action === "spend") return send(res, 200, await mine.spend());
         // Everything on the machine right now: chat models (and which are
         // loaded) from Ollama, image models (and the loaded one) from the agent.
         if (req.method === "GET" && action === "models") return send(res, 200, { ...(await machineModels(ctx)), runs: listRuns(ctx.user?.id ?? null) });
@@ -751,7 +791,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         }
         if (req.method === "POST" && action === "stop") {
           const body = await json(req).catch(() => ({}));
-          return send(res, 200, await mine.stop({ reason: body.reason === "away" ? `away:${Number(body.minutes) || ""}` : "" }));
+          return send(res, 200, await mine.stop({ reason: body.reason === "away" ? `away:${Number(body.minutes) || ""}` : body.reason === "done" ? "done" : "" }));
         }
         if (req.method === "POST" && action === "start") return send(res, 200, await mine.start());
         if (req.method === "POST" && action === "delete") return send(res, 200, await mine.remove());
@@ -810,7 +850,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           if (!agent) return send(res, 400, { error: "No GPU is rented. Rent one in Settings, or run the model on this computer." });
           // The same step started twice is one download.
           const going = listRuns(ctx.user?.id ?? null).find((r) => r.status === "running" && r.key === stepKey(String(body.kind ?? ""), args));
-          if (going) return send(res, 200, { id: going.id, attached: true });
+          if (going) {
+            if (body.stopAfter) stopWhenDone(ctx, getRun(going.id));
+            return send(res, 200, { id: going.id, attached: true });
+          }
           const release = ctx.rental?.hold() ?? (() => {});
           const owner = ctx.user?.id ?? null;
           const token = tokenFor(ctx);
@@ -822,6 +865,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
               ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token })
               : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner, token });
           run.finished.then(release);
+          if (body.stopAfter) stopWhenDone(ctx, run);
           return send(res, 200, { id: tag(run).id });
         }
         // The remote address comes from settings, never from the page.
@@ -839,8 +883,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           const run = pullOnChatServer(String(args.name ?? ""), fetchImpl, remote, { owner: ctx.user?.id ?? null });
           run.finished.then((status) => {
             release();
-            if (status === "done" && rentedChat(ctx)) warm(String(args.name ?? ""), remote);
+            if (status === "done" && rentedChat(ctx) && !run.stopAfter) warm(String(args.name ?? ""), remote);
           });
+          if (body.stopAfter) stopWhenDone(ctx, run);
           return send(res, 200, { id: tag(run).id });
         }
         const run = startRun(String(body.kind ?? ""), args, machine, { token: env().HF_TOKEN, fetchImpl, hubBase, owner: ctx.user?.id ?? null });

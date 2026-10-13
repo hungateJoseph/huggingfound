@@ -68,21 +68,47 @@ The machine takes two to four minutes to start. Meanwhile:
 
 ### Stopping, starting and deleting
 
-- **Stop** ends the hourly charge. The disk and the models on it stay, for
-  a small charge a day (RunPod lists it per gigabyte a month). **Start**
-  brings the machine back in a minute or two with the models still there;
-  if RunPod has no card of that kind free at that moment, try again later.
+- **Stop** ends the hourly charge. The disk and the models on it stay, and
+  RunPod charges for the disk every day, twice as much while the machine is
+  stopped as while it runs ($0.20 a gigabyte a month: a 50 GB disk is about
+  33 cents a day, $10 a month, for as long as the machine exists). The
+  Settings card says the figure for your disk. **Start** brings the machine
+  back in a minute or two with the models still there; if RunPod has no
+  card of that kind free at that moment, try again later.
 - **Delete machine and models** removes everything. Nothing is charged after
-  that.
-- The machine **stops by itself** after 30 minutes without a chat or a
-  download. Change the minutes under the rented machine in Settings; 0
+  that. It is the only way to end the disk charge.
+- The machine **stops by itself** after a while without a chat, picture or
+  download: 30 minutes on a cheap card, 10 on one costing $2 an hour or
+  more, unless you set the minutes under the rented machine in Settings; 0
   keeps it running until you stop it. A download in progress always keeps
-  it awake.
+  it awake, so tick **Stop the GPU when this finishes** under a download,
+  or **Stop the rented GPU after this picture** in the try box, to end the
+  bill the moment the work is done rather than after an idle wait.
+- The page asks **whether you are still there** after 10 minutes without a
+  click or key while the machine runs, downloads included, and stops it
+  when nobody answers. The minutes are in Settings; keep them short on a
+  dear machine.
+- A **spend cap** stops the machine once the day's machines have cost the
+  amount you set ($50 unless changed), counted across stops, starts and
+  replaced machines from midnight UTC.
+- The Settings card shows **RunPod's bill for the account** for the last
+  week, GPU time apart from disks and by machine, and lists any **other
+  HuggingFound machines** on the account that this app no longer manages
+  (from an earlier session, or under a key since removed), with what their
+  disks cost a day and one button to delete them all.
 - **Quitting HuggingFound stops it** too (Ctrl+C in the terminal, or
   closing the terminal). Untick "Stop it when HuggingFound quits" to keep
   it running without the app, and remember it is billing.
-- If HuggingFound is not running, nothing watches the machine. Check the
-  bar when you come back, or the pods page at runpod.io.
+- If HuggingFound is not running, the machine still watches itself: it
+  stops after the same idle time without word from the app, and after a
+  day at most. Check the bar when you come back, or the pods page at
+  runpod.io.
+- **Replacing a machine costs the downloads again.** A fresh machine pulls
+  the machine image (about 9 GB) and fetches its models again, all on the
+  hourly rate; a 200 GB video model is a quarter of an hour or more on a
+  $10 an hour machine before the first clip. Prefer Stop and Start, which
+  keep the disk, and replace only when Start cannot find a card on the
+  machine's host.
 
 ### What to know
 

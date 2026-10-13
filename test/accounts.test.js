@@ -290,7 +290,7 @@ test("a guest enters a key without signing in and gets a session that expires af
   // Each use pushes the expiry back.
   const later = (await json("/api/state", guest)).user.expiresAt;
   assert.ok(later >= made.expiresAt);
-  // Expiry: the file says the time is up, the sweep stops the machine and forgets the guest.
+  // Expiry: the file says the time is up, the sweep deletes the machine and forgets the guest.
   const dir = path.join(home, "accounts");
   const file = fs.readdirSync(dir).find((f) => f.startsWith("g") && f.endsWith(".json"));
   const record = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
@@ -301,7 +301,7 @@ test("a guest enters a key without signing in and gets a session that expires af
   assert.equal((await get("/api/rent", guest)).status, 401);
   const swept = await server.sweepGuests();
   assert.equal(swept.length, 1);
-  assert.equal(runpod.state.pods[r.id].status, "EXITED", "the machine was stopped while the key still worked");
+  assert.equal(runpod.state.pods[r.id].status, "TERMINATED", "the machine was deleted while the key still worked: with the key gone nobody could ever manage it again, and a stopped disk bills for ever");
   assert.ok(!fs.existsSync(path.join(dir, file)));
   assert.equal(server.rentals.has(swept[0]), false);
   assert.deepEqual(await server.sweepGuests(), []);

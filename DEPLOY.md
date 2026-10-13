@@ -121,9 +121,10 @@ domain.
 A visitor who does not sign in can still rent: choosing "On a rented GPU"
 in a model's window asks for a RunPod key right there and makes a guest
 for them. A guest is an account without a person: the same encrypted file,
-kept for 12 hours after the guest's last use, after which the server stops
-their machine (while the key still works) and forgets the keys and the
-machine. Signing in with Google as a guest moves the keys and the machine
+kept for 12 hours after the guest's last use, after which the server
+deletes their machine (while the key still works: once the key is
+forgotten nobody could ever stop or delete it, and a stopped machine's
+disk bills for ever) and forgets the keys. Signing in with Google as a guest moves the keys and the machine
 to the account. Guests work without `GOOGLE_CLIENT_ID`; without
 `ACCOUNTS_SECRET` the server makes up a secret for the run and guests do
 not survive a restart.
@@ -131,8 +132,11 @@ not survive a restart.
 ### What a signed-in visitor can do
 
 - Save a RunPod key and rent a GPU in the sizes on offer, with the running
-  cost shown in a bar; the machine stops after 30 idle minutes (theirs to
-  change) and is watched across restarts of the service.
+  cost shown in a bar; the machine stops after 30 idle minutes, 10 on a
+  card costing $2 an hour or more (theirs to change), when the page's
+  still-there check goes unanswered, or at a daily spend cap, and is
+  watched across restarts of the service. The card shows the account's
+  RunPod bill by day and machine, and other machines left on the account.
 - Have the machine download chat models straight from Hugging Face, chat
   with them in the model window, hand an answer to Claude or another model
   to improve, download the conversation, and remove models from the machine.

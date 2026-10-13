@@ -68,6 +68,7 @@ async function load() {
   state.rental = s.rental;
   state.rentTiers = s.rentTiers ?? [];
   state.idleMinutes = s.idleMinutes ?? 30;
+  state.idleSet = Boolean(s.idleSet);
   state.maxSpend = s.maxSpend ?? 50;
   state.presenceMinutes = s.presenceMinutes ?? 10;
   state.runpodKey = s.runpodKey;
@@ -963,6 +964,17 @@ async function followStep(model, plan, index, id) {
     else btn.after(refresh);
   }
   li.querySelector(".refresh-step").onclick = () => openModel(model.id);
+  // On the rented machine: end the bill the moment the download is over.
+  if (plan.remote && state.rental?.rented && !li.querySelector(".stop-after")) {
+    const tick = document.createElement("label");
+    tick.className = "check stop-after";
+    tick.title = "The machine stops when this download finishes, unless another of yours is still going; its models stay on its disk";
+    tick.innerHTML = `<input type="checkbox"> Stop the GPU when this finishes${state.rental.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}`;
+    (li.querySelector(".step-buttons") ?? btn.parentElement).appendChild(tick);
+    tick.querySelector("input").addEventListener("change", (e) => {
+      api.post(`/api/runs/${id}/stop-after`, { on: e.target.checked }).catch((err) => notice(`Could not set that: ${err.message}`, "bad"));
+    });
+  }
   let log = li.querySelector(".log");
   if (!log) {
     log = document.createElement("pre");
@@ -979,6 +991,7 @@ async function followStep(model, plan, index, id) {
     });
     bar.finish(result.status);
     li.classList.remove("running");
+    li.querySelector(".stop-after")?.remove();
     if (result.status === "done") {
       step.done = true;
       li.classList.add("done");
@@ -2162,6 +2175,7 @@ function renderImage(box, t) {
       <small class="muted">Models cannot read "not" or "no" in the description; whatever you do not want goes here instead.</small>
     </label>
     ${loaded}
+    ${t.agent ? `<label class="check stop-after" title="The machine stops once this is made or has failed; its models stay on its disk and Start brings it back"><input type="checkbox" id="image-stop-after"> Stop the rented GPU after this ${video ? "clip" : "picture"}${state.rental?.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}</label>` : ""}
     <pre class="log" id="image-log" hidden></pre>
     <div id="image-out"></div>`;
   box.querySelector("#unload-model")?.addEventListener("click", async () => {
@@ -2226,10 +2240,18 @@ function renderImage(box, t) {
         }
         const openedFor = state.model?.id ?? t.repo;
         backgroundNote(box, state.model ?? { id: t.repo }, video ? "The clip is made" : "The picture is made");
-        const job = await agentJob(t.agent, { ...target, prompt, negative, quality: plan?.qualities?.[quality], video, ...extra }, (line) => {
-          log.textContent += line + "\n";
-          log.scrollTop = log.scrollHeight;
-        });
+        const stopAfter = Boolean(box.querySelector("#image-stop-after")?.checked);
+        let job;
+        try {
+          job = await agentJob(t.agent, { ...target, prompt, negative, quality: plan?.qualities?.[quality], video, ...extra }, (line) => {
+            log.textContent += line + "\n";
+            log.scrollTop = log.scrollHeight;
+          });
+        } finally {
+          // Made or failed, the machine stops now if that was asked: the
+          // bill ends with the work, not after an idle wait.
+          if (stopAfter) stopAfterJob(log);
+        }
         const show = (out) => {
           if (job.video) showClip(out, { data: job.video, prompt });
           else showPicture(out, { data: job.image, prompt, negative, model: t.repo, madeBy: addon ? `${t.repo.split("/").pop()} on ${target.repo.split("/").pop()}` : t.file, agent: t.agent, repo: target.repo, modelFile: target.file, chain: [] });
@@ -2746,14 +2768,15 @@ function renderRental() {
     const running = ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(r.status);
     const cost = r.costPerHour != null ? `${money(r.costPerHour)} an hour. ` : "";
     const time = running && r.uptimeSeconds ? `Running for ${minutesText(r.uptimeSeconds)}${r.spent != null ? `, about ${money(r.spent)} this time` : ""}. ` : "";
-    const why = r.stopReason?.startsWith("idle:") ? `It stopped itself after ${r.stopReason.slice(5)} idle minutes. ` : r.stopReason?.startsWith("cap:") ? `It stopped itself at the ${money(Number(r.stopReason.slice(4)))} spend cap. ` : r.stopReason?.startsWith("away:") ? `It was stopped when nobody answered the still-there check${r.stopReason.slice(5) ? ` after ${r.stopReason.slice(5)} minutes` : ""}. ` : "";
-    const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. ${why}The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for a small charge a day; Start brings it back in a minute or two, Delete removes it and the models.` : "";
+    const why = stopWhy(r);
+    const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. ${why}The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for ${r.diskPerDay ? `about ${money(r.diskPerDay)} a day (${money(r.diskPerDay * 30)} a month)` : "a small charge a day"}; Start brings it back in a minute or two, Delete removes it and the models.` : "";
+    const todaySpend = r.spentToday ? `Today's machines have cost about ${money(r.spentToday)} so far. ` : "";
     const trouble = r.imageProblem ? ` The image server on it cannot start (${r.imageProblem}); chat still works, and a machine rented after the image is fixed will make pictures.` : "";
     const older = r.agentVersion != null && r.agentCurrent != null && r.agentVersion < r.agentCurrent;
     const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a ${state.hosted ? "download" : "chat or download"}${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.${state.hosted ? " Chats go straight from your browser to the machine, so the site cannot see them; each message you send counts as use." : ""}` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
     panel.innerHTML = `<div class="rent-card">
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
-      <p class="muted small">${esc(cost)}${esc(time)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
+      <p class="muted small">${esc(cost)}${esc(time)}${esc(todaySpend)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
       ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
@@ -2763,10 +2786,12 @@ function renderRental() {
         ${r.status === "EXITED" || r.status === "ERROR" ? `<button class="primary" id="rent-start">Start</button>` : ""}
         <button class="ghost" id="rent-delete">Delete machine and models</button>
       </div>
+      <div id="rent-spend"></div>
+      <div id="rent-others"></div>
       <label class="field">
         <span>Stop after this many idle minutes</span>
         <input type="number" id="rent-idle" min="0" max="1440" step="1" value="${Number(r.idleMinutes ?? 30)}">
-        <small class="muted">0 keeps it running until you stop it, though the machine itself gives up after a day without the site. A download in progress keeps it awake, up to six hours.</small>
+        <small class="muted">Unset, 30 minutes on a cheap card and 10 on one costing $2 an hour or more. 0 keeps it running until you stop it, though the machine itself gives up after a day without the site. A download in progress keeps it awake, up to six hours; tick "Stop the GPU when this finishes" under the download to end the bill the moment it is done.</small>
       </label>
       <label class="field">
         <span>Ask whether I am still here after this many minutes without a click or key</span>
@@ -2774,15 +2799,17 @@ function renderRental() {
         <small class="muted">While the machine runs, even during a download or a picture. With no answer in a short countdown the machine stops; its models stay.</small>
       </label>
       <label class="field">
-        <span>Stop once a session has cost this many dollars</span>
+        <span>Stop once today's machines have cost this many dollars</span>
         <input type="number" id="rent-cap" min="0" max="10000" step="1" value="${Number(r.maxSpend ?? 50)}">
-        <small class="muted">Counted from the last start; 0 removes the cap. ${r.costPerHour ? `At ${money(r.costPerHour)} an hour, ${money(r.maxSpend ?? 50)} is about ${((r.maxSpend ?? 50) / r.costPerHour).toFixed(1)} hours.` : ""}</small>
+        <small class="muted">Counted across stops, starts and replaced machines since midnight UTC, from the running time RunPod reports; 0 removes the cap. ${r.costPerHour ? `At ${money(r.costPerHour)} an hour, ${money(r.maxSpend ?? 50)} is about ${((r.maxSpend ?? 50) / r.costPerHour).toFixed(1)} hours.` : ""}</small>
       </label>
       ${state.hosted ? "" : `<label class="check"><input type="checkbox" id="rent-quit" ${state.stopOnQuit ? "checked" : ""}> Stop it when HuggingFound quits</label>`}
       <div class="actions"><button class="ghost" id="rent-save-idle">Save</button></div>
     </div>
     ${privateImageHtml(true)}`;
     loadRegistries(panel);
+    loadSpend(panel);
+    loadOthers(panel);
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-replace")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-key-focus")?.addEventListener("click", () => {
@@ -2809,6 +2836,8 @@ function renderRental() {
     panel.innerHTML = "";
     return;
   }
+  // Nothing rented, yet machines from before may sit on the account billing
+  // for their disks: they are looked for whenever the offer is shown.
   if (state.rentOptionsLoading) {
     panel.innerHTML = `<p class="muted small">Asking RunPod what is on offer</p>`;
     return;
@@ -2827,9 +2856,10 @@ function renderRental() {
     <label class="field">
       <span>Disk for its models, in GB</span>
       <input type="number" id="rent-disk" min="10" max="4000" step="10" value="${Number(state.rentDisk ?? 50)}">
-      <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep. Fixed once rented. RunPod charges a few cents a day for it, more while the machine is stopped than running.</small>
+      <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep. Fixed once rented. RunPod charges ${money(DISK_STOPPED_PER_GB_MONTH / 30 * Number(state.rentDisk ?? 50))} a day for ${Number(state.rentDisk ?? 50)} GB while the machine is stopped, half that while it runs.</small>
     </label>
     <div class="actions"><button class="primary" id="rent-go" ${want ? "" : "disabled"}>Rent it</button><button class="ghost" id="rent-refresh">Refresh prices</button></div>
+    <div id="rent-others"></div>
     ${privateImageHtml()}
     <p class="muted small">Ollama on the machine answers at a long random address that RunPod makes for it; only this computer knows it, and it goes when the machine is deleted. The disk is set up once; the machine itself usually answers two to four minutes after renting.</p>`;
   loadRegistries(panel);
@@ -2837,6 +2867,7 @@ function renderRental() {
     state.rentOptions = null;
     loadRentOptions();
   });
+  loadOthers(panel);
   panel.querySelector("#rent-go").addEventListener("click", async () => {
     const gb = Number(panel.querySelector('input[name="rent-tier"]:checked')?.value);
     const diskGb = Number($("#rent-disk").value);
@@ -2956,17 +2987,111 @@ async function rentAction(action, question) {
 // confirm before renting: the idle time, the spend cap, and what a day
 // would cost without them when the price makes that worth saying.
 function safeguardText(pricePerHour) {
-  const idle = state.idleMinutes ?? 30;
+  const idle = state.idleSet ? state.idleMinutes ?? 30 : pricePerHour >= 2 ? 10 : 30;
   const cap = state.maxSpend ?? 50;
-  const guards = [`when nobody answers the still-there check this page shows after ${Math.round(state.presenceMinutes ?? 10)} minutes without a click`, idle ? `after ${idle} minutes without a chat, picture or download` : "", cap ? `once this session has cost ${money(cap)}` : ""].filter(Boolean);
+  const guards = [`when nobody answers the still-there check this page shows after ${Math.round(state.presenceMinutes ?? 10)} minutes without a click`, idle ? `after ${idle} minutes without a chat, picture or download` : "", cap ? `once today's machines have cost ${money(cap)}` : ""].filter(Boolean);
   const day = pricePerHour >= 3 ? ` Left running, it would cost about ${money(pricePerHour * 24)} a day.` : "";
   return `RunPod bills your account while it runs.${day} It stops by itself ${guards.join(", or ") || "only when you stop it"}${guards.length ? ", whichever comes first" : ""}, and the machine itself stops when the site has not seen it used; you can stop or delete it from the bar at any time. Both limits are in Settings.`;
+}
+
+// RunPod's price for a stopped machine's disk, dollars a GB a month.
+const DISK_STOPPED_PER_GB_MONTH = 0.2;
+
+// Stops the rented machine after a picture or clip the person ticked the box
+// for, and says so in the log; a download still going keeps it up instead.
+async function stopAfterJob(log) {
+  try {
+    if (state.rental?.downloading) {
+      log.textContent += "The machine stays up: a download of yours is still going on it.\n";
+      return;
+    }
+    state.rental = await api.post("/api/rent/stop", { reason: "done" });
+    log.textContent += "Stopped the rented GPU, as asked: the hourly charge has ended. Start brings it back from the bar.\n";
+    renderRental();
+  } catch (err) {
+    log.textContent += `Could not stop the machine: ${err.message}. Stop it from the bar.\n`;
+  }
+}
+
+// Why the machine last stopped by itself, in a sentence, or nothing.
+function stopWhy(r) {
+  const why = r?.stopReason ?? "";
+  if (why.startsWith("idle:")) return `It stopped itself after ${why.slice(5)} idle minutes. `;
+  if (why.startsWith("cap:")) return `It stopped itself at the ${money(Number(why.slice(4)))} spend cap for the day. `;
+  if (why.startsWith("away:")) return `It was stopped when nobody answered the still-there check${why.slice(5) ? ` after ${why.slice(5)} minutes` : ""}. `;
+  if (why === "done") return "It stopped when the download finished, as asked. ";
+  return "";
+}
+
+// The account's RunPod bill for the week, GPU time apart from disks, so it
+// is plain where the money went; RunPod's figures run about an hour behind.
+async function loadSpend(panel) {
+  const box = panel.querySelector("#rent-spend");
+  if (!box) return;
+  let bill;
+  try {
+    bill = await api.get("/api/rent/spend");
+  } catch {
+    return;
+  }
+  if (!panel.contains(box)) return;
+  const line = (label, v) => `<li><span>${esc(label)}</span><span>${money(v.total)}</span><span class="muted">GPU ${money(v.gpu)}, disks ${money(v.disk)}</span></li>`;
+  const days = bill.days.slice(0, 7);
+  const others = bill.pods.filter((p) => !p.ours && p.total > 0);
+  const othersSum = others.reduce((a, p) => a + p.total, 0);
+  box.innerHTML = `<details class="spend"><summary>RunPod's bill for this account: ${money(bill.total.total)} in the last ${days.length || 7} day${days.length === 1 ? "" : "s"}, ${money(bill.today.total)} today</summary>
+    <ul class="spend-days">${days.map((d) => line(d.day, d)).join("")}</ul>
+    <p class="muted small">${others.length ? `${money(othersSum)} of it went to ${others.length} machine${others.length === 1 ? "" : "s"} other than this one (replaced, or from earlier sessions). ` : ""}GPU is the hourly rate while a machine runs, from its creation, image pull included; disks are charged every day, stopped or running. RunPod's figures run about an hour behind; the site's own count for today is ${money(bill.metered)}.</p>
+  </details>`;
+}
+
+// Machines on the RunPod account that this site no longer manages, each
+// still charging for its disk, with one button to be rid of them all.
+async function loadOthers(panel) {
+  const box = panel.querySelector("#rent-others");
+  if (!box) return;
+  let others;
+  try {
+    ({ others } = await api.get("/api/rent/others"));
+  } catch {
+    return;
+  }
+  if (!panel.contains(box)) return;
+  if (!others.length) {
+    box.innerHTML = "";
+    return;
+  }
+  const perDay = others.reduce((a, o) => a + (o.diskPerDay || 0), 0);
+  const running = others.filter((o) => o.running);
+  const hourly = running.reduce((a, o) => a + (o.costPerHour || 0), 0);
+  const list = others.map((o) => `${o.gpu || "GPU"}${o.gpuCount > 1 ? ` × ${o.gpuCount}` : ""}, ${o.diskGb} GB disk, ${o.running ? `running at ${money(o.costPerHour || 0)} an hour` : "stopped"} (${o.id})`);
+  box.innerHTML = `<div class="notice ${running.length ? "bad" : "warn"}">
+    <b>${others.length} other HuggingFound machine${others.length === 1 ? "" : "s"} on this RunPod account</b>, which this site no longer manages (rented in an earlier session, under a key since removed, or by a guest whose time ran out). ${running.length ? `${running.length} ${running.length === 1 ? "is" : "are"} running, ${money(hourly)} an hour. ` : ""}Their disks cost about ${money(perDay)} a day (${money(perDay * 30)} a month) while they sit stopped. ${others.length === 1 ? "It keeps" : "They keep"} billing until deleted.
+    <ul class="small">${list.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+    <button class="primary" id="rent-others-delete">Delete ${others.length === 1 ? "it" : `all ${others.length}`}, disks and models included</button>
+  </div>`;
+  box.querySelector("#rent-others-delete").addEventListener("click", async () => {
+    if (!confirm(`Delete ${others.length === 1 ? "this machine" : `these ${others.length} machines`} at RunPod, with ${others.length === 1 ? "its disk and models" : "their disks and models"}?\n\n${list.join("\n")}\n\nNothing is charged for them after this.`)) return;
+    const btn = box.querySelector("#rent-others-delete");
+    btn.disabled = true;
+    btn.textContent = "Deleting";
+    try {
+      const { deleted } = await api.post("/api/rent/others/delete", { ids: others.map((o) => o.id) });
+      notice(`Deleted ${deleted.length} machine${deleted.length === 1 ? "" : "s"} at RunPod; about ${money(perDay)} a day no longer charged.`, "ok");
+      box.innerHTML = "";
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Try again";
+      notice(`Could not delete: ${err.message}`, "bad");
+    }
+  });
 }
 
 // Deletes the machine, then opens renting with the same size chosen, so
 // the old one is gone before the new one is ordered.
 async function replaceMachine() {
   const gb = state.rental?.gb;
+  const diskGb = state.rental?.diskGb;
   if (!confirm(`Delete this machine${state.rental?.status === "RUNNING" ? ", which is running," : ""} and rent a fresh ${gb ? `${gb} GB ` : ""}one? Its models download again on the new machine.`)) return;
   try {
     state.rental = await api.post("/api/rent/delete", {});
@@ -2977,6 +3102,8 @@ async function replaceMachine() {
   }
   state.rentError = null;
   state.rentWant = (state.rentTiers ?? []).find((t) => t.gb === gb)?.gb ?? state.rentWant;
+  // The same disk as the old one: a smaller default would not hold its models.
+  if (diskGb) state.rentDisk = diskGb;
   await load();
   $("#settings").hidden = false;
   renderRental();

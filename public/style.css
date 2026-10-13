@@ -441,3 +441,12 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 #presence .modal-card { margin-top: 15vh; }
 .step-buttons { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
 .step-buttons .refresh-step { font-size: 13px; padding: 4px 10px; }
+
+/* The bill and the other machines, in the rent panel. */
+.spend { margin: 10px 0; font-size: 14px; }
+.spend summary { cursor: pointer; color: var(--muted); }
+.spend-days { list-style: none; padding: 0; margin: 8px 0 4px; display: grid; gap: 4px; }
+.spend-days li { display: grid; grid-template-columns: 7.5em 5em 1fr; gap: 10px; font-variant-numeric: tabular-nums; }
+.notice ul.small { margin: 8px 0; padding-left: 18px; }
+.notice .primary { margin-top: 6px; }
+.step-buttons .stop-after, .try .stop-after { margin: 6px 0 0; }

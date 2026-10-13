@@ -40,6 +40,19 @@ export function startStubRunpod() {
       if (state.rateLimited) return reply(429, { error: "Too Many Requests" });
       const data = body ? JSON.parse(body) : {};
       if (req.method === "GET" && url.pathname === "/catalog/gpus") return reply(200, { gpus: GPUS });
+      // Every pod on the account, as RunPod lists them (deleted ones included, as TERMINATED).
+      if (req.method === "GET" && url.pathname === "/pods") return reply(200, { pods: Object.values(state.pods).map(view), pagination: { nextCursor: null } });
+      // The pod bill: what each pod has run so far at its price, as today's
+      // GPU amount, plus a disk amount for its volume; one record a pod.
+      if (req.method === "GET" && url.pathname === "/billing/pods") {
+        const day = new Date().toISOString().slice(0, 10);
+        const records = Object.values(state.pods).map((pod) => {
+          const gpuAmount = Math.round((pod.cost * ((pod.runtime?.uptime ?? 0) + (pod.pastUptime ?? 0))) / 3600 * 1000) / 1000;
+          const diskAmount = Math.round(((pod.mounts?.persistent?.size ?? 0) * 0.2) / 30 * 1000) / 1000;
+          return { startTime: `${day}T00:00:00Z`, endTime: `${day}T23:59:59Z`, podId: pod.id, totalAmount: gpuAmount + diskAmount, gpuAmount, cpuAmount: 0, diskAmount };
+        });
+        return reply(200, { records, metadata: { recordCount: records.length } });
+      }
       if (req.method === "GET" && url.pathname === "/registries") return reply(200, { registries: [{ id: "reg_abc123", name: "GitHub packages" }, { id: "reg_other", name: "Docker Hub" }] });
       if (req.method === "POST" && url.pathname === "/pods") {
         const gpu = GPUS.find((g) => g.id === data.gpu?.id);
@@ -70,6 +83,7 @@ export function startStubRunpod() {
         if (data.action === "stop") {
           if (pod.status === "EXITED") return reply(409, { message: "Action not valid for current pod status" });
           pod.status = "EXITED";
+          pod.pastUptime = (pod.pastUptime ?? 0) + (pod.runtime?.uptime ?? 0);
           pod.runtime = null;
           return reply(200, view(pod));
         }

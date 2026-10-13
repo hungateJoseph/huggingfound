@@ -48,13 +48,28 @@ export async function imagePullable(image = GPU_IMAGE, fetchImpl = fetch) {
 const MODELS_PATH = "/root/.ollama";
 const CONTAINER_DISK_GB = 20;
 const OPTIONS_TTL = 15 * 60e3;
+// What RunPod charges for a pod's volume disk, in dollars a GB a month:
+// doubled while the pod is stopped, which is when it is easiest to forget.
+export const DISK_RUNNING = 0.1;
+export const DISK_STOPPED = 0.2;
+export function diskPerDay(gb, running) {
+  return Math.round(((Number(gb) || 0) * (running ? DISK_RUNNING : DISK_STOPPED) / 30) * 10000) / 10000;
+}
+// A machine at or above this price an hour gets the short idle default.
+export const PRICEY = 2;
+// Machines on the account other than this one, and the account's bill, are
+// asked about this often at most.
+const OTHERS_TTL = 5 * 60e3;
+const SPEND_TTL = 10 * 60e3;
 // After RunPod throttles the key, nothing is asked of it for this long;
 // callers get what was last known instead of piling on.
 const BACKOFF_MS = 30e3;
 // What this app will ever ask of RunPod for one key, well under RunPod's
 // own limits (180 a minute, 7,200 an hour, 86,400 a day): a page bug can
-// make the app busy, but it cannot spend a person's key.
-const BUDGET = { minute: 30, hour: 600 };
+// make the app busy, but it cannot spend a person's key. A minute holds
+// the status polls of a starting machine, a stop, and a look at the
+// account's other machines and its bill with room to spare.
+const BUDGET = { minute: 60, hour: 600 };
 
 // The sizes offered, by GPU memory. `files` is the largest model file each
 // one runs comfortably: a 4-bit model wants its own size plus room for the
@@ -115,6 +130,36 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   let lastActivitySaved = 0;
   let lastLease = 0;
   let lastSpendCheck = 0;
+  // What today's machines have cost, in dollars, across stops, starts and
+  // replaced machines: added up from the running time RunPod reports at each
+  // look, kept in the settings so a restart of this server keeps the count,
+  // and started afresh at midnight UTC.
+  let meter = readMeter();
+  let meterSaved = 0;
+  function readMeter() {
+    const [day, usd, id, seconds] = String(env().RUNPOD_SPENT ?? "").split("|");
+    return { day: day || "", usd: Number(usd) || 0, id: id || "", seconds: Number(seconds) || 0 };
+  }
+  const today = () => new Date(now()).toISOString().slice(0, 10);
+  function meterAdd(pod, uptime) {
+    if (meter.day !== today()) meter = { day: today(), usd: 0, id: "", seconds: 0 };
+    const cost = typeof pod.cost === "number" ? pod.cost : 0;
+    // The running time counts from the last start; a restart begins at zero.
+    const delta = meter.id === pod.id && uptime >= meter.seconds ? uptime - meter.seconds : uptime;
+    meter.id = pod.id;
+    meter.seconds = uptime;
+    if (cost && delta > 0) meter.usd += (cost * delta) / 3600;
+    if (now() - meterSaved > 60e3 || delta === uptime) saveMeter();
+  }
+  const spentToday = () => (meter.day === today() ? Math.round(meter.usd * 100) / 100 : 0);
+  function saveMeter() {
+    meterSaved = now();
+    try {
+      save({ RUNPOD_SPENT: `${meter.day}|${meter.usd.toFixed(4)}|${meter.id}|${Math.round(meter.seconds)}` });
+    } catch {
+      // the settings file is not essential here
+    }
+  }
   const noteActivity = () => {
     lastActivity = now();
     if (now() - lastActivitySaved > 60e3) {
@@ -153,14 +198,21 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
   const key = () => env().RUNPOD_API_KEY || "";
   const podId = () => env().RUNPOD_POD_ID || "";
-  // Minutes without a chat or download before the machine is stopped; 0 never stops it.
   // The registry login for this rental: the one chosen in Settings, or the app-wide one.
   const registryAuth = () => env().RUNPOD_REGISTRY_AUTH || registry || "";
+  // The machine's price an hour, saved when it was rented, for the defaults
+  // that depend on it.
+  const pricePerHour = () => Number(env().RUNPOD_POD_COST) || last?.costPerHour || 0;
+  // Minutes without a chat or download before the machine is stopped; 0
+  // never stops it. Unset, half an hour on a cheap machine and ten minutes
+  // on one costing PRICEY dollars an hour or more, where half an hour
+  // forgotten is real money.
+  const idleDefault = (price) => (price >= PRICEY ? 10 : 30);
   const idleMinutes = () => {
     const raw = env().RUNPOD_IDLE_MINUTES;
-    if (raw === undefined || raw === "") return 30;
+    if (raw === undefined || raw === "") return idleDefault(pricePerHour());
     const n = Number(raw);
-    return Number.isFinite(n) && n >= 0 ? Math.round(n) : 30;
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : idleDefault(pricePerHour());
   };
   const urlFor = (id) => proxyUrl(id);
   const agentFor = (id) => agentUrl(id);
@@ -257,6 +309,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     // The pod's own gpu.memory is the machine's system RAM, not the card's;
     // the card's memory was saved from the catalogue when it was rented.
     const gb = Number(env().RUNPOD_POD_GB) || null;
+    const diskGb = pod.mounts?.persistent?.size ?? (Number(env().RUNPOD_POD_DISK_GB) || null);
+    const running = pod.status === "RUNNING";
+    if (running) meterAdd(pod, uptime);
     return {
       rented: true,
       id: pod.id,
@@ -265,10 +320,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       gpu: pod.gpu?.id ?? "",
       gpuCount: pod.gpu?.count ?? 1,
       gb,
-      diskGb: pod.mounts?.persistent?.size ?? (Number(env().RUNPOD_POD_DISK_GB) || null),
+      diskGb,
+      // What the disk costs a day in the machine's present state: RunPod
+      // charges twice as much for it while the machine is stopped.
+      diskPerDay: diskGb ? diskPerDay(diskGb, running) : null,
       costPerHour: cost,
       uptimeSeconds: Math.round(uptime),
       spent: cost != null ? Math.round(cost * (uptime / 3600) * 100) / 100 : null,
+      spentToday: spentToday(),
       url: urlFor(pod.id),
       agent: hasAgent() ? agentFor(pod.id) : null,
       images: hasAgent(),
@@ -283,7 +342,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       idleMinutes: idleMinutes(),
       idleSeconds: Math.round((now() - lastActivity) / 1000),
       maxSpend: maxSpend(),
-      // Why it last stopped by itself: "idle:30" or "cap:50".
+      // Why it last stopped by itself: "idle:30", "cap:50", "away:10" or "done".
       stopReason: pod.status === "EXITED" ? env().RUNPOD_LAST_STOP || null : null,
       dataCenter: pod.dataCenterId ?? null,
       startedAt: pod.startedAt ?? null,
@@ -306,7 +365,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   const hasAgent = () => env().RUNPOD_POD_AGENT === "1";
 
   function forget(id) {
-    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "" };
+    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "" };
     if (id && env().OLLAMA_SERVER === urlFor(id)) {
       updates.OLLAMA_SERVER = "";
       updates.OLLAMA_SERVER_GB = "";
@@ -314,6 +373,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     if (id && env().GPU_AGENT === agentFor(id)) updates.GPU_AGENT = "";
     save(updates);
     last = null;
+    // The account's picture has changed: the other machines are asked for afresh.
+    othersCache = { at: 0, key: "", list: null };
   }
 
   // While the machine runs, chat models go to its Ollama and image models
@@ -329,8 +390,99 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     if (Object.keys(updates).length) save(updates);
   }
 
+  // The other HuggingFound machines on the same RunPod account: ones this
+  // site no longer tracks (rented in an earlier session, under a key since
+  // removed, or by a guest whose time ran out), each still charging for its
+  // disk while it sits stopped.
+  let othersCache = { at: 0, key: "", list: null };
+  function describeOther(p) {
+    const running = ["RUNNING", "STARTING", "PROVISIONING"].includes(p.status);
+    const gb = p.mounts?.persistent?.size ?? 0;
+    return { id: p.id, status: p.status ?? "UNKNOWN", gpu: p.gpu?.id ?? "", gpuCount: p.gpu?.count ?? 1, diskGb: gb, costPerHour: typeof p.cost === "number" ? p.cost : null, running, diskPerDay: diskPerDay(gb, running), createdAt: p.createdAt ?? null };
+  }
+  async function others({ fresh = false } = {}) {
+    if (!key()) return [];
+    if (!fresh && othersCache.list && othersCache.key === key() && now() - othersCache.at < OTHERS_TTL) return othersCache.list;
+    let data;
+    try {
+      data = await request("GET", "/pods?limit=200");
+    } catch (err) {
+      if (err.status === 429 && othersCache.list && othersCache.key === key()) return othersCache.list;
+      throw err;
+    }
+    const pods = Array.isArray(data) ? data : data?.pods ?? [];
+    const list = pods.filter((p) => p?.name === "huggingfound" && p.id !== podId() && p.status !== "TERMINATED").map(describeOther);
+    othersCache = { at: now(), key: key(), list };
+    return list;
+  }
+  // The account's pod bill from RunPod, by day and by machine, for the last
+  // week: GPU time apart from disks, so it is plain where the money went.
+  let spendCache = { at: 0, key: "", data: null };
+  async function spend() {
+    if (spendCache.data && spendCache.key === key() && now() - spendCache.at < SPEND_TTL) return spendCache.data;
+    let data;
+    try {
+      data = await request("GET", "/billing/pods?lastN=7&bucketSize=day");
+    } catch (err) {
+      if (err.status === 429 && spendCache.data && spendCache.key === key()) return spendCache.data;
+      throw err;
+    }
+    const zero = () => ({ total: 0, gpu: 0, disk: 0 });
+    const days = new Map();
+    const pods = new Map();
+    const add = (m, k, r) => {
+      const cur = m.get(k) ?? zero();
+      cur.total += Number(r.totalAmount) || 0;
+      cur.gpu += Number(r.gpuAmount) || 0;
+      cur.disk += Number(r.diskAmount) || 0;
+      m.set(k, cur);
+    };
+    for (const r of data?.records ?? []) {
+      add(days, String(r.startTime ?? "").slice(0, 10), r);
+      add(pods, String(r.podId ?? ""), r);
+    }
+    const round = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Math.round(v * 1000) / 1000]));
+    const total = zero();
+    for (const v of days.values()) {
+      total.total += v.total;
+      total.gpu += v.gpu;
+      total.disk += v.disk;
+    }
+    const out = {
+      days: [...days].map(([day, v]) => ({ day, ...round(v) })).sort((a, b) => (a.day < b.day ? 1 : -1)),
+      pods: [...pods].map(([id, v]) => ({ id, ours: Boolean(id) && id === podId(), ...round(v) })).sort((a, b) => b.total - a.total),
+      total: round(total),
+      today: round(days.get(today()) ?? zero()),
+      metered: spentToday(),
+    };
+    spendCache = { at: now(), key: key(), data: out };
+    return out;
+  }
+
   const self = {
     configured: () => Boolean(key()),
+    others,
+    spend,
+    spentToday,
+    pricePerHour,
+    // Deletes the other machines on the account (the given ids, or all of
+    // them), disks and models included; nothing is charged for them after.
+    async removeOthers(ids = null) {
+      const list = await others({ fresh: true });
+      const gone = [];
+      for (const o of list) {
+        if (ids && !ids.includes(o.id)) continue;
+        try {
+          await request("DELETE", `/pods/${encodeURIComponent(o.id)}`);
+        } catch (err) {
+          if (err.status !== 404) throw err;
+        }
+        gone.push(o.id);
+      }
+      othersCache = { at: 0, key: "", list: null };
+      spendCache = { at: 0, key: "", data: null };
+      return gone;
+    },
     // The registry logins saved in the RunPod account, by name, for Settings to offer.
     async registries() {
       const data = await request("GET", "/registries");
@@ -423,12 +575,15 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // Browsers may talk to the machine directly from these origins (the
       // hosted site's address, or the app's own); Ollama and the agent
       // refuse other sites' pages.
-      // The machine's own idle watch gets the same idle time.
-      const env = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h", HF_IDLE_MINUTES: String(idleMinutes()) };
+      // The machine's own idle watch gets the same idle time, which for an
+      // unset setting depends on this machine's price.
+      const raw = env().RUNPOD_IDLE_MINUTES;
+      const machineIdle = raw === undefined || raw === "" || !(Number(raw) >= 0) ? idleDefault(offer.pricePerHour ?? 0) : Math.round(Number(raw));
+      const podEnv = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h", HF_IDLE_MINUTES: String(machineIdle) };
       const allowed = origins.filter((o) => /^https?:\/\/[\w.-]+(?::\d+|:\*)?$/.test(String(o)));
       if (allowed.length) {
-        env.OLLAMA_ORIGINS = allowed.join(",");
-        env.HF_ORIGINS = allowed.join(",");
+        podEnv.OLLAMA_ORIGINS = allowed.join(",");
+        podEnv.HF_ORIGINS = allowed.join(",");
       }
       // The full image when it can be pulled, otherwise plain Ollama: a
       // machine for chat models only, rather than no machine. With a
@@ -444,13 +599,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         cloud: "SECURE",
         disk: CONTAINER_DISK_GB,
         ports: full ? [`${OLLAMA_PORT}/http`, `${AGENT_PORT}/http`] : [`${OLLAMA_PORT}/http`],
-        env,
+        env: podEnv,
         mounts: { persistent: { size: disk, path: MODELS_PATH } },
       });
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
       const totalGb = (offer.gpu.memory || tier.gb / (tier.count ?? 1)) * (tier.count ?? 1);
       lastActivity = now();
-      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(offer.pricePerHour ?? pod.cost ?? ""), RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      othersCache = { at: 0, key: "", list: null };
       point(pod.id, totalGb);
       lastActivity = now();
       last = summarize(pod, false);
@@ -474,6 +630,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         if (!/HTTP 409/.test(err.message)) throw err;
       }
       unpoint(id);
+      saveMeter();
       return this.status({ probe: false });
     },
 
@@ -528,7 +685,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       if (cap && now() - lastSpendCheck > 5 * 60e3 && (!last || last.id !== podId() || ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status))) {
         lastSpendCheck = now();
         const current = await this.status({ probe: false }).catch(() => null);
-        if (current?.rented && current.status === "RUNNING" && current.spent != null && current.spent >= cap) {
+        if (current?.rented && current.status === "RUNNING" && Math.max(current.spentToday ?? 0, current.spent ?? 0) >= cap) {
           save({ RUNPOD_LAST_STOP: `cap:${cap}` });
           await this.stop();
           return true;

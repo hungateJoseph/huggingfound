@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import { startStubHub } from "./stub-hub.js";
 import { startStubAgent } from "./stub-agent.js";
 import { startStubOllama } from "./stub-ollama.js";
-import { KEY, startStubRunpod } from "./stub-runpod.js";
+import { GPUS, KEY, startStubRunpod } from "./stub-runpod.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-rent-"));
 const { createServer } = await import("../src/server.js");
@@ -622,8 +622,8 @@ test("one rental can never spend a key: calls beyond the budget are answered fro
     clock += 500;
   }
   const made = runpod.state.calls.length - before;
-  assert.ok(made <= 30, `at most thirty calls reached RunPod, not ${made}`);
-  assert.ok(kept >= 60, "the rest were answered from the last known status");
+  assert.ok(made <= 60, `at most sixty calls reached RunPod, not ${made}`);
+  assert.ok(kept >= 40, "the rest were answered from the last known status");
   // The budget refills with time.
   clock += 61e3;
   assert.equal((await rental.status({ probe: false })).error, undefined);
@@ -708,4 +708,166 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   assert.equal(await rental.stopOnQuit(), false);
   assert.notEqual(runpod.state.pods[r.id].status, "EXITED");
   await rental.remove();
+});
+
+test("what today's machines cost is counted across stops, starts and a restart of the server, and the cap is on that total", async () => {
+  let clock = Date.UTC(2026, 9, 12, 10, 0, 0);
+  const file = path.join(home, "meter.env");
+  writeEnv(file, { RUNPOD_API_KEY: KEY });
+  const make = () => createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0, now: () => clock });
+  let rental = make();
+  const r = await rental.rent({ gb: 24, diskGb: 50 });
+  for (let i = 0; i < 6; i++) await rental.status({ probe: false });
+  const first = await rental.status({ probe: false });
+  assert.equal(first.status, "RUNNING");
+  assert.ok(first.spent > 0 && first.spentToday >= first.spent, "the day's total is at least this stretch");
+  assert.equal(first.diskPerDay, Math.round(((50 * 0.1) / 30) * 10000) / 10000, "the disk's cost a day while running");
+  await rental.stop();
+  const stopped = await rental.status({ probe: false });
+  assert.equal(stopped.diskPerDay, Math.round(((50 * 0.2) / 30) * 10000) / 10000, "twice as much a day while stopped");
+  assert.equal(stopped.spentToday, first.spentToday, "a stop keeps the count");
+  // A new server reads the count back and goes on from it after a start.
+  rental = make();
+  await rental.start();
+  for (let i = 0; i < 2; i++) await rental.status({ probe: false });
+  const second = await rental.status({ probe: false });
+  assert.ok(second.spent < first.spent, "the stretch starts over");
+  assert.ok(second.spentToday > first.spentToday, "the day's total goes on");
+  assert.ok(Math.abs(second.spentToday - (first.spentToday + second.spent)) < 0.02, "first stretch plus second");
+  // The cap is on the day, not on the stretch since the last start.
+  writeEnv(file, { RUNPOD_MAX_SPEND: String(second.spentToday) });
+  rental.touch();
+  clock += 6 * 60e3;
+  assert.equal(await rental.checkIdle(), true, "stopped at the cap on the day's total");
+  assert.equal(readEnv(file).RUNPOD_LAST_STOP, `cap:${second.spentToday}`);
+  // Midnight UTC starts the count again.
+  clock = Date.UTC(2026, 9, 13, 0, 1, 0);
+  assert.equal((await rental.status({ probe: false })).spentToday, 0);
+  await rental.remove();
+});
+
+test("a dear machine gets a short idle time unless one is set, and the price travels to the machine's own watch", async () => {
+  const file = path.join(home, "pricey.env");
+  writeEnv(file, { RUNPOD_API_KEY: KEY });
+  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0 });
+  assert.equal(rental.idleMinutes(), 30, "nothing rented: the plain default");
+  // With the cheaper 80 GB card taken, the H100 at $2.69 an hour is the offer.
+  const a100 = GPUS.find((g) => g.name === "A100 PCIe");
+  const was = a100.availability;
+  a100.availability = "NONE";
+  try {
+    await rental.rent({ gb: 80, diskGb: 100 });
+  } finally {
+    a100.availability = was;
+  }
+  assert.equal(runpod.state.created.at(-1).env.HF_IDLE_MINUTES, "10", "an H100 at $2.69 an hour: ten minutes on the machine too");
+  assert.equal(rental.idleMinutes(), 10);
+  assert.equal((await rental.status({ probe: false })).idleMinutes, 10);
+  writeEnv(file, { RUNPOD_IDLE_MINUTES: "45" });
+  assert.equal(rental.idleMinutes(), 45, "a setting wins");
+  await rental.remove();
+  writeEnv(file, { RUNPOD_IDLE_MINUTES: "" });
+  await rental.rent({ gb: 24, diskGb: 50 });
+  assert.equal(runpod.state.created.at(-1).env.HF_IDLE_MINUTES, "30", "a cheap card keeps half an hour");
+  await rental.remove();
+});
+
+test("other machines on the account are listed with what their disks cost a day, and deleted on request; the bill tells GPU time from disks", async () => {
+  const file = path.join(home, "others.env");
+  writeEnv(file, { RUNPOD_API_KEY: KEY });
+  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0 });
+  // Two machines from earlier sessions, stopped, that this rental knows nothing of.
+  const orphanFile = path.join(home, "orphan.env");
+  writeEnv(orphanFile, { RUNPOD_API_KEY: KEY });
+  const earlier = createRental({ env: () => readEnv(orphanFile), save: (u) => writeEnv(orphanFile, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0 });
+  const a = await earlier.rent({ gb: 24, diskGb: 50 });
+  for (let i = 0; i < 3; i++) await earlier.status({ probe: false });
+  await earlier.stop();
+  writeEnv(orphanFile, { RUNPOD_POD_ID: "" });
+  const b = await earlier.rent({ gb: 48, diskGb: 200 });
+  await earlier.stop();
+  writeEnv(orphanFile, { RUNPOD_POD_ID: "" });
+  // Our own machine is not among the others.
+  const mine = await rental.rent({ gb: 24, diskGb: 50 });
+  const others = await rental.others();
+  // Earlier tests left stopped machines of their own on the stand-in account; they count too.
+  assert.ok(others.some((o) => o.id === a.id) && others.some((o) => o.id === b.id));
+  assert.ok(!others.some((o) => o.id === mine.id), "never this rental's own machine");
+  assert.ok(others.every((o) => o.status === "EXITED" && !o.running));
+  assert.equal(others.find((o) => o.id === b.id).diskGb, 200);
+  assert.equal(others.find((o) => o.id === b.id).diskPerDay, Math.round(((200 * 0.2) / 30) * 10000) / 10000);
+  const calls = runpod.state.calls.length;
+  await rental.others();
+  assert.equal(runpod.state.calls.length, calls, "asked once, then remembered for a while");
+  // The bill: one record a pod, GPU apart from disk, ours marked.
+  for (let i = 0; i < 3; i++) await rental.status({ probe: false });
+  const bill = await rental.spend();
+  assert.ok(bill.pods.some((p) => p.id === mine.id && p.ours));
+  assert.ok(bill.pods.some((p) => p.id === a.id && !p.ours && p.gpu > 0 && p.disk > 0));
+  assert.ok(bill.total.total >= bill.total.gpu + bill.total.disk - 0.01);
+  assert.equal(bill.days.length, 1);
+  assert.equal(typeof bill.metered, "number");
+  // Deleting one leaves the other; deleting with no list clears them all, never ours.
+  assert.deepEqual(await rental.removeOthers([a.id]), [a.id]);
+  assert.equal(runpod.state.pods[a.id].status, "TERMINATED");
+  assert.equal(runpod.state.pods[b.id].status, "EXITED");
+  const rest = await rental.removeOthers();
+  assert.ok(rest.includes(b.id) && !rest.includes(mine.id));
+  assert.equal(runpod.state.pods[mine.id].status !== "TERMINATED", true);
+  assert.deepEqual(await rental.others(), []);
+  // Through the site: the same two routes.
+  writeEnv(envFile, { RUNPOD_API_KEY: KEY });
+  const over = await (await get("/api/rent/others")).json();
+  assert.ok(Array.isArray(over.others));
+  const spend = await (await get("/api/rent/spend")).json();
+  assert.ok(Array.isArray(spend.days) && Array.isArray(spend.pods));
+  await rental.remove();
+});
+
+test("a download asked to stop the machine when it is over does so, unless another download is still going", async () => {
+  // A server of its own, whose budget of RunPod calls the tests above have not used.
+  const ownEnv = path.join(home, "stopafter.env");
+  writeEnv(ownEnv, { RUNPOD_API_KEY: KEY, RUNPOD_IDLE_MINUTES: "0" });
+  const own = createServer({ envFile: ownEnv, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, idleWatch: false });
+  await new Promise((resolve) => own.listen(0, "127.0.0.1", resolve));
+  const ownBase = `http://127.0.0.1:${own.address().port}`;
+  const get = (p) => fetch(ownBase + p);
+  const post = (p, body) => fetch(ownBase + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const json = async (p) => (await get(p)).json();
+  const rented = await (await post("/api/rent", { gb: 24, diskGb: 50 })).json();
+  assert.ok(rented.id);
+  for (let i = 0; i < 3; i++) await json("/api/rent");
+  assert.equal((await json("/api/rent")).status, "RUNNING");
+  // Two downloads; the first asked to stop the machine. It finishes first,
+  // but the second, started later, is still going, so the machine stays up.
+  agent.state.slowMs = 40;
+  const quick = await (await post("/api/run", { kind: "pull-image-model", args: { repo: "stabilityai/stable-diffusion-xl-base-1.0", file: "sd_xl_base_1.0.safetensors" }, where: "rented", stopAfter: true })).json();
+  await new Promise((r) => setTimeout(r, 400));
+  const slow = await (await post("/api/run", { kind: "pull-image-model", args: { repo: "stabilityai/stable-diffusion-xl-base-1.0", file: "slow.bin" }, where: "rented" })).json();
+  assert.ok(quick.id && slow.id);
+  const wait = async (id) => {
+    for (let i = 0; i < 400; i++) {
+      const run = (await json("/api/runs")).runs.find((r) => r.id === id);
+      if (run && run.status !== "running") return run.status;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error("never finished");
+  };
+  await wait(quick.id);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await json("/api/rent")).status, "RUNNING", "the other download keeps it up");
+  // The flag can be put on the running one from the page, and taken back.
+  assert.equal((await (await post(`/api/runs/${slow.id}/stop-after`, { on: true })).json()).stopAfter, true);
+  assert.equal((await (await post(`/api/runs/${slow.id}/stop-after`, { on: false })).json()).stopAfter, false);
+  assert.equal((await (await post(`/api/runs/${slow.id}/stop-after`, {})).json()).stopAfter, true);
+  await wait(slow.id);
+  // The stand-in's own record, not the site's status, which spends the per-minute budget of RunPod calls.
+  for (let i = 0; i < 80 && runpod.state.pods[rented.id].status === "RUNNING"; i++) await new Promise((r) => setTimeout(r, 25));
+  const after = await json("/api/rent");
+  assert.equal(after.status, "EXITED", "the last download over, the machine stops");
+  assert.equal(after.stopReason, "done");
+  assert.equal((await (await post(`/api/runs/nope/stop-after`, {})).status), 404);
+  agent.state.slowMs = undefined;
+  await post("/api/rent/delete", {});
+  own.close();
 });
