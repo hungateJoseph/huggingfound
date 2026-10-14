@@ -1070,6 +1070,37 @@ await step("hosted: an image model is downloaded onto the rented GPU and picture
   await visitor.keyboard.press("Escape");
 });
 
+await step("hosted: a machine whose agent lost track of its model is restarted in place, or reset when it can be, and the picture asked again", async () => {
+  await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
+  await visitor.waitForSelector("#image-go");
+  // An older agent has no reset: RunPod restarts the machine in place, and
+  // the page waits until the failed job's record is gone from it.
+  rentedAgent.state.lostOnce = false;
+  const actionsBefore = runpod.state.actions.length;
+  await visitor.fill("#image-prompt", "a lost model, found");
+  await visitor.click("#image-go");
+  await visitor.waitForFunction(() => /Restarting it in place/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  assert.deepEqual(runpod.state.actions.slice(actionsBefore).map((a) => a.split(":")[1]), ["restart"]);
+  await new Promise((r) => setTimeout(r, 3500));
+  assert.equal(await visitor.locator("#image-out .image-card").count(), 0, "still waiting: the old agent remembers the job");
+  rentedAgent.state.jobs.length = 0;
+  await visitor.waitForSelector("#image-out .image-card", { timeout: 20000 });
+  assert.match(await visitor.locator("#image-log").innerText(), /Asking the rented GPU[\s\S]*Restarting it in place[\s\S]*The machine is back\.[\s\S]*Done in \d+ s/, "the whole log stays through the restart");
+  assert.equal(rentedAgent.state.jobs.at(-1).prompt, "a lost model, found");
+  // A newer agent drops the model on request, with no restart.
+  rentedAgent.state.unloadRoute = true;
+  rentedAgent.state.lostOnce = false;
+  await visitor.click("#image-go");
+  // A new picture replaces the one shown; the log tells the reset from a restart.
+  await visitor.waitForFunction(() => /loading it again[\s\S]*Done in \d+ s/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  assert.equal(rentedAgent.state.unloads, 1);
+  assert.equal(runpod.state.actions.length, actionsBefore + 1, "no second restart");
+  assert.doesNotMatch(await visitor.locator("#image-log").innerText(), /Restarting/);
+  assert.equal(await visitor.locator("#image-out .image-card").count(), 1);
+  rentedAgent.state.unloadRoute = false;
+  await visitor.keyboard.press("Escape");
+});
+
 await step("hosted: the bar opens one list of everything on the machine, with Open and Remove", async () => {
   // The poll refreshes the counts in the bar.
   await visitor.request.get(`${hostedBase}/api/rent`);

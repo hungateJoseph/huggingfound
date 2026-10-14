@@ -514,10 +514,23 @@ test("stopping ends the charge and frees the chat server; starting brings both b
   s = await json("/api/state");
   assert.equal(s.chatServer.url, ollama.url);
   assert.equal(s.chatServer.rented, true);
+  // A restart keeps the machine, its card and its disk, and brings a fresh agent.
+  for (let i = 0; i < 4 && (await json("/api/rent")).status !== "RUNNING"; i++);
+  const restarted = await (await post("/api/rent/restart", {})).json();
+  assert.deepEqual(runpod.state.actions.slice(-1), [`${stopped.id}:restart`]);
+  assert.ok(["STARTING", "RUNNING"].includes(restarted.status), restarted.status);
+  assert.equal(readEnv(envFile).RUNPOD_POD_ID, stopped.id, "the same machine");
+  for (let i = 0; i < 4 && (await json("/api/rent")).status !== "RUNNING"; i++);
   const stoppedAgain = await (await post("/api/rent/stop", {})).json();
   assert.equal(stoppedAgain.status, "EXITED");
   const remote = await json(`/api/model?id=${QWEN}`);
   assert.ok(remote.plan.steps.length >= 3);
+  // Restarting a stopped machine starts it.
+  const fromStopped = await (await post("/api/rent/restart", {})).json();
+  assert.deepEqual(runpod.state.actions.slice(-2), [`${stopped.id}:restart`, `${stopped.id}:start`]);
+  assert.ok(["STARTING", "RUNNING"].includes(fromStopped.status), fromStopped.status);
+  for (let i = 0; i < 4 && (await json("/api/rent")).status !== "RUNNING"; i++);
+  assert.equal((await (await post("/api/rent/stop", {})).json()).status, "EXITED");
 });
 
 test("a stopped machine's plan note, when the server address is set by hand, says it is stopped", async () => {

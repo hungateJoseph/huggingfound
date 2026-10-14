@@ -237,6 +237,33 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   assert.equal((await finish(long.id)).status, "completed");
   const askedLong = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
   assert.deepEqual([askedLong.frames, askedLong.fps, askedLong.width, askedLong.height], [243, 24, 1344, 768]);
+  // Running out of memory drops the worker's model and says so: the agent
+  // forgets it too and loads it again for the next job.
+  const loads = () => fs.readFileSync(workerLog, "utf8").trim().split("\n").filter((l) => JSON.parse(l).op === "load").length;
+  const oom = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "out of memory please", frames: 33 })).json();
+  assert.match((await finish(oom.id)).error, /ran out of memory/);
+  assert.equal((await (await get("/health")).json()).loaded, null, "nothing is loaded after it");
+  let before = loads();
+  const next = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "waves again", frames: 33 })).json();
+  assert.equal((await finish(next.id)).status, "completed");
+  assert.equal(loads() - before, 1, "loaded again first");
+  // An older worker drops it without a word: the agent's stale record sends
+  // the next job to an empty worker, and the answer "no model is loaded"
+  // has it load the model again and ask once more, with no failure shown.
+  const quiet = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "out of memory quietly", frames: 33 })).json();
+  assert.match((await finish(quiet.id)).error, /ran out of memory/);
+  assert.equal((await (await get("/health")).json()).loaded, `${WAN}/model_index.json`, "the agent still believes it loaded");
+  before = loads();
+  const healed = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "waves once more", frames: 33 })).json();
+  assert.equal((await finish(healed.id)).status, "completed");
+  assert.equal(loads() - before, 1, "loaded again, then made");
+  // The site can drop the worker's model outright.
+  assert.equal((await post("/unload", {})).status, 200);
+  assert.equal((await (await get("/health")).json()).loaded, null);
+  before = loads();
+  const fresh = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "after the reset", frames: 33 })).json();
+  assert.equal((await finish(fresh.id)).status, "completed");
+  assert.equal(loads() - before, 1);
   // Going back to sd-server hands the card over: the worker's model is unloaded first.
   const sd = await (await post("/jobs", { repo: REPO, file: FILE, prompt: "a boat" })).json();
   assert.equal((await finish(sd.id)).status, "completed");

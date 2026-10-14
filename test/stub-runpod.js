@@ -102,6 +102,15 @@ export function startStubRunpod() {
           pod.status = "STARTING";
           return reply(200, view(pod));
         }
+        // A restart keeps the host, card and disk; the container comes back
+        // through STARTING, where the polls move it along.
+        if (data.action === "restart") {
+          if (pod.status !== "RUNNING") return reply(409, { message: "Action not valid for current pod status" });
+          pod.pastUptime = (pod.pastUptime ?? 0) + (pod.runtime?.uptime ?? 0);
+          pod.runtime = null;
+          pod.status = "STARTING";
+          return reply(200, view(pod));
+        }
         return reply(400, { message: "bad action" });
       }
       // Only the fields sent change; a persistent disk grows, never shrinks.

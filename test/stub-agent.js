@@ -108,6 +108,16 @@ export function startStubAgent() {
         state.polls = (state.polls ?? 0) + 1;
         return res.end(JSON.stringify({ id: task.id, status: task.status, error: task.error, lines: task.lines.slice(after), cursor: task.lines.length }));
       }
+      // Newer agents drop their model on request; older ones have no such route.
+      if (req.url === "/unload" && req.method === "POST") {
+        if (!state.unloadRoute) {
+          res.statusCode = 404;
+          return res.end("{}");
+        }
+        state.unloads = (state.unloads ?? 0) + 1;
+        state.loaded = null;
+        return res.end(JSON.stringify({ ok: true }));
+      }
       if (req.url === "/jobs" && req.method === "POST") {
         const id = `${state.jobs.length + 1}`.padStart(16, "0");
         state.jobs.push({ id, ...data });
@@ -125,6 +135,11 @@ export function startStubAgent() {
           return res.end("{}");
         }
         if (/fail please/.test(job.prompt)) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the model choked", image: null }));
+        // An agent that believes its model loaded while the worker dropped it, until it is reset.
+        if (/lost model/.test(job.prompt) && !state.lostOnce) {
+          state.lostOnce = true;
+          return res.end(JSON.stringify({ id: m[1], status: "failed", error: "ValueError: no model is loaded (at worker.py:546 generate < worker.py:727 main)", image: null }));
+        }
         // A folder model of a video family answers with a clip.
         const video = job.file === "model_index.json" && /wan|video/i.test(job.repo);
         if (n < 2) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: video ? "video" : "image", progress: 0.5, error: null, image: null, video: null }));

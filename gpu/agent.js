@@ -272,9 +272,16 @@ async function ensureWorkerLoaded(target, adapters = []) {
 async function unloadWorker() {
   if (!py.proc) return;
   if (py.dir) await askWorker({ op: "unload" });
+  forgetWorkerModel();
+}
+
+// The worker holds no model (it said so, or dropped it): the next job loads one.
+function forgetWorkerModel() {
   py.dir = null;
   py.key = null;
   py.kind = null;
+  py.note = "";
+  py.mode = "";
 }
 
 // ---- the image server --------------------------------------------------------
@@ -384,13 +391,26 @@ function startJob(input) {
           if (lora && !fs.existsSync(lora)) throw new Error("the add-on's LoRA is not on this machine yet");
           adapters.push({ kind: input.addon.kind, path: main, lora, scale: input.addon.scale, faceid: /faceid/i.test(input.addon.file), plus: /plus/i.test(input.addon.file), xl: /sdxl/i.test(input.addon.file) });
         }
-        await ensureWorkerLoaded(file, adapters);
-        job.kind = py.kind;
-        job.note = py.note;
-        job.status = "generating";
         const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined };
-        const answer = await askWorker(req, (p) => (job.progress = p));
-        if (!answer.ok) throw new Error(answer.error || "the worker made nothing");
+        let answer;
+        for (let attempt = 0; ; attempt++) {
+          await ensureWorkerLoaded(file, adapters);
+          job.kind = py.kind;
+          job.note = py.note;
+          job.status = "generating";
+          answer = await askWorker(req, (p) => (job.progress = p));
+          if (answer.ok) break;
+          // The worker drops its model after running out of memory; a
+          // record here that says otherwise would send the next job to an
+          // empty worker, which answers "no model is loaded". Either way
+          // the record is cleared, and a stale one is corrected by loading
+          // the model again and asking once more.
+          const stale = /no model is loaded/i.test(answer.error || "");
+          if (answer.unloaded || stale) forgetWorkerModel();
+          if (!stale || attempt > 0) throw new Error(answer.error || "the worker made nothing");
+          job.status = "loading";
+          job.progress = null;
+        }
         if (answer.video) {
           job.video = answer.video;
           job.kind = "video";
@@ -900,6 +920,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/log") return send(res, 200, { sd: sd.tail, lastFailure: sd.lastFailure ?? null, python: py.tail, loaded: sd.file ? path.relative(MODELS_DIR, sd.file).split(path.sep).join("/") : null });
     // The site renews the lease while it sees activity (a chat sent from the
     // browser, a download it is relaying). A lease is at most the idle time.
+    // Drops whatever either engine holds, so the next job loads its model
+    // afresh: the site's way to reset a worker whose state it doubts.
+    if (req.method === "POST" && url.pathname === "/unload") {
+      stopServer();
+      await unloadWorker().catch(() => forgetWorkerModel());
+      return send(res, 200, { ok: true });
+    }
     if (req.method === "POST" && url.pathname === "/lease") {
       const body = await readJson(req, 4 * 1024);
       const minutes = Math.min(IDLE_MINUTES > 0 ? IDLE_MINUTES : IDLE_CEILING_MINUTES, Math.max(1, Number(body.minutes) || IDLE_MINUTES || 30));

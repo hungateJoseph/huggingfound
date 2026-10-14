@@ -2398,7 +2398,51 @@ async function agentPicture(agent, args, onLine = () => {}) {
 
 // A job on the rented GPU: a picture, or a clip from a video family. The
 // browser asks the machine directly and keeps the result in the page.
-async function agentJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false }, onLine = () => {}) {
+async function agentJob(agent, args, onLine = () => {}) {
+  // While a job runs, the machine's status changes (a restart below, say)
+  // do not redraw the window and lose its log.
+  state.agentBusy = (state.agentBusy ?? 0) + 1;
+  try {
+    return await agentJobOnce(agent, args, onLine);
+  } catch (err) {
+    // The machine's worker drops its model after running out of memory;
+    // an agent that still believes it loaded sends the next job to an
+    // empty worker. The agent is reset and the job asked once more.
+    if (!/no model is loaded/i.test(err.message)) throw err;
+    await resetAgent(agent, err.jobId, onLine);
+    return agentJobOnce(agent, args, onLine);
+  } finally {
+    state.agentBusy--;
+  }
+}
+
+// Resets the machine's agent. A newer agent drops its model on request; an
+// older one is restarted in place by RunPod, which keeps its host, card and
+// disk, and is back when the failed job's record is gone from it.
+async function resetAgent(agent, jobId, onLine) {
+  const reset = await fetch(`${agent}/unload`, { method: "POST" }).catch(() => null);
+  if (reset?.ok) {
+    onLine("The machine had lost track of its model after the last failure; loading it again.");
+    return;
+  }
+  onLine("The machine lost track of its model after the last failure. Restarting it in place, about a minute; its disk and models stay. Then asking again.");
+  try {
+    await api.post("/api/rent/restart", {});
+  } catch (err) {
+    throw new Error(`the machine could not be restarted (${err.message}); stop it from the GPU panel, run this again, and it starts afresh`);
+  }
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 3000));
+    if (Date.now() - started > 6 * 60e3) throw new Error("the machine has not come back within six minutes of restarting; try again in a moment");
+    const probe = await fetch(`${agent}/jobs/${jobId}`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
+    // A fresh agent has no record of the failed job; the old one still does.
+    if (probe?.status === 404) break;
+  }
+  onLine("The machine is back.");
+}
+
+async function agentJobOnce(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false }, onLine = () => {}) {
   api.post("/api/rent/touch", {}).catch(() => {});
   const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
   // An add-on on an SDXL base draws at SDXL's size.
@@ -2459,7 +2503,7 @@ async function agentJob(agent, { repo, file, prompt, negative, quality, init = n
       onLine(`Done in ${Math.round((Date.now() - started) / 1000)} s${job.loadSeconds > 5 ? ` (${Math.round(job.loadSeconds)} s of it loading the model)` : ""}.`);
       return job;
     }
-    if (job.status === "failed") throw new Error(job.error || "the machine could not make the picture");
+    if (job.status === "failed") throw Object.assign(new Error(job.error || "the machine could not make the picture"), { jobId: id });
     if (Date.now() - started > 30 * 60e3) throw new Error("no picture after 30 minutes");
   }
 }
@@ -3532,7 +3576,7 @@ async function rentalTick() {
   renderRental();
   if (!wasReady && state.rental?.ready) {
     notice("The rented GPU is ready. Chat models are downloaded to it and run there.", "ok");
-    if (state.open) openModel(state.open);
+    if (state.open && !state.agentBusy) openModel(state.open);
   }
 }
 

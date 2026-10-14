@@ -40,6 +40,12 @@ rl.on("line", (line) => {
     if (process.env.FAKE_WORKER_LOG) fs.appendFileSync(process.env.FAKE_WORKER_LOG, JSON.stringify({ ...req, init: req.init ? `${req.init.length} chars` : null, ipImage: req.ipImage ? `${req.ipImage.length} chars` : null }) + "\n");
     if ((loaded.adapters ?? []).some((a) => a.kind !== "lora") && !req.ipImage) return say({ ok: false, error: "ValueError: this add-on needs a reference picture" });
     if (/fail please/.test(req.prompt)) return say({ ok: false, error: "RuntimeError: the model choked" });
+    // Out of memory drops the model, as worker.py does; "quietly" is the
+    // older worker, which dropped it without saying so.
+    if (/out of memory/.test(req.prompt)) {
+      loaded = null;
+      return say({ ok: false, error: "the GPU ran out of memory for this model at this size; try a smaller picture, fewer frames, or a bigger card", unloaded: !/quietly/.test(req.prompt) });
+    }
     say({ progress: 0.5 });
     if (loaded.kind === "video") return say({ ok: true, video: MP4, frames: req.frames ?? 33, fps: 16 });
     return say({ ok: true, image: PNG, width: req.width ?? 1024, height: req.height ?? 1024 });

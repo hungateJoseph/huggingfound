@@ -696,6 +696,29 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       return this.status({ probe: false });
     },
 
+    // Restarts the machine's container in place: the same host, card and
+    // disk, with a fresh agent. For a machine whose agent has lost track of
+    // what its worker holds. A stopped machine is started instead.
+    async restart() {
+      const id = podId();
+      if (!id) throw new RentError("Nothing is rented.", 404);
+      save({ RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      lastActivity = now();
+      try {
+        await request("POST", `/pods/${encodeURIComponent(id)}/action`, { action: "restart" });
+      } catch (err) {
+        if (err.status === 404) {
+          forget(id);
+          return { rented: false, gone: true };
+        }
+        if (/HTTP 409/.test(err.message)) return this.start();
+        throw err;
+      }
+      point(id, Number(env().RUNPOD_POD_GB) || 24);
+      last = null;
+      return this.status({ probe: false });
+    },
+
     // Grows the machine's disk; RunPod never shrinks one. A model bigger
     // than the disk is then fetched onto the same machine, with what the
     // disk already holds kept.

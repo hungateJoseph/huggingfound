@@ -794,6 +794,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           return send(res, 200, await mine.stop({ reason: body.reason === "away" ? `away:${Number(body.minutes) || ""}` : body.reason === "done" ? "done" : "" }));
         }
         if (req.method === "POST" && action === "start") return send(res, 200, await mine.start());
+        // The same machine, restarted in place: its agent starts afresh, its disk and card stay.
+        if (req.method === "POST" && action === "restart") return send(res, 200, await mine.restart());
         // A bigger disk for the same machine, when a model does not fit the one it has.
         if (req.method === "POST" && action === "grow") {
           const body = await json(req);

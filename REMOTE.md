@@ -154,6 +154,12 @@ The machine takes two to four minutes to start. Meanwhile:
   disk; running the step again starts the machine and goes on from them, and
   half-written parts from the cut-off are swept when the machine comes up.
   A download in progress keeps the idle timer from stopping the machine.
+- A clip or picture that runs out of memory on the card fails with a plain
+  message (fewer frames, a smaller picture, or a bigger card), and the
+  machine's worker drops the model. The next job loads it again. A machine
+  on an older image forgot to do so and answered "no model is loaded"; the
+  page now resets such a machine, or restarts it in place through RunPod
+  (same host, card and disk, about a minute), and asks again by itself.
 - If the full machine image cannot be pulled (it is published as a GitHub
   package that has to be public), HuggingFound rents a plain Ollama machine
   instead: chat models work, image models stay on your computer, and the

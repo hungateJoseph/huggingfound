@@ -734,9 +734,13 @@ def main():
             import traceback
 
             msg = f"{type(err).__name__}: {err}"
+            # The model is dropped after an out-of-memory failure, and the
+            # answer says so, so the agent loads it again for the next job.
+            unloaded = False
             if "out of memory" in msg.lower():
                 msg = "the GPU ran out of memory for this model at this size; try a smaller picture, fewer frames, or a bigger card"
                 unload()
+                unloaded = True
             else:
                 # Where it broke, so a failure inside a model's own code can be followed.
                 frames = traceback.extract_tb(err.__traceback__)[-3:]
@@ -744,7 +748,7 @@ def main():
                 if where:
                     msg = f"{msg} (at {where})"
             traceback.print_exc()
-            say({"ok": False, "error": msg})
+            say({"ok": False, "error": msg, "unloaded": unloaded})
 
 
 if __name__ == "__main__":
