@@ -152,9 +152,11 @@ test("the files a diffusers folder needs: index, configs, one copy of each weigh
     { name: "FL2VA/transformer/model-00001-of-00002.safetensors", gb: 60 }, { name: "scripts/run.py", gb: 0 },
     // MiniMax-H3's reference-to-video partition, which the try box never uses.
     { name: "transformer_ref/config.json", gb: 0 }, { name: "transformer_ref/diffusion_pytorch_model.safetensors", gb: 62 },
+    // A tokenizer's merges are part of the model; a text file at the top is notes.
+    { name: "tokenizer/merges.txt", gb: 0 }, { name: "NOTICE.txt", gb: 0 },
   ];
   const repo = repoFiles(files);
-  assert.deepEqual(repo.files.map((f) => f.from), ["model_index.json", "scheduler/scheduler_config.json", "tokenizer/tokenizer.json", "unet/config.json", "unet/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"], "the half-precision variant over the full one, safetensors over .bin, a .bin alone kept, no single-file checkpoint, no samples, no reference partition");
+  assert.deepEqual(repo.files.map((f) => f.from), ["model_index.json", "scheduler/scheduler_config.json", "tokenizer/tokenizer.json", "unet/config.json", "unet/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin", "tokenizer/merges.txt"], "the half-precision variant over the full one, safetensors over .bin, a .bin alone kept, no single-file checkpoint, no samples, no reference partition, the merges but not the notes");
   assert.equal(repo.files.find((f) => /fp16/.test(f.from)).to, "unet/diffusion_pytorch_model.safetensors");
   assert.equal(repo.gb.toFixed(2), "5.31");
   assert.equal(repoFiles([{ name: "flux1-dev-Q8_0.gguf", gb: 12 }]), null, "no index, no folder");

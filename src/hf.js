@@ -240,11 +240,13 @@ export function repoFiles(files) {
   if (!names.has("model_index.json")) return null;
   const keep = [];
   let gb = 0;
-  const skipName = /\.(md|png|jpg|jpeg|gif|webp|mp4|txt|py|ipynb|gitattributes|msgpack|h5|onnx|pt|pth|ckpt)$/i;
+  const skipName = /\.(md|png|jpg|jpeg|gif|webp|mp4|py|ipynb|gitattributes|msgpack|h5|onnx|pt|pth|ckpt)$/i;
   for (const f of files) {
     const name = f.name;
     if (name.startsWith(".") || skipName.test(name)) continue;
     const dir = name.includes("/") ? name.split("/")[0] : "";
+    // A tokenizer's merges.txt is part of the model; a .txt at the top is notes.
+    if (/\.txt$/i.test(name) && !dir) continue;
     if (/^(images?|assets?|examples?|samples?|demo|docs?|scripts?|notebooks?|tests?)$/i.test(dir)) continue;
     // The index names components one folder deep. Anything deeper is a
     // second copy of the model for another use (a variant, a source

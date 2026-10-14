@@ -355,7 +355,8 @@ def load_modular(model_dir, dtype, weights, n, first, total):
             pipe.load_components(**loaded)
         missing = [name for name in (names or list(getattr(pipe, "component_names", []) or [])) if getattr(pipe, name, None) is None]
         if missing:
-            why = " | ".join(note.strip().splitlines()[0][:300] for note in notes if any(m in note for m in missing)) or "the library gave no reason"
+            # The library's reason follows a line break; the whole note comes along.
+            why = " | ".join(" ".join(note.split())[:400] for note in notes if any(m in note for m in missing)) or "the library gave no reason"
             raise ValueError(f"the model's {', '.join(missing)} did not load: {why}")
         if n and needed * 1.15 < first:
             pipe.to("cuda")
