@@ -162,6 +162,10 @@ The machine takes two to four minutes to start. Meanwhile:
   it is done, and the cap stops the machine as soon as the work ends. A
   machine that stops under a clip anyway (a Stop from another tab, RunPod
   itself) is reported within seconds, with the reason, not waited on.
+- A finished clip is fetched from the machine as bytes, apart from the
+  status the page polls for; a machine on an older image sends it with the
+  status, tens of megabytes at once, and the page waits for that patiently
+  rather than taking a slow answer for a lost machine.
 - A clip or picture that runs out of memory on the card fails with a plain
   message (fewer frames, a smaller picture, or a bigger card), and the
   machine's worker drops the model. The next job loads it again. A machine

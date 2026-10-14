@@ -125,15 +125,25 @@ export function startStubAgent() {
         res.statusCode = 202;
         return res.end(JSON.stringify({ id, status: "loading" }));
       }
-      const m = req.url.match(/^\/jobs\/(\w+)$/);
+      const m = req.url.match(/^\/jobs\/(\w+)(\/result)?(?:\?(.*))?$/);
       if (m) {
-        const n = (polls.get(m[1]) ?? 0) + 1;
-        polls.set(m[1], n);
         const job = state.jobs.find((j) => j.id === m[1]);
         if (!job) {
           res.statusCode = 404;
           return res.end("{}");
         }
+        const video = job.file === "model_index.json" && /wan|video/i.test(job.repo);
+        // The result as bytes, as a newer agent serves it.
+        if (m[2]) {
+          state.results = (state.results ?? 0) + 1;
+          const bytes = video ? Buffer.from("fake mp4") : Buffer.from(PNG, "base64");
+          res.setHeader("Content-Type", video ? "video/mp4" : "image/png");
+          return res.end(bytes);
+        }
+        // A lean poll leaves the result out, unless this stands in for an older agent.
+        const lean = /\blean=1\b/.test(m[3] ?? "") && state.lean !== false;
+        const n = (polls.get(m[1]) ?? 0) + 1;
+        polls.set(m[1], n);
         if (/fail please/.test(job.prompt)) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the model choked", image: null }));
         // A long clip: generating until the test releases it.
         if (/slow please/.test(job.prompt) && !state.release) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: "image", progress: 0.27, error: null, image: null, video: null }));
@@ -143,8 +153,8 @@ export function startStubAgent() {
           return res.end(JSON.stringify({ id: m[1], status: "failed", error: "ValueError: no model is loaded (at worker.py:546 generate < worker.py:727 main)", image: null }));
         }
         // A folder model of a video family answers with a clip.
-        const video = job.file === "model_index.json" && /wan|video/i.test(job.repo);
         if (n < 2) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: video ? "video" : "image", progress: 0.5, error: null, image: null, video: null }));
+        if (lean) return res.end(JSON.stringify({ id: m[1], status: "completed", kind: video ? "video" : "image", error: null, image: null, video: null, result: true, bytes: video ? 8 : Buffer.from(PNG, "base64").length }));
         return res.end(JSON.stringify(video ? { id: m[1], status: "completed", kind: "video", error: null, image: null, video: Buffer.from("fake mp4").toString("base64") } : { id: m[1], status: "completed", kind: "image", error: null, image: PNG, video: null }));
       }
       res.statusCode = 404;

@@ -2481,9 +2481,7 @@ async function agentJobOnce(agent, { repo, file, prompt, negative, quality, init
     await new Promise((r) => setTimeout(r, 1500));
     let job;
     try {
-      const poll = await fetch(`${agent}/jobs/${id}`, { signal: AbortSignal.timeout(10000) });
-      if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
-      job = await poll.json();
+      job = await pollJob(agent, id);
       if (misses >= 4) onLine("Reconnected to the machine.");
       misses = 0;
     } catch (err) {
@@ -2518,11 +2516,58 @@ async function agentJobOnce(agent, { repo, file, prompt, negative, quality, init
       job.took = (Date.now() - (genStarted || started)) / 1000;
       job.loadSeconds = genStarted ? (genStarted - started) / 1000 : 0;
       onLine(`Done in ${Math.round((Date.now() - started) / 1000)} s${job.loadSeconds > 5 ? ` (${Math.round(job.loadSeconds)} s of it loading the model)` : ""}.`);
+      // A newer machine keeps the result apart from the status: fetched now, as bytes.
+      if (!job.video && !job.image && job.result) {
+        const b64 = await fetchResult(agent, id, job.kind === "video" ? "clip" : "picture", job.bytes, onLine);
+        if (job.kind === "video") job.video = b64;
+        else job.image = b64;
+      }
       return job;
     }
     if (job.status === "failed") throw Object.assign(new Error(job.error || "the machine could not make the picture"), { jobId: id });
     if (Date.now() - started > 30 * 60e3) throw new Error("no picture after 30 minutes");
   }
+}
+
+// One look at a job on the machine, without its result. The usual wait is
+// short, so a machine that has gone is noticed; a wait that runs out is
+// tried once more with patience, since a machine from before sends a
+// finished clip, tens of megabytes, along with the status.
+async function pollJob(agent, id) {
+  const ask = (ms) => fetch(`${agent}/jobs/${id}?lean=1`, { signal: AbortSignal.timeout(ms) });
+  let poll;
+  try {
+    poll = await ask(10000);
+  } catch (err) {
+    if (err.name !== "TimeoutError" && err.name !== "AbortError") throw err;
+    poll = await ask(5 * 60e3);
+  }
+  if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
+  return poll.json();
+}
+
+// The finished picture or clip, as bytes, from a machine that keeps it
+// apart from the status; tried a few times, since the result waits there.
+async function fetchResult(agent, id, what, bytes, onLine) {
+  onLine(`Fetching the ${what} from the machine${bytes ? `, ${(bytes / 1048576).toFixed(1)} MB` : ""}`);
+  let last = null;
+  for (let i = 0; i < 5; i++) {
+    try {
+      const res = await fetch(`${agent}/jobs/${id}/result`, { signal: AbortSignal.timeout(10 * 60e3) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      return await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(",")[1]);
+        r.onerror = () => reject(new Error("could not read the result"));
+        r.readAsDataURL(blob);
+      });
+    } catch (err) {
+      last = err;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  throw new Error(`the ${what} is made and waits on the machine, but could not be fetched (${last?.message ?? "no answer"}); try again in a moment`);
 }
 
 // A clip from the rented GPU, shown and kept in the page until downloaded.

@@ -780,7 +780,10 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   runpod.state.pods.leftover2 = { id: "leftover2", name: "huggingfound", status: "EXITED", cost: 10.58, gpu: { id: "NVIDIA H200", count: 2, memory: 141 }, mounts: { persistent: { size: 200, path: "/root/.ollama" } }, createdAt: new Date().toISOString(), runtime: null };
   acceptDialogs = true;
   await page.click("#rent-delete");
-  await page.waitForFunction(() => document.querySelector("#rent-bar").hidden);
+  // The bar goes, or stays only to point at the leftovers: the account's
+  // other machines are kept for a few minutes, so the bar knows of them
+  // only when it happened to ask after they appeared.
+  await page.waitForFunction(() => document.querySelector("#rent-bar").hidden || /No GPU rented, but 2 other HuggingFound machines/.test(document.querySelector("#rent-bar").textContent));
   acceptDialogs = false;
   // What the click did is said, and the sizes to rent again are right there.
   await page.waitForFunction(() => /Deleted the rented machine and its models\. Nothing is charged any more\. Rent a new one below/.test(document.querySelector("#notice")?.textContent ?? ""));
@@ -1080,6 +1083,8 @@ await step("hosted: a machine whose agent lost track of its model is restarted i
   await visitor.fill("#image-prompt", "a lost model, found");
   await visitor.click("#image-go");
   await visitor.waitForFunction(() => /Restarting it in place/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  // The line is written just before RunPod is asked.
+  for (let i = 0; i < 40 && !runpod.state.actions.slice(actionsBefore).length; i++) await new Promise((r) => setTimeout(r, 250));
   assert.deepEqual(runpod.state.actions.slice(actionsBefore).map((a) => a.split(":")[1]), ["restart"]);
   await new Promise((r) => setTimeout(r, 3500));
   assert.equal(await visitor.locator("#image-out .image-card").count(), 0, "still waiting: the old agent remembers the job");
@@ -1087,9 +1092,12 @@ await step("hosted: a machine whose agent lost track of its model is restarted i
   await visitor.waitForSelector("#image-out .image-card", { timeout: 20000 });
   assert.match(await visitor.locator("#image-log").innerText(), /Asking the rented GPU[\s\S]*Restarting it in place[\s\S]*The machine is back\.[\s\S]*Done in \d+ s/, "the whole log stays through the restart");
   assert.equal(rentedAgent.state.jobs.at(-1).prompt, "a lost model, found");
-  // A newer agent drops the model on request, with no restart.
+  // A newer agent drops the model on request, with no restart. This one is
+  // also an older agent in one way: it sends the picture with the status.
   rentedAgent.state.unloadRoute = true;
   rentedAgent.state.lostOnce = false;
+  rentedAgent.state.lean = false;
+  const resultsBefore = rentedAgent.state.results ?? 0;
   await visitor.click("#image-go");
   // A new picture replaces the one shown; the log tells the reset from a restart.
   await visitor.waitForFunction(() => /loading it again[\s\S]*Done in \d+ s/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
@@ -1097,6 +1105,9 @@ await step("hosted: a machine whose agent lost track of its model is restarted i
   assert.equal(runpod.state.actions.length, actionsBefore + 1, "no second restart");
   assert.doesNotMatch(await visitor.locator("#image-log").innerText(), /Restarting/);
   assert.equal(await visitor.locator("#image-out .image-card").count(), 1);
+  assert.equal(rentedAgent.state.results ?? 0, resultsBefore, "the picture came with the status, as an older agent sends it");
+  assert.ok(resultsBefore > 0, "the earlier pictures were fetched as bytes, apart from the status");
+  rentedAgent.state.lean = true;
   rentedAgent.state.unloadRoute = false;
   await visitor.keyboard.press("Escape");
 });

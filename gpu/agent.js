@@ -1063,11 +1063,24 @@ const server = http.createServer(async (req, res) => {
       const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage });
       return send(res, 202, { id: job.id, status: job.status });
     }
-    const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})$/);
+    const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})(\/result)?$/);
     if (req.method === "GET" && m) {
       const job = jobs.get(m[1]);
       if (!job) return send(res, 404, { error: "No such job" });
-      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, note: job.note || "", error: job.error, image: job.status === "completed" ? job.image : null, video: job.status === "completed" ? job.video : null });
+      const done = job.status === "completed";
+      const b64 = done ? job.video || job.image : null;
+      // The result as bytes, apart from the status: a clip is tens of
+      // megabytes, which a poll every second or two should not carry.
+      if (m[2]) {
+        if (!b64) return send(res, done ? 500 : 409, { error: done ? "the job made nothing" : "not finished yet" });
+        const bytes = Buffer.from(b64, "base64");
+        res.writeHead(200, { "Content-Type": job.video ? "video/mp4" : "image/png", "Content-Length": bytes.length, "Cache-Control": "no-store" });
+        return res.end(bytes);
+      }
+      // A lean poll leaves the result out and says it is there to fetch;
+      // the plain one carries it, for pages from before.
+      const lean = url.searchParams.get("lean") === "1";
+      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, note: job.note || "", error: job.error, image: done && !lean ? job.image : null, video: done && !lean ? job.video : null, result: Boolean(b64), bytes: b64 ? Buffer.byteLength(b64, "base64") : 0 });
     }
     send(res, 404, { error: "Not found" });
   } catch (err) {

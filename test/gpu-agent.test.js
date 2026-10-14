@@ -232,6 +232,13 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   assert.equal(Buffer.from(made.video, "base64").toString(), "fake mp4 bytes");
   const askedClip = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
   assert.deepEqual([askedClip.frames, askedClip.width, askedClip.height], [33, 832, 480]);
+  // A lean poll leaves the clip out and says it waits; the bytes come apart from the status.
+  const lean = await (await get(`/jobs/${clip.id}?lean=1`)).json();
+  assert.deepEqual([lean.status, lean.video, lean.image, lean.result, lean.bytes], ["completed", null, null, true, 14]);
+  const raw = await get(`/jobs/${clip.id}/result`);
+  assert.equal(raw.headers.get("content-type"), "video/mp4");
+  assert.equal(Buffer.from(await raw.arrayBuffer()).toString(), "fake mp4 bytes");
+  assert.equal((await get(`/jobs/${bad.id}/result`)).status, 409, "a job that made nothing has no result");
   // A ten-second clip at 24 fps, as MiniMax-H3 makes, is within the frame limit.
   const long = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "a long walk", frames: 243, fps: 24, width: 1344, height: 768, steps: 30 })).json();
   assert.equal((await finish(long.id)).status, "completed");
