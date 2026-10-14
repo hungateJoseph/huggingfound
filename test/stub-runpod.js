@@ -24,7 +24,7 @@ export const GPUS = [
 ];
 
 export function startStubRunpod() {
-  const state = { pods: {}, created: [], actions: [], calls: [], nextId: 1, polls: 0, badKey: false, rateLimited: false };
+  const state = { pods: {}, created: [], actions: [], calls: [], catalogQueries: [], patched: [], nextId: 1, polls: 0, badKey: false, rateLimited: false, stock: {}, refuse: new Set() };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -39,7 +39,14 @@ export function startStubRunpod() {
       if ((bearer !== KEY && !(state.extraKeys ?? []).includes(bearer)) || state.badKey) return reply(401, { error: "Unauthorized" });
       if (state.rateLimited) return reply(429, { error: "Too Many Requests" });
       const data = body ? JSON.parse(body) : {};
-      if (req.method === "GET" && url.pathname === "/catalog/gpus") return reply(200, { gpus: GPUS });
+      // Stock is per card count: `state.stock[id][count]` overrides a card's
+      // availability for that many on one host.
+      const count = Number(url.searchParams.get("count") || 1);
+      const stocked = (g, n = count) => ({ ...g, availability: state.stock?.[g.id]?.[n] ?? g.availability });
+      if (req.method === "GET" && url.pathname === "/catalog/gpus") {
+        state.catalogQueries.push(url.search);
+        return reply(200, { gpus: GPUS.map((g) => stocked(g)) });
+      }
       // Every pod on the account, as RunPod lists them (deleted ones included, as TERMINATED).
       if (req.method === "GET" && url.pathname === "/pods") return reply(200, { pods: Object.values(state.pods).map(view), pagination: { nextCursor: null } });
       // The pod bill: what each pod has run so far at its price, as today's
@@ -58,6 +65,8 @@ export function startStubRunpod() {
         const gpu = GPUS.find((g) => g.id === data.gpu?.id);
         if (!gpu) return reply(422, { message: "unknown gpu" });
         if (gpu.availability === "NONE") return reply(409, { message: "no capacity" });
+        // Gone between the listing and the request, as RunPod says it.
+        if (state.refuse?.has(gpu.id) || stocked(gpu, data.gpu?.count ?? 1).availability === "NONE") return reply(400, { message: "There are no longer any instances available with the requested specifications. Please refresh and try again." });
         const id = `pod${state.nextId++}abc`;
         const pod = { id, name: data.name, image: data.image, status: "PROVISIONING", cost: gpu.price.secure * (data.gpu.count ?? 1), gpu: { id: gpu.id, count: data.gpu.count ?? 1, memory: gpu.memory }, ports: data.ports, env: data.env, mounts: data.mounts, disk: data.disk, dataCenterId: "US-KS-2", createdAt: new Date().toISOString(), startedAt: null, runtime: null, polls: 0 };
         state.pods[id] = pod;
@@ -94,6 +103,16 @@ export function startStubRunpod() {
           return reply(200, view(pod));
         }
         return reply(400, { message: "bad action" });
+      }
+      // Only the fields sent change; a persistent disk grows, never shrinks.
+      if (req.method === "PATCH" && !m[2]) {
+        state.patched.push({ id: pod.id, ...data });
+        if (data.mounts?.persistent) {
+          if (!(data.mounts.persistent.size >= (pod.mounts?.persistent?.size ?? 0))) return reply(400, { message: "Volume size can only be increased" });
+          pod.mounts = { persistent: { ...pod.mounts?.persistent, ...data.mounts.persistent } };
+        }
+        if (data.name) pod.name = data.name;
+        return reply(200, view(pod));
       }
       if (req.method === "DELETE" && !m[2]) {
         pod.status = "TERMINATED";

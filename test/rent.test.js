@@ -36,7 +36,10 @@ before(async () => {
   runpod = await startStubRunpod();
   ollama = await startStubOllama();
   agent = await startStubAgent();
-  server = createServer({ envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, runpodStatusTtl: 0, idleWatch: false });
+  // The machine's disk, as its agent reports it: roomy, so only the tests about the disk run into it.
+  agent.state.diskFreeGb = 400;
+  agent.state.diskTotalGb = 500;
+  server = createServer({ envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, idleWatch: false });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -97,9 +100,46 @@ test("with a key, each size names the cheapest card that is actually free", asyn
   assert.deepEqual([by[282].count, by[282].label, by[282].gpu.name, by[282].pricePerHour], [2, "2 × 141 GB GPUs", "H200 SXM", by[141].pricePerHour * 2]);
   assert.deepEqual([by[564].count, by[564].label, by[564].files], [4, "4 × 141 GB GPUs", 400]);
   assert.ok(!tiers.some((t) => t.gpu?.name === "MI300X"), "cards outside the secure cloud are left out");
-  assert.equal(runpod.state.calls.filter((c) => c === "GET /catalog/gpus").length, 1);
+  assert.deepEqual(by[24].cards.map((c) => c.name), ["RTX 4090", "L4"], "every free card of the size, cheapest first, for falling back");
+  // Stock is asked per card count and with the image's CUDA floor: a card
+  // free on its own may have no host with two free.
+  assert.equal(runpod.state.calls.filter((c) => c === "GET /catalog/gpus").length, 3, "once per card count");
+  assert.deepEqual(runpod.state.catalogQueries.slice(-3), [1, 2, 4].map((n) => `?include=AVAILABILITY&product=POD&cloud=SECURE&count=${n}&minCudaVersion=12.4`));
   await json("/api/rent/options");
-  assert.equal(runpod.state.calls.filter((c) => c === "GET /catalog/gpus").length, 1, "the offer is cached for a while");
+  assert.equal(runpod.state.calls.filter((c) => c === "GET /catalog/gpus").length, 3, "the offer is cached for a while");
+});
+
+test("a card RunPod runs out of between the listing and the request is passed over for the next free one of the size", async () => {
+  // Two free 24 GB cards are listed; RunPod refuses the first at the moment of renting.
+  runpod.state.refuse = new Set(["NVIDIA GeForce RTX 4090"]);
+  const res = await post("/api/rent", { gb: 24, diskGb: 50 });
+  const text = await res.text();
+  assert.equal(res.status, 200, text);
+  const r = JSON.parse(text);
+  assert.equal(r.gpu, "NVIDIA L4", "the next free card of the size");
+  assert.equal(r.costPerHour, 0.48, "at that card's price");
+  assert.deepEqual(runpod.state.created.slice(-1)[0].gpu, { id: "NVIDIA L4", count: 1, minCudaVersion: "12.4" });
+  assert.equal(runpod.state.calls.filter((c) => c === "POST /pods").length, 2, "one refused, one made");
+  assert.equal(runpod.state.calls.filter((c) => c === "GET /catalog/gpus").length, 6, "the sizes were fetched again after the refusal");
+  assert.equal((await post("/api/rent/delete", {})).status, 200);
+  // With every card of the size gone, the person is told plainly and the list is fresh.
+  runpod.state.refuse = new Set(["NVIDIA GeForce RTX 4090", "NVIDIA L4"]);
+  const none = await post("/api/rent", { gb: 24, diskGb: 50 });
+  assert.equal(none.status, 503);
+  assert.match((await none.json()).error, /ran out of 24 GB GPU hosts between listing them and renting one \(tried RTX 4090, L4\)\. The sizes have been refreshed/);
+  assert.equal(Object.values(runpod.state.pods).filter((p) => p.status !== "TERMINATED").length, 0, "nothing was made");
+  runpod.state.refuse = new Set();
+  // A size whose cards are free one at a time but not two to a host is
+  // not offered as a pair. The Refresh button asks RunPod again.
+  runpod.state.stock = { "NVIDIA H200": { 1: "LOW" } };
+  const stale = Object.fromEntries((await json("/api/rent/options")).tiers.map((t) => [t.gb, t]));
+  assert.equal(stale[141].available, false, "still the kept offer");
+  const by = Object.fromEntries((await json("/api/rent/options?fresh=1")).tiers.map((t) => [t.gb, t]));
+  assert.deepEqual([by[141].gpu.name, by[141].available, by[141].pricePerHour], ["H200 SXM", true, 3.59]);
+  assert.deepEqual([by[282].available, by[564].available], [false, false], "no host has two or four free");
+  runpod.state.stock = {};
+  await json("/api/rent/options?fresh=1");
+  runpod.state.created.length = 0;
 });
 
 test("renting makes a machine with Ollama on it and points the chat server at it", async () => {
@@ -151,7 +191,7 @@ test("while it starts, the plan says so; once Ollama answers it is ready", async
   assert.equal(running.status, "RUNNING");
   assert.equal(running.ready, false);
   ({ plan } = await json(`/api/model?id=${QWEN}`));
-  assert.match(plan.steps[0].text, /Ollama on it has not answered yet/);
+  assert.match(plan.steps[0].text, /is up but has not answered yet/);
   ollama.state.down = false;
   const ready = await json("/api/rent");
   assert.equal(ready.ready, true);
@@ -892,4 +932,19 @@ test("one machine at a time: renting is refused while another HuggingFound machi
   assert.ok((await second.others()).some((o) => o.id === a.id && !o.running));
   await second.remove();
   await first.remove();
+});
+
+test("the machine's disk grows for a model that does not fit it, and never shrinks", async () => {
+  const res = await post("/api/rent", { gb: 24, diskGb: 50 });
+  assert.equal(res.status, 200, await res.text());
+  const grown = await post("/api/rent/grow", { diskGb: 160 });
+  const text = await grown.text();
+  assert.equal(grown.status, 200, text);
+  assert.equal(JSON.parse(text).diskGb, 160, "the status carries the new size");
+  assert.deepEqual(runpod.state.patched.at(-1).mounts, { persistent: { size: 160, path: "/root/.ollama" } }, "the same mount, bigger");
+  assert.equal((await json("/api/rent")).diskGb, 160);
+  const smaller = await post("/api/rent/grow", { diskGb: 100 });
+  assert.equal(smaller.status, 400);
+  assert.match((await smaller.json()).error, /160 GB already; RunPod grows a disk but never shrinks one/);
+  assert.equal((await post("/api/rent/delete", {})).status, 200);
 });

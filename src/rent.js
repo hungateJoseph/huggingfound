@@ -116,7 +116,7 @@ export class RentError extends Error {
 // `env()` reads the saved settings and `save(updates)` writes them: the
 // RunPod key, the id of the pod HuggingFound made, and the chat server
 // address, which the rental owns while a pod exists.
-export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), statusTtl = 4000, now = Date.now }) {
+export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), statusTtl = 4000, now = Date.now, budget = BUDGET }) {
   let options = { at: 0, key: "", tiers: null };
   let last = null;
   let lastAt = 0;
@@ -221,7 +221,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   function withinBudget() {
     const t = now();
     while (spent.length && spent[0] < t - 3600e3) spent.shift();
-    return spent.filter((at) => at > t - 60e3).length < BUDGET.minute && spent.length < BUDGET.hour;
+    return spent.filter((at) => at > t - 60e3).length < budget.minute && spent.length < budget.hour;
   }
 
   async function request(method, path, body) {
@@ -270,33 +270,44 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     return data;
   }
 
-  // The GPUs on offer right now, folded into the tiers: the cheapest card
-  // with free capacity in each size, with its price an hour.
-  async function tiers() {
-    if (options.tiers && options.key === key() && now() - options.at < OPTIONS_TTL) return options.tiers;
-    let data;
+  // The GPUs on offer right now, folded into the tiers: for each size, the
+  // cards with free capacity for that many of them on one host, cheapest
+  // first, with their price an hour. RunPod's stock is per count and per
+  // CUDA floor: a card free on its own may have no host with two free, and
+  // the machine image needs CUDA 12.4, so the catalogue is asked exactly
+  // what renting will ask, once per card count.
+  async function catalog(count) {
+    return request("GET", `/catalog/gpus?include=AVAILABILITY&product=POD&cloud=SECURE&count=${count}&minCudaVersion=${MIN_CUDA}`);
+  }
+  async function tiers({ fresh = false } = {}) {
+    if (!fresh && options.tiers && options.key === key() && now() - options.at < OPTIONS_TTL) return options.tiers;
+    const lists = {};
     try {
-      data = await request("GET", "/catalog/gpus?include=AVAILABILITY&product=POD&cloud=SECURE");
+      for (const count of [...new Set(TIERS.map((t) => t.count ?? 1))]) lists[count] = (await catalog(count))?.gpus ?? [];
     } catch (err) {
       // Throttled: yesterday's prices beat no prices.
       if (err.status === 429 && options.tiers && options.key === key()) return options.tiers;
       throw err;
     }
-    const gpus = (data?.gpus ?? []).filter((g) => g.secure !== false && Number(g.memory) > 0 && gpuSupported(g));
+    const byPrice = (a, b) => a.price.secure - b.price.secure;
     const out = TIERS.map((tier) => {
-      const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.secure === "number");
-      const free = inTier.filter((g) => g.availability && g.availability !== "NONE").sort((a, b) => a.price.secure - b.price.secure);
-      const pick = free[0] ?? inTier.sort((a, b) => a.price.secure - b.price.secure)[0] ?? null;
       const count = tier.count ?? 1;
+      const gpus = lists[count].filter((g) => g.secure !== false && Number(g.memory) > 0 && gpuSupported(g));
+      // A host holds at most so many of a card; a size asking for more than that is not on offer.
+      const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.secure === "number" && !(Number(g.maxCount?.secure) >= 1 && g.maxCount.secure < count));
+      const free = inTier.filter((g) => g.availability && g.availability !== "NONE").sort(byPrice);
+      const pick = free[0] ?? inTier.sort(byPrice)[0] ?? null;
+      const card = (g) => ({ id: g.id, name: g.name || g.id, memory: g.memory, availability: g.availability ?? "UNKNOWN", pricePerHour: g.price.secure * count });
       return {
         gb: tier.gb,
         count,
         label: tierLabel(tier),
         files: tier.files,
         examples: tier.examples,
-        gpu: pick ? { id: pick.id, name: pick.name || pick.id, memory: pick.memory, availability: pick.availability ?? "UNKNOWN" } : null,
+        gpu: pick ? card(pick) : null,
         pricePerHour: pick ? pick.price.secure * count : null,
         available: Boolean(free.length),
+        cards: free.map(card),
       };
     });
     options = { at: now(), key: key(), tiers: out };
@@ -535,7 +546,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
           return { rented: false, gone: true };
         }
         // A key problem or an outage: say so, but keep what was known.
-        return { ...(last ?? { rented: true, id, status: "UNKNOWN", url: urlFor(id), gb: Number(env().RUNPOD_POD_GB) || null, idleMinutes: idleMinutes() }), error: err.message };
+        return { ...(last ?? { rented: true, id, status: "UNKNOWN", url: urlFor(id), gb: Number(env().RUNPOD_POD_GB) || null, diskGb: Number(env().RUNPOD_POD_DISK_GB) || null, idleMinutes: idleMinutes() }), error: err.message };
       }
       if (pod.status === "TERMINATED") {
         forget(id);
@@ -574,9 +585,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // alongside this one. It is stopped or deleted first, from Settings.
       const running = (await others({ fresh: true }).catch(() => [])).filter((o) => o.running);
       if (running.length) throw new RentError(`Another HuggingFound machine is already running on this RunPod account (${running.map((o) => `${o.gpu || "GPU"}, ${o.costPerHour != null ? `$${o.costPerHour.toFixed(2)} an hour` : "billing"}, ${o.id}`).join("; ")}). One machine at a time: stop or delete it under Settings first.`, 409);
-      const offer = (await tiers()).find((t) => t.gb === tier.gb);
+      let offer = (await tiers()).find((t) => t.gb === tier.gb);
       if (!offer?.gpu) throw new RentError(`RunPod lists no ${tier.gb} GB card right now.`, 503);
-      if (!offer.available) throw new RentError(`Every ${tier.gb} GB card at RunPod is taken right now. Try another size or try again later.`, 503);
+      if (!offer.available) throw new RentError(`Every ${tierLabel(tier)} at RunPod is taken right now. Try another size or try again later.`, 503);
       // Browsers may talk to the machine directly from these origins (the
       // hosted site's address, or the app's own); Ollama and the agent
       // refuse other sites' pages.
@@ -596,21 +607,41 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // that, so the public check is skipped.
       const auth = registryAuth();
       const full = auth ? true : await imageCheck(image);
-      const pod = await request("POST", "/pods", {
-        name: "huggingfound",
-        image: full ? image : OLLAMA_IMAGE,
-        ...(full && auth ? { registry: auth } : {}),
-        gpu: { id: offer.gpu.id, count: tier.count ?? 1, minCudaVersion: MIN_CUDA },
-        cloud: "SECURE",
-        disk: CONTAINER_DISK_GB,
-        ports: full ? [`${OLLAMA_PORT}/http`, `${AGENT_PORT}/http`] : [`${OLLAMA_PORT}/http`],
-        env: podEnv,
-        mounts: { persistent: { size: disk, path: MODELS_PATH } },
-      });
+      const count = tier.count ?? 1;
+      // Stock moves between the listing and the request. A card RunPod has
+      // just run out of is answered with a 400; the catalogue is asked
+      // again and the next free card of the size is tried, a few times.
+      const tried = [];
+      let pod = null;
+      let pick = null;
+      while (!pod && tried.length < 3) {
+        pick = (offer?.cards ?? [offer?.gpu]).find((c) => c && !tried.some((t) => t.id === c.id)) ?? null;
+        if (!pick) break;
+        tried.push(pick);
+        try {
+          pod = await request("POST", "/pods", {
+            name: "huggingfound",
+            image: full ? image : OLLAMA_IMAGE,
+            ...(full && auth ? { registry: auth } : {}),
+            gpu: { id: pick.id, count, minCudaVersion: MIN_CUDA },
+            cloud: "SECURE",
+            disk: CONTAINER_DISK_GB,
+            ports: full ? [`${OLLAMA_PORT}/http`, `${AGENT_PORT}/http`] : [`${OLLAMA_PORT}/http`],
+            env: podEnv,
+            mounts: { persistent: { size: disk, path: MODELS_PATH } },
+          });
+        } catch (err) {
+          if (!(err.status === 502 && /no longer any instances|not enough free|no capacity|out of stock|not available/i.test(err.message))) throw err;
+          offer = (await tiers({ fresh: true }).catch(() => null))?.find((t) => t.gb === tier.gb) ?? offer;
+        }
+      }
+      if (!pod) {
+        throw new RentError(`RunPod ran out of ${tierLabel(tier)} hosts between listing them and renting one${tried.length ? ` (tried ${tried.map((t) => t.name).join(", ")})` : ""}. The sizes have been refreshed: pick again, or try in a few minutes${disk > 200 ? "; a very large disk also narrows the hosts that qualify" : ""}.`, 503);
+      }
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
-      const totalGb = (offer.gpu.memory || tier.gb / (tier.count ?? 1)) * (tier.count ?? 1);
+      const totalGb = (pick.memory || tier.gb / count) * count;
       lastActivity = now();
-      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(offer.pricePerHour ?? pod.cost ?? ""), RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(pick.pricePerHour ?? offer?.pricePerHour ?? pod.cost ?? ""), RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
       othersCache = { at: 0, key: "", list: null };
       point(pod.id, totalGb);
       lastActivity = now();
@@ -662,6 +693,31 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       }
       point(id, Number(env().RUNPOD_POD_GB) || 24);
       lastActivity = now();
+      return this.status({ probe: false });
+    },
+
+    // Grows the machine's disk; RunPod never shrinks one. A model bigger
+    // than the disk is then fetched onto the same machine, with what the
+    // disk already holds kept.
+    async grow(diskGb) {
+      const id = podId();
+      if (!id) throw new RentError("Nothing is rented.", 404);
+      const disk = Math.round(Number(diskGb));
+      const have = Number(env().RUNPOD_POD_DISK_GB) || 0;
+      if (!(disk >= 10 && disk <= 4000)) throw new RentError("The disk must be between 10 and 4000 GB.");
+      if (disk <= have) throw new RentError(`The disk is ${have} GB already; RunPod grows a disk but never shrinks one.`);
+      let pod;
+      try {
+        pod = await request("PATCH", `/pods/${encodeURIComponent(id)}`, { mounts: { persistent: { size: disk, path: MODELS_PATH } } });
+      } catch (err) {
+        if (err.status === 404) {
+          forget(id);
+          return { rented: false, gone: true };
+        }
+        throw err;
+      }
+      save({ RUNPOD_POD_DISK_GB: String(Number(pod?.mounts?.persistent?.size) || disk) });
+      last = null;
       return this.status({ probe: false });
     },
 

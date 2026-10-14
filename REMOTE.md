@@ -36,8 +36,11 @@ done. You pay RunPod; HuggingFound charges nothing and never sees your card.
    | 80 GB | 57 GB | 100B-class models, or 70B at higher quality | $1.60 to $3 an hour |
    | 141 GB | 100 GB | the biggest open models | $3 to $4 an hour |
 
-4. Pick a size and a disk for its models (50 GB unless you plan to keep
-   several big ones), and click **Rent it**. Every chat model's window also
+4. Pick a size and a disk for its models (50 GB, or what the model you came
+   from needs with room to spare), and click **Rent it**. A disk can be grown
+   later, never shrunk: a model that will not fit the machine's disk says so
+   in its window, before anything is fetched, with a button that grows the
+   disk to the size it needs; the models already on it stay. Every chat model's window also
    offers this: two buttons at the top choose between your computer and a
    rented GPU, and choosing the GPU without one asks whether you have a
    RunPod key, takes it, and opens this section with the right size chosen.
@@ -130,6 +133,17 @@ The machine takes two to four minutes to start. Meanwhile:
   fetched by the machine through HuggingFound; their window says so.
 - Fit and speed go by the card's memory; speed is a rough guess for a
   modern NVIDIA card.
+- RunPod's stock is asked per card count and with the machine image's CUDA
+  floor, so a pair of cards is offered only when some host has two free,
+  not merely when the card exists. The sizes are kept for fifteen minutes;
+  Refresh prices asks again. Stock still moves between the listing and the
+  request: a card RunPod has just run out of is passed over for the next
+  free card of the size, up to three, and when all are gone the sizes are
+  refreshed and the card says so.
+- The machine weighs a download against its disk before fetching, file by
+  file as it goes, and stops with a plain message when the disk is full
+  rather than dying partway; a folder that stopped partway is not taken for
+  a whole model, and running the step again fetches only what is missing.
 - If the full machine image cannot be pulled (it is published as a GitHub
   package that has to be public), HuggingFound rents a plain Ollama machine
   instead: chat models work, image models stay on your computer, and the

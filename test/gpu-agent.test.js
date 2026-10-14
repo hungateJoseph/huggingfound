@@ -77,6 +77,9 @@ test("it answers health, and only the allowed origins may call it from a page", 
     await new Promise((r) => setTimeout(r, 50));
   }
   const h = await (await get("/health")).json();
+  assert.ok(h.diskFreeGb > 0 && h.diskTotalGb >= h.diskFreeGb, "the room on the models disk");
+  delete h.diskFreeGb;
+  delete h.diskTotalGb;
   assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "9", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
@@ -175,6 +178,12 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   const files = ["model_index.json", "transformer/config.json", "transformer/diffusion_pytorch_model-00001-of-00002.safetensors", "vae/diffusion_pytorch_model.safetensors"];
   assert.equal((await post("/download-repo", { repo: QWEN, files: ["transformer/config.json"] })).status, 400, "without the index nothing loads");
   assert.equal((await post("/download-repo", { repo: QWEN, files: ["model_index.json", "a/b/c/d.safetensors"] })).status, 400, "too deep");
+  // The machine weighs the model against its disk before the first byte, and says what it has.
+  const health = await (await get("/health")).json();
+  assert.ok(health.diskFreeGb > 0 && health.diskTotalGb >= health.diskFreeGb, JSON.stringify(health));
+  const noRoom = (await (await post("/download-repo", { repo: QWEN, files, gb: 1e6 })).text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.match(noRoom.at(-1).error, /the machine has [\d.]+ GB free of its \d+ GB disk, and the model's 4 files needs 1000000\.0 GB\. Grow the disk from the model's window/);
+  assert.ok(!fs.existsSync(path.join(modelsDir, "Qwen", "Qwen-Image")), "nothing was fetched");
   const res = await post("/download-repo", { repo: QWEN, files });
   assert.equal(res.status, 200);
   const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
@@ -186,6 +195,7 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   const entry = models.find((m) => m.repo === QWEN);
   assert.equal(entry.file, "model_index.json", "a folder model is listed by its index");
   assert.equal(entry.engine, "diffusers");
+  assert.deepEqual(entry.files.sort(), [...files].sort(), "with the files it holds, so a download that stopped partway is told from a whole one");
   assert.ok(entry.gb > 0);
   // Fetching again only fills gaps.
   const again = (await (await post("/download-repo", { repo: QWEN, files })).text()).trim().split("\n").map((l) => JSON.parse(l));

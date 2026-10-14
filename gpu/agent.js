@@ -476,7 +476,9 @@ function listModels() {
       if (!fs.statSync(repoDir).isDirectory()) continue;
       // A diffusers folder is one model, listed by its index file.
       if (fs.existsSync(path.join(repoDir, INDEX))) {
-        out.push({ repo: `${owner}/${repo}`, file: INDEX, gb: folderSize(repoDir), engine: "diffusers" });
+        // With the files it holds: a download that died midway has the
+        // index and not the weights, and the site must not take it for whole.
+        out.push({ repo: `${owner}/${repo}`, file: INDEX, gb: folderSize(repoDir), engine: "diffusers", files: folderFiles(repoDir) });
         continue;
       }
       for (const file of fs.readdirSync(repoDir)) {
@@ -487,6 +489,16 @@ function listModels() {
         out.push({ repo: `${owner}/${repo}`, file, gb: fs.statSync(full).size / 1024 ** 3 });
       }
     }
+  }
+  return out;
+}
+
+function folderFiles(dir, rel = "") {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const sub = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...folderFiles(path.join(dir, entry.name), sub));
+    else if (entry.isFile() && !entry.name.endsWith(".part")) out.push(sub);
   }
   return out;
 }
@@ -503,6 +515,25 @@ function folderSize(dir) {
 
 const downloading = new Set();
 setInterval(idleWatch, IDLE_CHECK_MS).unref();
+
+// Room on the models disk, in GB; null where the system cannot say.
+function diskSpace() {
+  try {
+    const s = fs.statfsSync(MODELS_DIR);
+    return { freeGb: (s.bavail * s.bsize) / 1024 ** 3, totalGb: (s.blocks * s.bsize) / 1024 ** 3 };
+  } catch {
+    return null;
+  }
+}
+
+// A download that will not fit, said before it dies midway: a full disk
+// once killed the agent with a half-written file, and the site saw only
+// a machine that stopped answering.
+function diskFull(needGb, what) {
+  const d = diskSpace();
+  const room = d ? `${d.freeGb.toFixed(1)} GB free of its ${d.totalGb.toFixed(0)} GB disk` : "no room left on its disk";
+  return new Error(`the machine has ${room}, and ${what} needs ${needGb.toFixed(1)} GB. Grow the disk from the model's window (or delete models from the machine) and run the step again; it goes on from the files already there`);
+}
 
 // ---- download tasks ---------------------------------------------------------------
 // A download runs on the machine whether or not anyone is connected: the
@@ -579,9 +610,20 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
     if (res.status === 401 || res.status === 403) throw new Error("this file is gated; it needs a Hugging Face token with the licence accepted");
     if (!res.ok) throw new Error(`Hugging Face answered HTTP ${res.status}`);
     const total = Number(res.headers.get("content-length")) || 0;
+    const room = diskSpace();
+    if (total && room && room.freeGb < total / 1024 ** 3 + 0.5) {
+      await res.body?.cancel?.().catch(() => {});
+      throw diskFull(total / 1024 ** 3, file);
+    }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     const tmp = `${dest}.part`;
     const out = fs.createWriteStream(tmp);
+    // A fault in the writer (the disk filling up) ends the download as an
+    // error of its own; left unheard it would end the whole agent.
+    let failWrite;
+    const writeFailed = new Promise((_, reject) => (failWrite = reject));
+    writeFailed.catch(() => {});
+    out.on("error", failWrite);
     let received = 0;
     let lastPct = -1;
     const early = () => new Error(`the download of ${file} ended early (${(received / 1024 ** 3).toFixed(2)} of ${(total / 1024 ** 3).toFixed(2)} GB); try again`);
@@ -589,7 +631,7 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
       try {
         for await (const chunk of res.body) {
           received += chunk.length;
-          if (!out.write(chunk)) await new Promise((r) => out.once("drain", r));
+          if (!out.write(chunk)) await Promise.race([new Promise((r) => out.once("drain", r)), writeFailed]);
           const pct = total ? Math.floor((received / total) * 100) : -1;
           if (pct !== lastPct) {
             lastPct = pct;
@@ -598,14 +640,14 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
         }
       } catch (err) {
         // A connection that drops before the announced size is the usual cause.
-        throw total && received < total ? early() : err;
+        throw err?.code === "ENOSPC" ? err : total && received < total ? early() : err;
       }
-      await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
+      await Promise.race([new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve()))), writeFailed]);
       if (total && received !== total) throw early();
     } catch (err) {
       out.destroy();
       fs.rmSync(tmp, { force: true });
-      throw err;
+      throw err?.code === "ENOSPC" ? diskFull(total / 1024 ** 3, file) : err;
     }
     fs.renameSync(tmp, dest);
     write({ status: "success" });
@@ -617,13 +659,17 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
 // A model only the diffusers library loads: every file it needs is fetched
 // into the repository's folder, kept as published. Files already there are
 // skipped, so an interrupted download picks up where it stopped.
-async function downloadRepo(repo, files, token, write) {
+async function downloadRepo(repo, files, token, write, gb = 0) {
   const have = files.filter((f) => fs.existsSync(modelFile(repo, f, true)));
   if (have.length === files.length) {
     write({ status: "already here" });
     write({ status: "success" });
     return;
   }
+  // The whole model is weighed against the disk before the first byte;
+  // a model partly here is checked file by file as it goes on.
+  const room = diskSpace();
+  if (gb && room && !have.length && room.freeGb < gb + 1) throw diskFull(gb, `the model's ${files.length} files`);
   for (const [i, f] of files.entries()) {
     if (fs.existsSync(modelFile(repo, f, true))) continue;
     write({ status: `file ${i + 1} of ${files.length}: ${f}` });
@@ -653,13 +699,16 @@ async function downloadAddon(repo, files, token, write) {
 // one by one and merged into the single checkpoint sd-server loads, named
 // `into`; the parts are removed afterwards. The same merge HuggingFound
 // does on a person's own computer.
-async function downloadFolder(repo, files, into, token, write) {
+async function downloadFolder(repo, files, into, token, write, gb = 0) {
   const dest = modelFile(repo, into);
   if (fs.existsSync(dest)) {
     write({ status: "already here" });
     write({ status: "success" });
     return;
   }
+  // The parts and the merged checkpoint sit on the disk together for a while.
+  const room = diskSpace();
+  if (gb && room && !files.some((f) => fs.existsSync(modelFile(repo, f.to, true))) && room.freeGb < gb * 2 + 1) throw diskFull(gb * 2, `the model's ${files.length} parts and the checkpoint merged from them`);
   for (const [i, f] of files.entries()) {
     write({ status: `file ${i + 1} of ${files.length}: ${f.from}` });
     await download(repo, f.from, token, (line) => (line.status === "success" ? null : write(line)), f.to);
@@ -741,7 +790,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/health") {
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
       const loaded = sd.file ? rel(sd.file) : py.dir ? (py.dir.endsWith(".safetensors") || py.dir.endsWith(".ckpt") ? rel(py.dir) : `${rel(py.dir)}/${INDEX}`) : null;
-      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null });
+      const room = diskSpace();
+      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
     // The image server's recent output and the Python side's, for a look
@@ -789,7 +839,7 @@ const server = http.createServer(async (req, res) => {
       const repo = String(body.repo ?? "");
       const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
       if (!REPO_RE.test(repo) || files.length === 0 || files.length > 120 || !files.every((f) => SUBPATH_RE.test(f)) || !files.includes(INDEX)) return send(res, 400, { error: "Bad model name" });
-      return answerDownload(req, res, body, (write) => downloadRepo(repo, files, typeof body.token === "string" ? body.token : "", write), `/download-repo|${repo}`);
+      return answerDownload(req, res, body, (write) => downloadRepo(repo, files, typeof body.token === "string" ? body.token : "", write, Number(body.gb) || 0), `/download-repo|${repo}`);
     }
     if (req.method === "POST" && url.pathname === "/download-folder") {
       touchActivity();
@@ -799,7 +849,7 @@ const server = http.createServer(async (req, res) => {
       const files = Array.isArray(body.files) ? body.files.map((f) => ({ from: String(f?.from ?? ""), to: String(f?.to ?? f?.from ?? "") })) : [];
       const partOk = (p) => SUBPATH_RE.test(p) && PART_DIRS.includes(p.split("/")[0]) && p.split("/").length === 2;
       if (!REPO_RE.test(repo) || !FILE_RE.test(into) || !into.endsWith(".safetensors") || files.length === 0 || files.length > 8 || !files.every((f) => partOk(f.from) && partOk(f.to))) return send(res, 400, { error: "Bad model name" });
-      return answerDownload(req, res, body, (write) => downloadFolder(repo, files, into, typeof body.token === "string" ? body.token : "", write), `/download-folder|${repo}|${into}`);
+      return answerDownload(req, res, body, (write) => downloadFolder(repo, files, into, typeof body.token === "string" ? body.token : "", write, Number(body.gb) || 0), `/download-folder|${repo}|${into}`);
     }
     if (req.method === "DELETE" && url.pathname === "/models") {
       const body = await readJson(req, 64 * 1024);
@@ -899,6 +949,12 @@ const server = http.createServer(async (req, res) => {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// A fault in one request or download must not take the agent down with
+// it: a dead agent leaves the machine billing with nothing to say why.
+for (const event of ["uncaughtException", "unhandledRejection"]) {
+  process.on(event, (err) => console.error(`agent fault (${event}): ${err?.stack || err}`));
 }
 
 for (const sig of ["SIGINT", "SIGTERM"]) {

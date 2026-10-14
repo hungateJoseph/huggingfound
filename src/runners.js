@@ -803,9 +803,16 @@ export function pullOnChatServer(name, fetchImpl = fetch, remote = "", { owner =
 // there and removes files, relaying progress the way it does for Ollama.
 
 export async function agentModels(agent, fetchImpl = fetch) {
+  return (await agentModelList(agent, fetchImpl)).map((m) => `${m.repo}/${m.file}`);
+}
+
+// The same, as the agent describes them: size, engine and, for a diffusers
+// folder, the files it holds (a newer agent), so a download that stopped
+// midway is not taken for a whole model.
+export async function agentModelList(agent, fetchImpl = fetch) {
   const res = await fetchImpl(`${agent}/models`, { signal: AbortSignal.timeout(4000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return ((await res.json()).models ?? []).map((m) => `${m.repo}/${m.file}`);
+  return (await res.json()).models ?? [];
 }
 
 export async function removeAgentModel(repo, file, fetchImpl = fetch, agent = "") {
@@ -836,10 +843,11 @@ export function pullImageFolderOnAgent(repo, files, into, fetchImpl = fetch, age
 
 // A model only the diffusers library loads: the agent fetches every file
 // it needs into the repository's folder.
-export function pullImageRepoOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
+export function pullImageRepoOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "", gb = 0 } = {}) {
   const list = Array.isArray(files) ? files.map((f) => String(typeof f === "string" ? f : (f?.from ?? ""))) : [];
   if (!REPO_RE.test(String(repo)) || !list.length || list.length > 120 || !list.every((f) => SUBPATH_RE.test(f))) throw new Error("Bad model arguments");
-  return agentDownload(`Downloading ${list.length} files of ${repo} on the rented GPU`, "/download-repo", { repo, files: list, token: token || undefined }, fetchImpl, agent, owner);
+  // The model's size goes along so the machine weighs it against its disk first.
+  return agentDownload(`Downloading ${list.length} files of ${repo} on the rented GPU`, "/download-repo", { repo, files: list, token: token || undefined, gb: Number(gb) > 0 ? Number(gb) : undefined }, fetchImpl, agent, owner);
 }
 
 export function pullAddonOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
@@ -891,6 +899,9 @@ async function pollAgentTask(agent, id, route, emit, cancelled, fetchImpl) {
     let state;
     try {
       const poll = await fetchImpl(`${agent}/downloads/${id}?after=${cursor}`, { signal: AbortSignal.timeout(10000) });
+      // The agent answers but has no such task: the machine restarted. The
+      // files it fetched are on its disk; a new run picks up from them.
+      if (poll.status === 404 && failures >= 6) throw new Error("the machine restarted and no longer has this download's record; the files it fetched are kept, and running the step again goes on from them");
       if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
       state = await poll.json();
       if (failures >= 6) emit("Reconnected to the machine.");

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { summarize } from "../src/hf.js";
-import { buildPlan, imageStyle } from "../src/plans.js";
+import { buildPlan, diskFor, imageStyle } from "../src/plans.js";
 import { FILES, MODELS } from "./stub-hub.js";
 
 const machine = { platform: "darwin", arch: "arm64", os: "macOS", gpu: "Apple Silicon", comfortableGb: 11 };
@@ -256,4 +256,40 @@ test("image models are labelled anime or realistic from their names", () => {
   assert.equal(imageStyle({ id: "second-state/stable-diffusion-v1-5-GGUF", tags: [] }), null);
   const plan = buildPlan({ model: withFiles("John6666/pony-realism-v23-sdxl"), files: withFiles("John6666/pony-realism-v23-sdxl").files, machine, detected: nothing(), hasToken: false });
   assert.equal(plan.style.kind, "realistic");
+});
+
+test("a model bigger than the rented machine's disk is stopped before the download, with the disk to grow to", () => {
+  const files = [{ name: "model_index.json", gb: 0 }, { name: "transformer/config.json", gb: 0 }, { name: "transformer/diffusion_pytorch_model.safetensors", gb: 62 }, { name: "text_encoder/model.safetensors", gb: 62 }, { name: "vae/diffusion_pytorch_model.safetensors", gb: 10 }];
+  const model = { ...summarize({ id: "someone/Huge-Video", pipeline_tag: "text-to-video", library_name: "diffusers", tags: ["diffusers"] }), files };
+  const gpu = (extra) => ({ ...nothing(), gpu: { url: "http://agent", running: true, files: [], ...extra } });
+  // A newer agent says what is free; the whole model is weighed against it.
+  const tight = buildPlan({ model, files, machine, detected: gpu({ diskFreeGb: 48.9, diskTotalGb: 50, rented: { rented: true, diskGb: 50 } }), hasToken: false });
+  assert.equal(tight.runnable, false);
+  assert.equal(tight.needsDisk, true);
+  assert.equal(tight.growTo, 160, "the model with a margin, over what the disk holds, in tens");
+  assert.match(tight.reason, /needs 134\.0 GB more on the rented machine's disk, and its 50 GB disk has no room for that \(48\.9 GB free of 50\)\. Grow the disk to 160 GB/);
+  // An older agent leaves only the disk's size, from the rental.
+  const old = buildPlan({ model, files, machine, detected: gpu({ rented: { rented: true, diskGb: 100 } }), hasToken: false });
+  assert.equal(old.needsDisk, true);
+  assert.equal(old.growTo, 160);
+  // Room enough: the download goes ahead, the size along for the machine's own check.
+  const roomy = buildPlan({ model, files, machine, detected: gpu({ diskFreeGb: 190, diskTotalGb: 200, rented: { rented: true, diskGb: 200 } }), hasToken: false });
+  assert.equal(roomy.runnable, true);
+  assert.equal(roomy.steps[0].args.gb, 134);
+  // A download that stopped partway: the index is there and the weights are not, so the step is not done, and only what is missing is weighed.
+  const half = { files: ["someone/Huge-Video/model_index.json"], folders: { "someone/Huge-Video": ["model_index.json", "transformer/config.json", "transformer/diffusion_pytorch_model.safetensors"] } };
+  const partial = buildPlan({ model, files, machine, detected: gpu({ ...half, diskFreeGb: 80, diskTotalGb: 150, rented: { rented: true, diskGb: 150 } }), hasToken: false });
+  assert.equal(partial.runnable, true);
+  assert.equal(partial.steps[0].done, false, "a folder with files missing is not a whole model");
+  const partialTight = buildPlan({ model, files, machine, detected: gpu({ ...half, diskFreeGb: 60, diskTotalGb: 150, rented: { rented: true, diskGb: 150 } }), hasToken: false });
+  assert.equal(partialTight.needsDisk, true);
+  assert.match(partialTight.reason, /needs 72\.0 GB more/);
+  // An agent that does not list a folder's files: the index alone still counts as the model, as before.
+  const older = buildPlan({ model, files, machine, detected: gpu({ files: ["someone/Huge-Video/model_index.json"], diskFreeGb: 1, diskTotalGb: 150 }), hasToken: false });
+  assert.equal(older.steps[0].done, true);
+  // Without a GPU the plan says what disk to rent with.
+  const none = buildPlan({ model, files, machine, detected: nothing(), hasToken: false });
+  assert.equal(none.diskGb, 160);
+  assert.equal(diskFor(134.2), 160);
+  assert.equal(diskFor(3), 50);
 });

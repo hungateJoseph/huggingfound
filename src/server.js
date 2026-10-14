@@ -10,7 +10,7 @@ import { createHub } from "./hf.js";
 import { chatServerMachine, describeMachine, hostedMachine } from "./machine.js";
 import { PICKS } from "./picks.js";
 import { buildPlan } from "./plans.js";
-import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeAgentModel, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullImageOnAgent,
+import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, agentModelList, clearOutputs, describeImageServer, detect, getRun, readTimings, recordTiming, cancelRun, removeAgentModel, removeFile, removeFolder, removeOllamaModel, ollamaUrl, pullImageOnAgent,
   pullImageFolderOnAgent,
   pullImageRepoOnAgent,
   pullAddonOnAgent,
@@ -57,7 +57,7 @@ const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDL
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
   // A hosted copy does not know the visitor's computer; it describes a
   // typical laptop and leaves the running to HuggingFound on their machine.
   const machine = hosted ? hostedMachine() : describeMachine();
@@ -80,7 +80,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // its machine exists and stops the machine when idle.
   const rentals = new Map();
   const rentalFor = (key, settings, save) => {
-    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}) }));
+    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}), ...(runpodBudget ? { budget: runpodBudget } : {}) }));
     return rentals.get(key);
   };
   // Marks a run so that, when it is over, the person's machine stops unless
@@ -715,7 +715,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const action = url.pathname.slice("/api/rent".length).replace(/^\//, "");
       const mine = ctx.rental;
       try {
-        if (req.method === "GET" && action === "options") return send(res, 200, { configured: mine.configured(), tiers: mine.configured() ? await mine.tiers() : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false })) });
+        if (req.method === "GET" && action === "options") return send(res, 200, { configured: mine.configured(), tiers: mine.configured() ? await mine.tiers({ fresh: url.searchParams.get("fresh") === "1" }) : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false })) });
         if (req.method === "GET" && action === "registries") return send(res, 200, { registries: mine.configured() ? await mine.registries() : [] });
         // The other HuggingFound machines on the RunPod account, each still
         // charging for its disk, and the way to be rid of them.
@@ -794,6 +794,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           return send(res, 200, await mine.stop({ reason: body.reason === "away" ? `away:${Number(body.minutes) || ""}` : body.reason === "done" ? "done" : "" }));
         }
         if (req.method === "POST" && action === "start") return send(res, 200, await mine.start());
+        // A bigger disk for the same machine, when a model does not fit the one it has.
+        if (req.method === "POST" && action === "grow") {
+          const body = await json(req);
+          return send(res, 200, await mine.grow(Number(body.diskGb)));
+        }
         if (req.method === "POST" && action === "delete") return send(res, 200, await mine.remove());
         return send(res, 404, { error: "Not found" });
       } catch (err) {
@@ -860,7 +865,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           const run = body.kind === "pull-image-folder"
             ? pullImageFolderOnAgent(String(args.repo ?? ""), args.files, String(args.into ?? ""), fetchImpl, agent, { owner, token })
             : body.kind === "pull-image-repo"
-              ? pullImageRepoOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token })
+              ? pullImageRepoOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token, gb: Number(args.gb) || 0 })
             : body.kind === "pull-addon"
               ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token })
               : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner, token });
@@ -1029,17 +1034,23 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // files on its disk and whether it answers.
   async function withGpu(detected, agent, ctx) {
     let files = [];
+    const folders = {};
     let addons = [];
     let running = false;
     let health = null;
     let tasks = [];
     try {
-      [files, addons, health, tasks] = await Promise.all([agentModels(agent, fetchImpl), agentAddons(agent, fetchImpl), agentHealth(agent, fetchImpl), agentTasks(agent, fetchImpl)]);
+      let models;
+      [models, addons, health, tasks] = await Promise.all([agentModelList(agent, fetchImpl), agentAddons(agent, fetchImpl), agentHealth(agent, fetchImpl), agentTasks(agent, fetchImpl)]);
+      files = models.map((m) => `${m.repo}/${m.file}`);
+      // A diffusers folder's own files, where the agent lists them: the plan
+      // tells a whole model from a download that stopped partway.
+      for (const m of models) if (Array.isArray(m.files)) folders[m.repo] = m.files;
       running = true;
     } catch {
       // not up yet, or stopped
     }
-    return { ...detected, gpu: { url: agent, running, files, addons, tasks, version: Number(health?.version) || (running ? 1 : null), rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
+    return { ...detected, gpu: { url: agent, running, files, folders, addons, tasks, version: Number(health?.version) || (running ? 1 : null), diskFreeGb: health?.diskFreeGb ?? null, diskTotalGb: health?.diskTotalGb ?? null, rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
   }
 
   // When the chat server is the rented machine, the plan can say whether it

@@ -172,6 +172,9 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
         const stale = staleMachine(model, detected.gpu, "pull-image-folder", "folder-layout models could be merged there");
         if (stale) return stale;
         const done = detected.gpu.files.includes(`${model.id}/${mergedName}`);
+        // The parts and the checkpoint merged from them share the disk for a while.
+        const room = done ? null : diskRoom(detected.gpu, model, (file.gb || 0) * 2);
+        if (room) return room;
         steps.push({
           kind: "pull-image-folder",
           args: { repo: model.id, files: file.parts.map((part) => ({ from: part.from, to: part.to })), into: mergedName },
@@ -184,6 +187,8 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
       }
       const key = `${model.id}/${file.name}`;
       const done = detected.gpu.files.includes(key);
+      const room = done ? null : diskRoom(detected.gpu, model, file.gb || 0);
+      if (room) return room;
       steps.push({
         kind: "pull-image-model",
         args: { repo: model.id, file: file.name },
@@ -385,6 +390,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
       link: model.url,
       file: repo,
       tierGb: recommendedGb(repo.gb, repo.modular),
+      diskGb: diskFor(repo.gb),
     };
   }
   if (model.gated && !hasToken) {
@@ -393,7 +399,15 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const stale = staleMachine(model, detected.gpu, "pull-image-repo", "this family could run there");
   if (stale) return stale;
   const fit = diffusersFit(repo.gb, machine, repo.modular);
-  const done = detected.gpu.files.includes(`${model.id}/model_index.json`);
+  // Whole when every file is there: an agent that lists a folder's files
+  // tells a download that stopped partway from a finished model.
+  const have = detected.gpu.folders?.[model.id] ?? null;
+  const done = have ? repo.files.every((f) => have.includes(f.from)) : detected.gpu.files.includes(`${model.id}/model_index.json`);
+  if (!done) {
+    const left = have ? repo.files.filter((f) => !have.includes(f.from)).reduce((a, f) => a + (f.gb || 0), 0) : repo.gb;
+    const room = diskRoom(detected.gpu, model, left);
+    if (room) return room;
+  }
   const fast = /turbo|lightning|schnell|distill|hyper|rapid|fast|step/i.test(model.id);
   const cfg = /flux/i.test(model.id) ? 3.5 : /qwen/i.test(model.id) ? 4 : 5;
   // MiniMax-H3 makes clips with sound of 5 to 15 seconds at 24 fps, in
@@ -419,7 +433,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
       }, repo.gb);
   const steps = [{
     kind: "pull-image-repo",
-    args: { repo: model.id, files: repo.files.map((f) => f.from) },
+    args: { repo: model.id, files: repo.files.map((f) => f.from), gb: repo.gb || 0 },
     title: `Download the model's ${repo.files.length} files on the rented GPU (${repo.gb ? repo.gb.toFixed(1) + " GB" : "size unknown"})`,
     text: `The machine fetches the model's folder straight from Hugging Face onto its own disk${model.gated ? ", with your Hugging Face token since the model is gated" : ""}; nothing comes to this computer. ${fit.text}.${detected.gpu.running ? "" : ` ${serverDownNote(detected.gpu.rented)}`}`,
     done,
@@ -460,12 +474,46 @@ function recommendedGb(gb, modular = false) {
   return gb ? gb * (modular ? 0.7 : 0.6) : null;
 }
 
+// The disk a rented machine wants for a model: the model with a margin,
+// rounded up to tens, never under the 50 GB default.
+export function diskFor(gb) {
+  return Math.max(50, Math.ceil(((Number(gb) || 0) * 1.1 + 10) / 10) * 10);
+}
+
+// Whether a download fits the rented machine's disk. A newer agent says
+// how much is free; an older one leaves only the disk's size, from the
+// rental. Over the line the plan stops before a download that would die
+// partway (a full disk once left the agent dead and the site waiting on
+// it) and says what disk to grow to.
+function diskRoom(gpu, model, needGb) {
+  if (!(needGb > 0)) return null;
+  const rented = gpu.rented ?? null;
+  const free = gpu.diskFreeGb ?? rented?.diskGb ?? null;
+  if (free == null) return null;
+  // Free space is exact; a disk's size alone leaves the file system's share unknown.
+  if (needGb + (gpu.diskFreeGb != null ? 0.5 : needGb * 0.03 + 1) <= free) return null;
+  const total = gpu.diskTotalGb ?? rented?.diskGb ?? null;
+  const used = total != null ? Math.max(0, total - free) : 0;
+  const diskGb = rented?.diskGb ?? (total != null ? Math.round(total) : null);
+  const growTo = Math.max((diskGb ?? 0) + 10, Math.ceil((used + needGb * 1.1 + 10) / 10) * 10);
+  const have = gpu.diskFreeGb != null && total != null ? ` (${free.toFixed(1)} GB free of ${Math.round(total)})` : "";
+  return {
+    runnable: false,
+    needsDisk: true,
+    diskGb,
+    growTo,
+    reason: `${model.name} needs ${needGb.toFixed(1)} GB more on the rented machine's disk, and its ${diskGb ?? "small"} GB disk has no room for that${have}. Grow the disk to ${growTo} GB and the download goes on from the files already there; or delete models from the machine.`,
+    steps: [],
+    link: model.url,
+  };
+}
+
 // Why the chat server is not answering: a rented machine says where it is
 // in its life; any other server gets the general advice.
 function serverDownNote(rented) {
   if (rented?.rented) {
     if (["PROVISIONING", "STARTING", "UNKNOWN"].includes(rented.status)) return "The rented GPU is still starting; it usually answers within a few minutes of being rented.";
-    if (rented.status === "RUNNING") return "The rented GPU is up but Ollama on it has not answered yet; try again in a moment.";
+    if (rented.status === "RUNNING") return "The rented GPU is up but has not answered yet; try again in a moment.";
     return "The rented GPU is stopped. Start it under Rent a GPU in Settings.";
   }
   return "The server is not answering right now; check the address or the tunnel in Settings.";

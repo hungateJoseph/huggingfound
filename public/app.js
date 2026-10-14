@@ -677,10 +677,14 @@ function renderModel(model, plan, choice = null) {
     // A model that runs only on a rented GPU leads straight to renting one.
     if (plan.needsGpu && choice) {
       state.rentAsk = model.id;
+      // The disk this model wants, for the rental made from here.
+      state.rentDiskWant = plan.diskGb ?? null;
       parts.push(rentAskHtml(choice, plan));
     }
     // A machine from before this feature is replaced from here.
     if (plan.staleMachine) parts.push(`<div class="actions"><button class="primary" id="replace-from-model">Replace the machine</button></div>`);
+    // A disk too small for the model grows from here; RunPod never shrinks one.
+    if (plan.needsDisk && plan.growTo) parts.push(`<div class="actions"><button class="primary" id="grow-from-model">Grow the disk to ${plan.growTo} GB</button> <small class="muted">About ${money(DISK_STOPPED_PER_GB_MONTH / 30 * (plan.growTo - (plan.diskGb || 0)))} a day more while the machine is stopped, half that while it runs.</small></div>`);
     if (plan.twin) parts.push(`<div class="actions"><button class="primary" id="open-twin">Open ${esc(plan.twin.name)}</button></div>`);
     body.innerHTML = parts.join("");
     body.querySelector("#open-settings-from-model")?.addEventListener("click", () => ($("#settings").hidden = false));
@@ -688,6 +692,22 @@ function renderModel(model, plan, choice = null) {
     body.querySelector("#replace-from-model")?.addEventListener("click", () => {
       state.rentFrom = model.id;
       replaceMachine();
+    });
+    body.querySelector("#grow-from-model")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = "Growing the disk";
+      try {
+        state.rental = await api.post("/api/rent/grow", { diskGb: plan.growTo });
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = `Grow the disk to ${plan.growTo} GB`;
+        notice(`Could not grow the disk: ${err.message}`, "bad");
+        return;
+      }
+      notice(`The disk is now ${plan.growTo} GB; the machine may restart for it, and its models stay. Run the download again and it goes on from the files already there.`, "ok");
+      await load();
+      openModel(model.id);
     });
     if (plan.needsGpu && choice) wireRentAsk(body, model, choice);
     return;
@@ -847,6 +867,7 @@ function wireRentAsk(body, model, choice) {
   body.querySelector("#ask-sizes")?.addEventListener("click", () => {
     state.rentWant = Number(body.querySelector("#ask-size")?.value) || choice.tier;
     state.rentFrom = model.id;
+    if (state.rentDiskWant) state.rentDisk = Math.max(Number(state.rentDisk ?? 50), state.rentDiskWant);
     $("#settings").hidden = false;
     $("#sec-rent").open = true;
     renderRental();
@@ -856,7 +877,8 @@ function wireRentAsk(body, model, choice) {
     const gb = Number(body.querySelector("#ask-size")?.value);
     const offer = (state.rentOptions ?? []).find((t) => t.gb === gb);
     if (!offer) return;
-    const diskGb = state.rentDisk ?? 50;
+    // The disk is at least what this model wants, with room to spare.
+    const diskGb = Math.max(Number(state.rentDisk ?? 50), Number(state.rentDiskWant ?? 0));
     if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${perQueryText(offer.pricePerHour)}${safeguardText(offer.pricePerHour)}`)) return;
     if (!(await guardOthers())) return;
     const btn = body.querySelector("#ask-rent");
@@ -869,6 +891,9 @@ function wireRentAsk(body, model, choice) {
       note.textContent = `Could not rent it: ${err.message}`;
       btn.disabled = false;
       btn.textContent = `Rent it, ${money(offer.pricePerHour)} an hour`;
+      // Stock moved under the offer: the sizes are fetched again and the window redrawn.
+      state.rentOptions = null;
+      loadRentOptions({ fresh: true });
       return;
     }
     state.rentFrom = null;
@@ -2784,11 +2809,14 @@ function rentalPhase(r) {
   return [r.status.toLowerCase(), "error"];
 }
 
-async function loadRentOptions() {
+// The sizes and prices RunPod offers. The server keeps them for a while;
+// `fresh` asks RunPod again, for the Refresh button and after a rent that
+// found the stock gone.
+async function loadRentOptions({ fresh = false } = {}) {
   state.rentOptionsLoading = true;
   renderRental();
   try {
-    const r = await api.get("/api/rent/options");
+    const r = await api.get(`/api/rent/options${fresh ? "?fresh=1" : ""}`);
     state.rentOptions = r.configured ? r.tiers : null;
     state.rentOptionsError = "";
   } catch (err) {
@@ -2904,7 +2932,7 @@ function renderRental() {
     <label class="field">
       <span>Disk for its models, in GB</span>
       <input type="number" id="rent-disk" min="10" max="4000" step="10" value="${Number(state.rentDisk ?? 50)}">
-      <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep. Fixed once rented. RunPod charges ${money(DISK_STOPPED_PER_GB_MONTH / 30 * Number(state.rentDisk ?? 50))} a day for ${Number(state.rentDisk ?? 50)} GB while the machine is stopped, half that while it runs.</small>
+      <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep. It can be grown later, when a model does not fit, never shrunk. RunPod charges ${money(DISK_STOPPED_PER_GB_MONTH / 30 * Number(state.rentDisk ?? 50))} a day for ${Number(state.rentDisk ?? 50)} GB while the machine is stopped, half that while it runs.</small>
     </label>
     <div class="actions"><button class="primary" id="rent-go" ${want ? "" : "disabled"}>Rent it</button><button class="ghost" id="rent-refresh">Refresh prices</button></div>
     <div id="rent-others"></div>
@@ -2913,7 +2941,7 @@ function renderRental() {
   loadRegistries(panel);
   panel.querySelector("#rent-refresh").addEventListener("click", () => {
     state.rentOptions = null;
-    loadRentOptions();
+    loadRentOptions({ fresh: true });
   });
   loadOthers(panel);
   panel.querySelector("#rent-go").addEventListener("click", async () => {
@@ -2931,8 +2959,9 @@ function renderRental() {
       state.rental = await api.post("/api/rent", { gb, diskGb });
     } catch (err) {
       alert(`Could not rent it: ${err.message}`);
-      btn.disabled = false;
-      btn.textContent = "Rent it";
+      // Stock moved under the list: the sizes are fetched again.
+      state.rentOptions = null;
+      loadRentOptions({ fresh: true });
       return;
     }
     await load();
