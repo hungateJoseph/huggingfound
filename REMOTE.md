@@ -136,6 +136,14 @@ The machine takes two to four minutes to start. Meanwhile:
   Settings card says so.
 - The key and the machine's id are kept in HuggingFound's settings file on
   this computer, next to the other keys.
+- MiniMax-H3 makes clips with sound, 5 to 15 seconds at 24 fps, on a
+  canvas of multiples of 32; a request outside that is moved to the
+  nearest size the model makes and the log says so. The machine loads only
+  the half it uses (words or a first picture; 134 GB of the model's 196)
+  and leaves the reference-to-video partition unloaded and undownloaded.
+  On a card smaller than that the weights stay in the machine's memory and
+  each model moves onto the card as its turn comes, the way the library
+  runs it; a 141 GB card does this with little swapping.
 
 ## Set one up yourself
 

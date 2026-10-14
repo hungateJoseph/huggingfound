@@ -79,7 +79,7 @@ function idleWatch() {
 // Add-ons (IP-Adapters, LoRAs) live apart from models; they are applied to one.
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
-const VERSION = "8";
+const VERSION = "9";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -868,7 +868,8 @@ const server = http.createServer(async (req, res) => {
       const grain = diffusers ? 16 : 64;
       const size = (n, fallback) => (Number.isInteger(n) && n >= 256 && n <= 2048 && n % grain === 0 ? n : fallback);
       const steps = Number.isInteger(body.steps) && body.steps >= 1 && body.steps <= 150 ? body.steps : diffusers ? 28 : 20;
-      const frames = Number.isInteger(body.frames) && body.frames >= 9 && body.frames <= 161 ? body.frames : 33;
+      // Up to fifteen seconds at 24 fps, the longest clip a family here makes.
+      const frames = Number.isInteger(body.frames) && body.frames >= 9 && body.frames <= 361 ? body.frames : 33;
       const fps = Number.isInteger(body.fps) && body.fps >= 8 && body.fps <= 30 ? body.fps : 16;
       const cfg = Number.isFinite(body.cfg) && body.cfg >= 0 && body.cfg <= 30 ? body.cfg : 7;
       const sampler = SAMPLERS.has(body.sampler) ? body.sampler : "euler_a";

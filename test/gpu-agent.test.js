@@ -77,7 +77,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
     await new Promise((r) => setTimeout(r, 50));
   }
   const h = await (await get("/health")).json();
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "8", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "9", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -214,6 +214,11 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   assert.equal(Buffer.from(made.video, "base64").toString(), "fake mp4 bytes");
   const askedClip = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
   assert.deepEqual([askedClip.frames, askedClip.width, askedClip.height], [33, 832, 480]);
+  // A ten-second clip at 24 fps, as MiniMax-H3 makes, is within the frame limit.
+  const long = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "a long walk", frames: 243, fps: 24, width: 1344, height: 768, steps: 30 })).json();
+  assert.equal((await finish(long.id)).status, "completed");
+  const askedLong = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
+  assert.deepEqual([askedLong.frames, askedLong.fps, askedLong.width, askedLong.height], [243, 24, 1344, 768]);
   // Going back to sd-server hands the card over: the worker's model is unloaded first.
   const sd = await (await post("/jobs", { repo: REPO, file: FILE, prompt: "a boat" })).json();
   assert.equal((await finish(sd.id)).status, "completed");

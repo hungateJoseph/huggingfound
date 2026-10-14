@@ -250,6 +250,10 @@ export function repoFiles(files) {
     // second copy of the model for another use (a variant, a source
     // checkpoint) and is not what loads.
     if (name.split("/").length > 2) continue;
+    // MiniMax-H3 carries a second transformer partition for its
+    // reference-to-video workflow, as big as the first; the try box makes
+    // clips from words or a picture, so that one stays behind.
+    if (dir === "transformer_ref") continue;
     // Single-file checkpoints at the top level are the same model again.
     if (!dir && /\.(safetensors|bin|gguf)$/i.test(name)) continue;
     if (/\.bin$/i.test(name) && [...names].some((n) => n.startsWith(`${dir}/`) && /\.safetensors$/i.test(n))) continue;
@@ -264,7 +268,9 @@ export function repoFiles(files) {
   // The variant is saved under the plain name; two files cannot land on one path.
   const seen = new Set();
   const list = keep.filter((f) => (seen.has(f.to) ? false : seen.add(f.to)));
-  return { name: "diffusers folder", repo: true, files: list, gb: gb || null };
+  // A modular pipeline (MiniMax-H3) is loaded whole in full precision, its
+  // models taking turns on the card when they do not all fit at once.
+  return { name: "diffusers folder", repo: true, files: list, gb: gb || null, modular: names.has("modular_model_index.json") };
 }
 
 // The quantization suffix Ollama wants after `hf.co/user/repo:`.

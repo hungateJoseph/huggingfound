@@ -136,6 +136,20 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   const clip = buildPlan({ model: wan, files: wan.files, machine, detected: gpu, hasToken: false });
   assert.equal(clip.tryWith.kind, "video");
   assert.deepEqual([clip.qualities.default.frames, clip.qualities.default.width, clip.qualities.default.height], [49, 832, 480]);
+  // MiniMax-H3 makes 5 to 15 seconds with sound at 24 fps, 17n + 5 frames on multiples of 32.
+  const mm = { ...summarize({ id: "MiniMaxAI/MiniMax-H3", pipeline_tag: "image-text-to-video", library_name: "minimax-h3", tags: ["diffusers", "text-to-video"] }), files: [{ name: "model_index.json", gb: 0 }, { name: "modular_model_index.json", gb: 0 }, { name: "transformer/diffusion_pytorch_model.safetensors", gb: 62 }, { name: "text_encoder/model.safetensors", gb: 62 }, { name: "transformer_ref/diffusion_pytorch_model.safetensors", gb: 62 }] };
+  const h3 = buildPlan({ model: mm, files: mm.files, machine: { ...machine, gpuGb: 141 }, detected: gpu, hasToken: false });
+  assert.equal(h3.file.gb, 124, "the reference partition is not fetched");
+  assert.equal(h3.file.modular, true);
+  assert.equal(h3.tierGb.toFixed(1), "86.8", "a modular pipeline wants a card with room for most of it, not a second card");
+  assert.equal(h3.fit.level, "tight");
+  assert.match(h3.fit.text, /take turns on the card/);
+  assert.equal(h3.tryWith.kind, "video");
+  assert.equal(h3.tryWith.startPicture, "optional");
+  assert.deepEqual([h3.qualities.fast.frames, h3.qualities.fast.width, h3.qualities.fast.height, h3.qualities.fast.fps], [124, 960, 544, 24]);
+  assert.deepEqual([h3.qualities.max.frames, h3.qualities.max.width, h3.qualities.max.height], [243, 1344, 768]);
+  assert.match(h3.qualities.default.text, /5-second clip with sound at 768p/);
+  for (const q of Object.values(h3.qualities)) assert.equal((q.frames - 5) % 17, 0, "a frame count the video VAE decodes");
   // Loose pieces without the folder cannot be assembled by the machine.
   const gguf = { ...summarize({ id: "city96/FLUX.1-dev-gguf", pipeline_tag: "text-to-image", tags: ["gguf"] }), files: [{ name: "flux1-dev-Q8_0.gguf", gb: 12 }] };
   const pieces = buildPlan({ model: gguf, files: gguf.files, machine, detected: gpu, hasToken: false });
