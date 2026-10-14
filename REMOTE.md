@@ -140,6 +140,10 @@ The machine takes two to four minutes to start. Meanwhile:
   request: a card RunPod has just run out of is passed over for the next
   free card of the size, up to three, and when all are gone the sizes are
   refreshed and the card says so.
+- Big files are fetched in pieces over several connections at once (byte
+  ranges from the Hub's content network, eight 32 MB pieces in flight), the
+  way the hf_transfer tool does; one connection rarely fills a data-centre
+  link. A server that does not serve ranges gets one stream as before.
 - The machine weighs a download against its disk before fetching, file by
   file as it goes, and stops with a plain message when the disk is full
   rather than dying partway; a folder that stopped partway is not taken for

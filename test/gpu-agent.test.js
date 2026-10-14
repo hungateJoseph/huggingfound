@@ -36,7 +36,7 @@ before(async () => {
   fs.writeFileSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part"), "half");
   agent = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], {
     // The Python side is played by a Node script that speaks the same protocol.
-    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, FAKE_SD_LOG: sdLog, HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog },
+    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let errors = "";
@@ -102,6 +102,10 @@ test("it downloads a model file from the Hub onto the disk with progress, and li
   assert.ok(lines.some((l) => l.total === 64 * 1024 && l.completed === 64 * 1024));
   assert.equal(lines.at(-1).status, "success");
   assert.ok(fs.existsSync(path.join(modelsDir, "second-state", "stable-diffusion-v1-5-GGUF", FILE)));
+  // A big file comes in pieces over several connections at once, and lands whole and in order.
+  const pieces = stub.requests.filter((r) => r.path.endsWith(`/${FILE}`) && r.range).map((r) => r.range);
+  assert.deepEqual(pieces.sort(), ["bytes=0-16383", "bytes=16384-32767", "bytes=32768-49151", "bytes=49152-65535"], "four pieces of sixteen kilobytes");
+  assert.ok(fs.readFileSync(path.join(modelsDir, "second-state", "stable-diffusion-v1-5-GGUF", FILE)).equals(Buffer.alloc(64 * 1024, FILE)), "the pieces in their places");
   const { models } = await (await get("/models")).json();
   assert.deepEqual(models.map((m) => [m.repo, m.file]), [[REPO, FILE]]);
   assert.ok(models[0].gb > 0);

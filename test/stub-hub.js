@@ -170,7 +170,7 @@ export function startStubHub({ extraModels = [] } = {}) {
   const requests = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://stub");
-    requests.push({ path: url.pathname + url.search, auth: req.headers.authorization ?? null });
+    requests.push({ path: url.pathname + url.search, auth: req.headers.authorization ?? null, range: req.headers.range ?? null });
     const all = [...MODELS, ...extraModels];
 
     if (url.pathname === "/api/models") {
@@ -231,6 +231,14 @@ export function startStubHub({ extraModels = [] } = {}) {
         return res.end(Buffer.alloc(16 * 1024, 1));
       }
       const body = dl[2] === "model_index.json" ? Buffer.from(JSON.stringify({ _class_name: /wan|video/i.test(dl[1]) ? "WanPipeline" : "QwenImagePipeline", _diffusers_version: "0.33.0" })) : TINY_PARTS[dl[2]] ? tinySafetensors(TINY_PARTS[dl[2]]) : Buffer.alloc(64 * 1024, dl[2]);
+      // A piece of the file, as the Hub's content network serves them.
+      const range = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range ?? "");
+      if (range) {
+        const a = Number(range[1]);
+        const b = Math.min(Number(range[2]), body.length - 1);
+        res.writeHead(206, { "Content-Type": "application/octet-stream", "Content-Length": b - a + 1, "Content-Range": `bytes ${a}-${b}/${body.length}` });
+        return res.end(body.subarray(a, b + 1));
+      }
       res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": body.length });
       return res.end(body);
     }

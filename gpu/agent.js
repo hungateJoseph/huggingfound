@@ -613,6 +613,51 @@ function answerDownload(req, res, body, work, key = "") {
 // lines of JSON in Ollama's style: status, total, completed. `saveAs` is
 // the path to keep it under when it differs (a half-precision variant
 // loses its .fp16 suffix so the merge finds it).
+// The big files come in several pieces at once: Hugging Face serves byte
+// ranges, and one connection rarely fills a data-centre link. Each piece
+// is fetched whole and written at its place in a file made the right size
+// first; a server that will not serve ranges is told by its answer.
+const CHUNK_BYTES = Number(process.env.HF_CHUNK_BYTES) || 32 * 1024 * 1024;
+const CHUNK_STREAMS = Number(process.env.HF_CHUNK_STREAMS) || 8;
+
+async function fetchRanges(src, headers, total, tmp, onBytes) {
+  const fh = await fs.promises.open(tmp, "w");
+  const stop = new AbortController();
+  try {
+    await fh.truncate(total);
+    const ranges = [];
+    for (let a = 0; a < total; a += CHUNK_BYTES) ranges.push([a, Math.min(total, a + CHUNK_BYTES) - 1]);
+    let next = 0;
+    const worker = async () => {
+      while (next < ranges.length) {
+        const [a, b] = ranges[next++];
+        const res = await fetch(src, { headers: { ...headers, Range: `bytes=${a}-${b}` }, redirect: "follow", signal: stop.signal });
+        if (res.status !== 206) {
+          await res.body?.cancel?.().catch(() => {});
+          throw Object.assign(new Error("ranges not served"), { code: "NO_RANGES" });
+        }
+        const parts = [];
+        let got = 0;
+        for await (const c of res.body) {
+          parts.push(c);
+          got += c.length;
+          onBytes(c.length);
+        }
+        if (got !== b - a + 1) throw Object.assign(new Error("a piece ended early"), { code: "SHORT" });
+        await fh.write(Buffer.concat(parts, got), 0, got, a);
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(CHUNK_STREAMS, ranges.length) }, worker));
+    } catch (err) {
+      stop.abort();
+      throw err;
+    }
+  } finally {
+    await fh.close();
+  }
+}
+
 async function download(repo, file, token, write, saveAs = file, dest = modelFile(repo, saveAs, true)) {
   const key = dest;
   // Another task has this very file in hand: wait for it rather than fail.
@@ -631,7 +676,8 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
     const auth = token || process.env.HF_TOKEN || "";
     if (auth) headers.Authorization = `Bearer ${auth}`;
     write({ status: "starting" });
-    const res = await fetch(`${HUB}/${repo}/resolve/main/${file}`, { headers, redirect: "follow" });
+    const url = `${HUB}/${repo}/resolve/main/${file}`;
+    const res = await fetch(url, { headers, redirect: "follow" });
     if (res.status === 401 || res.status === 403) throw new Error("this file is gated; it needs a Hugging Face token with the licence accepted");
     if (!res.ok) throw new Error(`Hugging Face answered HTTP ${res.status}`);
     const total = Number(res.headers.get("content-length")) || 0;
@@ -642,35 +688,65 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
     }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     const tmp = `${dest}.part`;
-    const out = fs.createWriteStream(tmp);
-    // A fault in the writer (the disk filling up) ends the download as an
-    // error of its own; left unheard it would end the whole agent.
-    let failWrite;
-    const writeFailed = new Promise((_, reject) => (failWrite = reject));
-    writeFailed.catch(() => {});
-    out.on("error", failWrite);
     let received = 0;
     let lastPct = -1;
-    const early = () => new Error(`the download of ${file} ended early (${(received / 1024 ** 3).toFixed(2)} of ${(total / 1024 ** 3).toFixed(2)} GB); try again`);
-    try {
-      try {
-        for await (const chunk of res.body) {
-          received += chunk.length;
-          if (!out.write(chunk)) await Promise.race([new Promise((r) => out.once("drain", r)), writeFailed]);
-          const pct = total ? Math.floor((received / total) * 100) : -1;
-          if (pct !== lastPct) {
-            lastPct = pct;
-            write({ status: `downloading ${file}`, total, completed: received, file });
-          }
-        }
-      } catch (err) {
-        // A connection that drops before the announced size is the usual cause.
-        throw err?.code === "ENOSPC" ? err : total && received < total ? early() : err;
+    const progress = (n) => {
+      received += n;
+      const pct = total ? Math.floor((received / total) * 100) : -1;
+      if (pct !== lastPct) {
+        lastPct = pct;
+        write({ status: `downloading ${file}`, total, completed: received, file });
       }
-      await Promise.race([new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve()))), writeFailed]);
+    };
+    const early = () => new Error(`the download of ${file} ended early (${(received / 1024 ** 3).toFixed(2)} of ${(total / 1024 ** 3).toFixed(2)} GB); try again`);
+    // One stream into the file, for small files and servers without ranges.
+    const single = async (body) => {
+      const out = fs.createWriteStream(tmp);
+      // A fault in the writer (the disk filling up) ends the download as an
+      // error of its own; left unheard it would end the whole agent.
+      let failWrite;
+      const writeFailed = new Promise((_, reject) => (failWrite = reject));
+      writeFailed.catch(() => {});
+      out.on("error", failWrite);
+      try {
+        try {
+          for await (const chunk of body) {
+            if (!out.write(chunk)) await Promise.race([new Promise((r) => out.once("drain", r)), writeFailed]);
+            progress(chunk.length);
+          }
+        } catch (err) {
+          // A connection that drops before the announced size is the usual cause.
+          throw err?.code === "ENOSPC" ? err : total && received < total ? early() : err;
+        }
+        await Promise.race([new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve()))), writeFailed]);
+      } catch (err) {
+        out.destroy();
+        throw err;
+      }
+    };
+    try {
+      if (total > CHUNK_BYTES * 2) {
+        await res.body?.cancel?.().catch(() => {});
+        // The file's own address once redirected (a content network): the
+        // token stays with the hub, where it belongs.
+        const src = res.url || url;
+        const plain = new URL(src).origin === new URL(HUB).origin ? headers : { "User-Agent": headers["User-Agent"] };
+        try {
+          await fetchRanges(src, plain, total, tmp, progress);
+        } catch (err) {
+          if (err?.code === "SHORT") throw early();
+          if (err?.code !== "NO_RANGES") throw err;
+          received = 0;
+          lastPct = -1;
+          const whole = await fetch(url, { headers, redirect: "follow" });
+          if (!whole.ok) throw new Error(`Hugging Face answered HTTP ${whole.status}`);
+          await single(whole.body);
+        }
+      } else {
+        await single(res.body);
+      }
       if (total && received !== total) throw early();
     } catch (err) {
-      out.destroy();
       fs.rmSync(tmp, { force: true });
       throw err?.code === "ENOSPC" ? diskFull(total / 1024 ** 3, file) : err;
     }
