@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { summarize } from "../src/hf.js";
-import { buildPlan, diskFor, imageStyle } from "../src/plans.js";
+import { buildPlan, diskFor, framesFor, imageStyle } from "../src/plans.js";
 import { FILES, MODELS } from "./stub-hub.js";
 
 const machine = { platform: "darwin", arch: "arm64", os: "macOS", gpu: "Apple Silicon", comfortableGb: 11 };
@@ -150,6 +150,12 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.deepEqual([h3.qualities.max.frames, h3.qualities.max.width, h3.qualities.max.height], [243, 1344, 768]);
   assert.match(h3.qualities.default.text, /5-second clip with sound at 768p/);
   for (const q of Object.values(h3.qualities)) assert.equal((q.frames - 5) % 17, 0, "a frame count the video VAE decodes");
+  // A clip is asked for by length and quality: the page gets what the model makes and picks the frames.
+  assert.deepEqual([h3.video.fps, h3.video.minSeconds, h3.video.maxSeconds, h3.video.defaultSeconds, h3.video.frameStep, h3.video.frameAdd, h3.video.sound, h3.video.heavy], [24, 5, 15, 5, 17, 5, true, 1.6]);
+  assert.deepEqual(Object.keys(h3.video.levels), ["low", "medium", "high"]);
+  assert.deepEqual([h3.video.levels.low.width, h3.video.levels.low.steps, h3.video.levels.high.width, h3.video.levels.high.steps], [960, 20, 1344, 40]);
+  assert.deepEqual([framesFor(5, h3.video), framesFor(10, h3.video), framesFor(15, h3.video), framesFor(0, h3.video)], [124, 243, 345, 124], "the nearest counts the VAE decodes, within the machine's limit, the default for nonsense");
+  assert.deepEqual([clip.video.fps, clip.video.sound, framesFor(3, clip.video), framesFor(99, clip.video), framesFor(1, clip.video)], [16, false, 49, 81, 17]);
   // Loose pieces without the folder cannot be assembled by the machine.
   const gguf = { ...summarize({ id: "city96/FLUX.1-dev-gguf", pipeline_tag: "text-to-image", tags: ["gguf"] }), files: [{ name: "flux1-dev-Q8_0.gguf", gb: 12 }] };
   const pieces = buildPlan({ model: gguf, files: gguf.files, machine, detected: gpu, hasToken: false });

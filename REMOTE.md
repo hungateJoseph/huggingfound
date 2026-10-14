@@ -162,6 +162,18 @@ The machine takes two to four minutes to start. Meanwhile:
   it is done, and the cap stops the machine as soon as the work ends. A
   machine that stops under a clip anyway (a Stop from another tab, RunPod
   itself) is reported within seconds, with the reason, not waited on.
+- A clip is asked for by length in seconds and a quality (low, medium,
+  high); the page says what the model will make (the nearest frame count
+  its video VAE decodes) and guesses the time and cost. The guess is
+  adjusted from the clips made here: each one's time is measured against
+  the guess made for it, and the next guess leans on that.
+- Several requests can be queued and made one after another by one click;
+  they are handed to the machine all at once, so it goes on with them even
+  if the page is left, and the machine can be told to stop when the last is
+  made. Everything made is kept in this browser under its model (up to
+  2 GB, oldest out first) until removed, whatever happens to the machine or
+  the window, and each finished result is also saved to the computer as it
+  comes, up to a size set in the try box.
 - A finished clip is fetched from the machine as bytes, apart from the
   status the page polls for; a machine on an older image sends it with the
   status, tens of megabytes at once, and the page waits for that patiently

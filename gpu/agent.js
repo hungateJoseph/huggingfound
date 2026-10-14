@@ -224,10 +224,11 @@ function startWorker() {
 }
 
 // Sends one request and waits for its answer; requests queue behind each other.
-function askWorker(req, onProgress = null, timeoutMs = 60 * 60e3) {
+function askWorker(req, onProgress = null, timeoutMs = 60 * 60e3, onStart = null) {
   const run = () => new Promise((resolve) => {
     startWorker();
     if (!py.proc) return resolve({ ok: false, error: "the Python worker could not start" });
+    onStart?.();
     let settled = false;
     const finish = (msg) => {
       if (settled) return;
@@ -397,8 +398,9 @@ function startJob(input) {
           await ensureWorkerLoaded(file, adapters);
           job.kind = py.kind;
           job.note = py.note;
-          job.status = "generating";
-          answer = await askWorker(req, (p) => (job.progress = p));
+          // Jobs take the worker one at a time: this one waits its turn.
+          job.status = "queued";
+          answer = await askWorker(req, (p) => (job.progress = p), 60 * 60e3, () => (job.status = "generating"));
           if (answer.ok) break;
           // The worker drops its model after running out of memory; a
           // record here that says otherwise would send the next job to an

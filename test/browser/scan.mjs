@@ -1104,7 +1104,7 @@ await step("hosted: a machine whose agent lost track of its model is restarted i
   assert.equal(rentedAgent.state.unloads, 1);
   assert.equal(runpod.state.actions.length, actionsBefore + 1, "no second restart");
   assert.doesNotMatch(await visitor.locator("#image-log").innerText(), /Restarting/);
-  assert.equal(await visitor.locator("#image-out .image-card").count(), 1);
+  assert.equal(await visitor.locator("#image-out .image-card").count(), 2, "each result stays on show under the earlier ones");
   assert.equal(rentedAgent.state.results ?? 0, resultsBefore, "the picture came with the status, as an older agent sends it");
   assert.ok(resultsBefore > 0, "the earlier pictures were fetched as bytes, apart from the status");
   rentedAgent.state.lean = true;
@@ -1156,6 +1156,68 @@ await step("hosted: a machine busy on a clip is left alone: the still-there chec
   await visitor.click("#rent-save-idle");
   await visitor.waitForFunction(() => /Saved/.test(document.querySelector("#notice")?.textContent ?? ""));
   await visitor.click("#close-settings");
+});
+
+await step("hosted: clips are asked for by length and quality with a time guessed then learned, queued several at once, kept under the model and saved as they come, and the machine stopped after the last", async () => {
+  const WAN = "Wan-AI/Wan2.2-TI2V-5B-Diffusers";
+  rentedAgent.state.files.push({ repo: WAN, file: "model_index.json", gb: 10.2, engine: "diffusers" });
+  await visitor.request.get(`${hostedBase}/api/rent`);
+  await visitor.click("#nav-browse");
+  await visitor.fill("#trait", "video generation");
+  await visitor.click("#trait-go");
+  await visitor.waitForSelector("#found .model");
+  await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
+  await visitor.waitForSelector("#video-seconds");
+  assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["3", "1", "5"]);
+  assert.deepEqual(await visitor.$$eval("#video-level input", (els) => els.map((e) => [e.value, e.checked])), [["low", false], ["medium", true], ["high", false]]);
+  assert.match(await visitor.locator("#estimate").innerText(), /^About .* for a 3\.1-second clip at 832 by 480, 49 frames, 30 steps \(a guess until the first clip is timed\)\./);
+  await visitor.fill("#video-seconds", "5");
+  await visitor.click("#video-level input[value=high]");
+  assert.match(await visitor.locator("#estimate").innerText(), /5\.1-second clip at 1280 by 704, 81 frames, 40 steps/);
+  // Two clips queued with different settings, saved to the computer as
+  // they come, and the machine stopped once the last is made.
+  const downloads = [];
+  visitor.on("download", (d) => downloads.push(d.suggestedFilename()));
+  await visitor.fill("#image-prompt", "waves at dusk");
+  await visitor.click("#queue-add");
+  await visitor.fill("#video-seconds", "2");
+  await visitor.click("#video-level input[value=low]");
+  await visitor.fill("#image-prompt", "a long walk");
+  await visitor.click("#queue-add");
+  assert.equal(await visitor.locator("#queue-list li").count(), 2);
+  assert.match(await visitor.locator("#queue-estimate").innerText(), /2 requests, about .* in all\./);
+  assert.equal(await visitor.locator("#queue-go").innerText(), "Generate all 2");
+  await visitor.check("#image-stop-after");
+  await visitor.click("#queue-go");
+  await visitor.waitForFunction(() => /Stopped the rented GPU, as asked/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
+  const log = await visitor.locator("#image-log").innerText();
+  assert.match(log, /1 of 2: waves at dusk[\s\S]*2 of 2: a long walk[\s\S]*All done: 2 made\./);
+  assert.match(log, /the guess was .* and the next guess is adjusted/);
+  assert.match(log, /Saved clip-[\w-]+\.mp4 to this computer/);
+  const sent = rentedAgent.state.jobs.slice(-2);
+  assert.deepEqual(sent.map((j) => [j.prompt, j.frames, j.fps, j.width, j.height, j.steps]), [["waves at dusk", 81, 16, 1280, 704, 40], ["a long walk", 33, 16, 832, 480, 20]]);
+  assert.equal(await visitor.locator("#image-out .image-card video").count(), 2);
+  for (let i = 0; i < 40 && downloads.length < 2; i++) await new Promise((r) => setTimeout(r, 250));
+  assert.equal(downloads.length, 2, "both clips were saved to the computer as they came");
+  assert.match(downloads[0], /^clip-[\w-]+\.mp4$/);
+  assert.match(await visitor.locator("#estimate").innerText(), /adjusted from the last 2 clips made here/);
+  assert.equal(runpod.state.actions.at(-1).split(":")[1], "stop");
+  // Leaving the window loses nothing: the clips are kept under the model.
+  await visitor.keyboard.press("Escape");
+  await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
+  // The machine is stopped, so the window offers to start it; the clips show all the same.
+  await visitor.waitForSelector("#kept .image-card");
+  assert.equal(await visitor.locator("#kept .image-card").count(), 2);
+  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*2 results made with this model[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
+  await visitor.locator("#kept .kept-remove").first().click();
+  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 1);
+  await visitor.keyboard.press("Escape");
+  // The machine stopped as asked; started again, and the clip model taken
+  // off the stand-in machine, for what follows.
+  rentedAgent.state.files = rentedAgent.state.files.filter((f) => f.repo !== WAN);
+  rentedAgent.state.loaded = "second-state/stable-diffusion-v1-5-GGUF/stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";
+  await visitor.request.post(`${hostedBase}/api/rent/start`, { data: {} });
+  for (let i = 0; i < 4 && (await (await visitor.request.get(`${hostedBase}/api/rent`)).json()).status !== "RUNNING"; i++);
 });
 
 await step("hosted: the bar opens one list of everything on the machine, with Open and Remove", async () => {

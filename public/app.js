@@ -183,11 +183,10 @@ function backgroundNote(into, model, what) {
   note.querySelector("#bg-stay").addEventListener("click", () => note.remove());
 }
 
-// A picture finished while its window was closed: a note offers to open it.
-function pictureReady(modelId, show) {
-  state.readyPictures = state.readyPictures ?? new Map();
-  state.readyPictures.set(modelId, show);
-  notice(`Your picture from ${modelId.split("/").pop()} is ready on the rented GPU.`, "ok", { label: "Open it", run: () => openModel(modelId) });
+// A picture or clip finished while its window was closed: a note offers to
+// open the model, where it waits under Kept here.
+function pictureReady(modelId, kind = "image") {
+  notice(`Your ${kind === "video" ? "clip" : "picture"} from ${modelId.split("/").pop()} is ready and kept in this browser.`, "ok", { label: "Open it", run: () => openModel(modelId) });
 }
 
 // ---- lists ----------------------------------------------------------------
@@ -686,7 +685,11 @@ function renderModel(model, plan, choice = null) {
     // A disk too small for the model grows from here; RunPod never shrinks one.
     if (plan.needsDisk && plan.growTo) parts.push(`<div class="actions"><button class="primary" id="grow-from-model">Grow the disk to ${plan.growTo} GB</button> <small class="muted">About ${money(DISK_STOPPED_PER_GB_MONTH / 30 * (plan.growTo - (plan.diskGb || 0)))} a day more while the machine is stopped, half that while it runs.</small></div>`);
     if (plan.twin) parts.push(`<div class="actions"><button class="primary" id="open-twin">Open ${esc(plan.twin.name)}</button></div>`);
+    // What was made with the model before stays on show, with the machine
+    // stopped or gone or the model not runnable here any more.
+    parts.push(`<div id="kept"></div>`);
     body.innerHTML = parts.join("");
+    renderKept(body, model.id);
     body.querySelector("#open-settings-from-model")?.addEventListener("click", () => ($("#settings").hidden = false));
     body.querySelector("#open-twin")?.addEventListener("click", () => openModel(plan.twin.id));
     body.querySelector("#replace-from-model")?.addEventListener("click", () => {
@@ -1194,7 +1197,10 @@ function renderTry(model, plan) {
   const ready = plan.steps.every((s) => s.done);
   if (!ready) {
     const left = plan.steps.filter((s) => !s.done).length;
-    box.innerHTML = `<p class="muted small">${left === plan.steps.length ? "Run the steps above and a try box appears here." : `${left} step${left === 1 ? "" : "s"} left before you can try it.`}</p>`;
+    // What was made with the model before stays on show here, whatever
+    // the machine is doing now.
+    box.innerHTML = `<p class="muted small">${left === plan.steps.length ? "Run the steps above and a try box appears here." : `${left} step${left === 1 ? "" : "s"} left before you can try it.`}</p><div id="kept"></div>`;
+    renderKept(box, model.id);
     return;
   }
   if (plan.tryWith.kind === "chat") renderChat(box, plan.tryWith.model);
@@ -2185,17 +2191,21 @@ function shortDuration(seconds) {
 function renderImage(box, t) {
   const plan = state.plan;
   let saved = "default";
+  let level = "medium";
   try {
     saved = localStorage.getItem("imageQuality") || "default";
+    level = localStorage.getItem("videoLevel") || "medium";
   } catch {
     // no storage
   }
+  const video = t.kind === "video";
+  // A clip is asked for by length and quality; a picture by preset.
+  const spec = video && plan?.video ? plan.video : null;
   const qualities = plan?.qualities ?? {};
   const options = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === saved ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
   const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
   const loaded = plan?.keepsLoaded && !t.remote && !t.agent ? `<p class="muted small loaded-note"><span>After the first picture the model stays loaded in memory for a quarter of an hour, so the next ones skip the loading time.</span><button class="ghost" id="unload-model">Unload now</button></p>` : "";
   const style = plan?.style ? `<p class="muted small style-note"><b>${plan.style.kind === "anime" ? "Anime model." : "Realistic model."}</b> ${esc(plan.style.text)}</p>` : "";
-  const video = t.kind === "video";
   const addon = t.engine === "addon";
   const bases = addon ? t.bases ?? [] : [];
   const variants = addon ? t.variants ?? [] : [];
@@ -2205,150 +2215,339 @@ function renderImage(box, t) {
       ${t.addonKind === "ip-adapter" ? `<label class="field"><span>Reference picture</span><input type="file" id="addon-ref" accept="image/*"><small class="muted">${variants.some((v) => v.faceid) ? "A clear photo of the face to keep." : "The picture whose subject or style to carry over."}</small></label>` : ""}
       <label class="field"><span>Strength <output id="addon-scale-out">${t.addonKind === "lora" ? "0.8" : "0.6"}</output></span><input type="range" id="addon-scale" min="0.1" max="1.5" step="0.05" value="${t.addonKind === "lora" ? "0.8" : "0.6"}"></label>
     </div>` : "";
+  const save = autosaveSettings();
+  const what = video ? "clip" : "picture";
+  const settingsHtml = spec ? `<div class="clip-settings">
+      <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${spec.defaultSeconds}"><small class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.</small></label>
+      <div class="effort-title">Quality</div>
+      <div class="quality" id="video-level">${["low", "medium", "high"].map((l) => `<label><input type="radio" name="level" value="${l}" ${l === level ? "checked" : ""}> <b>${l[0].toUpperCase() + l.slice(1)}</b> <span class="muted">${esc(spec.levels[l].text)}</span></label>`).join("")}</div>
+      <p class="muted small estimate" id="estimate"></p>
+    </div>` : `<div class="effort-title">Effort</div>
+    <div class="quality" id="quality">${options}</div>`;
   box.innerHTML = `<h3>Try it</h3>
     ${remote}
     ${style}
     ${addonHtml}
-    <div class="effort-title">Effort</div>
-    <div class="quality" id="quality">${options}</div>
+    ${settingsHtml}
     ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">${t.startPicture === "required" ? "This model animates a picture: the clip begins from it." : "With a picture the clip begins from it; without one it comes from the words alone."}</small></label>` : ""}
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
-      <button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>
+      <span class="go-buttons"><button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>${t.agent ? `<button class="ghost" id="queue-add" title="Several requests run one after another on the machine; each is kept here and saved as it finishes">Add to queue</button>` : ""}</span>
     </div>
     <label class="field avoid">
       <span>Avoid</span>
       <input type="text" id="image-negative" placeholder="anime, cartoon, drawing, blurry, extra fingers">
       <small class="muted">Models cannot read "not" or "no" in the description; whatever you do not want goes here instead.</small>
     </label>
+    ${t.agent ? `<div class="queue" id="queue" hidden>
+      <p class="muted small"><b>Queue.</b> These run one after another on the rented GPU; each is kept here and saved to this computer as it finishes, so nothing waits on you. Tick the box below and the machine stops when the last one is made.</p>
+      <ol id="queue-list"></ol>
+      <p class="tools-row"><button class="primary" id="queue-go">Generate all</button><button class="ghost" id="queue-clear">Clear the queue</button></p>
+      <p class="muted small" id="queue-estimate"></p>
+    </div>` : ""}
     ${loaded}
-    ${t.agent ? `<label class="check stop-after" title="The machine stops once this is made or has failed; its models stay on its disk and Start brings it back"><input type="checkbox" id="image-stop-after"> Stop the rented GPU after this ${video ? "clip" : "picture"}${state.rental?.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}</label>` : ""}
+    ${t.agent ? `<label class="check autosave" title="Finished results are kept in this browser whatever happens; this also saves each one to your computer as it comes, so a finished clip is never lost to a stopped machine or a closed page"><input type="checkbox" id="autosave" ${save.on ? "checked" : ""}> Save each finished ${what} to this computer as it comes, up to <input type="number" id="autosave-mb" min="1" max="5000" step="1" value="${save.maxMb}"> MB <small class="muted">(the browser may ask once to allow several downloads)</small></label>` : ""}
+    ${t.agent ? `<label class="check stop-after" title="The machine stops once everything asked for here is made or has failed; its models stay on its disk and Start brings it back"><input type="checkbox" id="image-stop-after"> Stop the rented GPU when everything asked for here is made${state.rental?.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}</label>` : ""}
     <pre class="log" id="image-log" hidden></pre>
-    <div id="image-out"></div>`;
+    <div id="image-out"></div>
+    <div id="kept"></div>`;
   box.querySelector("#unload-model")?.addEventListener("click", async () => {
     await api.post("/api/unload", {});
     notice("The image model was unloaded from memory.", "ok");
   });
   box.querySelector("#addon-scale")?.addEventListener("input", (e) => (box.querySelector("#addon-scale-out").value = e.target.value));
-  const waiting = state.readyPictures?.get(state.model?.id);
-  if (waiting) {
-    state.readyPictures.delete(state.model.id);
-    waiting($("#image-out"));
-  }
-  $("#image-go").addEventListener("click", async () => {
+  const saveAutosave = () => rememberAutosave({ on: box.querySelector("#autosave").checked, maxMb: Number(box.querySelector("#autosave-mb").value) || 150 });
+  box.querySelector("#autosave")?.addEventListener("change", saveAutosave);
+  box.querySelector("#autosave-mb")?.addEventListener("change", saveAutosave);
+  const price = state.plan?.remote && state.rental?.rented ? state.rental.costPerHour : null;
+  // What is asked for right now: the preset for a picture, the length and
+  // quality for a clip, with the time guessed from them and the clips made
+  // here before.
+  const chosen = () => {
+    if (!spec) {
+      const quality = box.querySelector("input[name=quality]:checked")?.value ?? "default";
+      const q = qualities[quality];
+      return { quality, q, text: q?.text ? `${quality}, ${q.text}` : quality, estimate: null };
+    }
+    const lvl = box.querySelector("input[name=level]:checked")?.value ?? "medium";
+    const seconds = Number(box.querySelector("#video-seconds").value) || spec.defaultSeconds;
+    const est = clipEstimate(spec, lvl, seconds, t.repo);
+    const q = { steps: est.level.steps, width: est.level.width, height: est.level.height, frames: est.frames, fps: spec.fps, cfg: spec.cfg };
+    return { level: lvl, seconds, q, text: `${(est.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${est.level.width} by ${est.level.height}, ${est.frames} frames, ${est.level.steps} steps`, estimate: est };
+  };
+  const refreshEstimate = () => {
+    const el = box.querySelector("#estimate");
+    if (!el || !spec) return;
+    const c = chosen();
+    const est = c.estimate;
+    const load = loadSeconds(t.repo);
+    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""} for a ${(est.frames / spec.fps).toFixed(1)}-second clip at ${est.level.width} by ${est.level.height}, ${est.frames} frames, ${est.level.steps} steps${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}`;
+  };
+  box.querySelector("#video-seconds")?.addEventListener("input", refreshEstimate);
+  for (const r of box.querySelectorAll("input[name=level]")) r.addEventListener("change", () => {
+    try {
+      localStorage.setItem("videoLevel", r.value);
+    } catch {
+      // no storage
+    }
+    refreshEstimate();
+  });
+  refreshEstimate();
+  // Results made in this window, on show above the kept ones.
+  const shownIds = new Set();
+  renderKept(box, t.repo, shownIds);
+  // A request as it will be sent: the words, what to avoid, the settings as
+  // chosen right now, and the files picked, read when it is sent.
+  const makeItem = (prompt) => {
+    const c = chosen();
+    return { prompt, negative: $("#image-negative").value.trim(), quality: c.quality ?? null, q: c.q, settings: c.text, estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null };
+  };
+  // The queue: several requests, run one after another by one click.
+  const queue = [];
+  const renderQueue = () => {
+    const wrap = box.querySelector("#queue");
+    if (!wrap) return;
+    wrap.hidden = !queue.length;
+    const list = wrap.querySelector("#queue-list");
+    list.innerHTML = queue.map((item, i) => `<li>${esc(item.prompt)} <span class="muted small">${esc(item.settings)}${item.estimate ? `, about ${esc(shortDuration(item.estimate.seconds))}` : ""}</span><button class="ghost queue-remove" data-i="${i}">Remove</button></li>`).join("");
+    for (const btn of list.querySelectorAll(".queue-remove")) btn.addEventListener("click", () => {
+      queue.splice(Number(btn.dataset.i), 1);
+      renderQueue();
+    });
+    const total = queue.reduce((a, item) => a + (item.estimate?.seconds ?? (item.quality ? tookSeconds(t.repo, item.quality) ?? qualities[item.quality]?.seconds ?? 0 : 0)), 0);
+    wrap.querySelector("#queue-estimate").textContent = queue.length ? `${queue.length} request${queue.length === 1 ? "" : "s"}${total ? `, about ${shortDuration(total)}${price ? ` and ${money((price * total) / 3600)} of machine time` : ""} in all` : ""}.` : "";
+    wrap.querySelector("#queue-go").textContent = `Generate all ${queue.length}`;
+  };
+  box.querySelector("#queue-add")?.addEventListener("click", () => {
     const prompt = $("#image-prompt").value.trim();
     if (!prompt) return;
+    queue.push(makeItem(prompt));
+    $("#image-prompt").value = "";
+    renderQueue();
+  });
+  box.querySelector("#queue-clear")?.addEventListener("click", () => {
+    queue.length = 0;
+    renderQueue();
+  });
+  box.querySelector("#queue-go")?.addEventListener("click", () => {
+    if (!queue.length) return;
+    run(queue.splice(0));
+    renderQueue();
+  });
+  $("#image-go").addEventListener("click", () => {
+    const prompt = $("#image-prompt").value.trim();
+    if (!prompt) return;
+    run([makeItem(prompt)]);
+  });
+  // Requests from before that are still on the machine (this window was
+  // left or the page reloaded while they ran): followed again.
+  const pending = t.agent ? pendingJobs(t.repo) : [];
+  if (pending.length) run(pending.map((pj) => ({ item: pj.item, id: pj.id, started: pj.at, args: null })), { resumed: true });
+
+  // The way to go again, right under the failure: the failed requests
+  // once more. A single one is read afresh from the box, so changed words
+  // or settings count; a queue's failures go again as they were.
+  function retryRow(items) {
+    if (!items.length || box.querySelector("#image-retry")) return;
+    const row = document.createElement("p");
+    row.className = "tools-row";
+    row.innerHTML = `<button class="primary" id="image-retry">Try again</button>`;
+    $("#image-log").after(row);
+    row.querySelector("#image-retry").addEventListener("click", () => {
+      row.remove();
+      run(items.length === 1 ? [makeItem($("#image-prompt").value.trim() || items[0].prompt)] : items);
+    });
+  }
+
+  // A request's arguments for the machine: the files it needs are read now.
+  async function requestArgs(item) {
+    let target = { repo: t.repo, file: t.file };
+    let extra = {};
+    if (video && t.startPicture) {
+      if (t.startPicture === "required" && !item.startFile) throw new Error("this model needs a starting picture");
+      if (item.startFile) {
+        extra.init = await readAsDataUrl(item.startFile);
+        extra.strength = 0.9;
+      }
+    }
+    if (addon) {
+      const base = bases[Number(box.querySelector("#addon-base")?.value ?? -1)];
+      if (!base) throw new Error("no base model on the rented GPU yet");
+      const variant = variants[Number(box.querySelector("#addon-variant").value)];
+      if (variant.xl !== base.xl) throw new Error(`${variant.label} is for ${variant.xl ? "SDXL" : "SD 1.5"} bases; pick a matching variant or base`);
+      const refFile = box.querySelector("#addon-ref")?.files[0];
+      if (t.addonKind === "ip-adapter" && !refFile) throw new Error("pick a reference picture first");
+      const ipImage = refFile ? await readAsDataUrl(refFile) : null;
+      target = base;
+      extra = { addon: { kind: t.addonKind, repo: t.repo, file: variant.file, lora: variant.lora, scale: Number(box.querySelector("#addon-scale").value) }, ipImage, xl: base.xl };
+    }
+    return { ...target, prompt: item.prompt, negative: item.negative, quality: item.q, video, ...extra };
+  }
+
+  // A finished result: timed against the guess, kept in this browser,
+  // saved to the computer if that is on, and shown.
+  async function finishResult(req, job, openedFor, say) {
+    const { item, args } = req;
+    const repo = args?.repo ?? t.repo;
+    if (job.took) {
+      if (spec && item.estimate?.base) noteEstimate(t.repo, item.estimate.base, job.took);
+      else if (item.quality) rememberTook(repo, item.quality, job.took);
+      if (job.loadSeconds > 5) rememberLoad(t.repo, job.loadSeconds);
+      const guess = item.estimate?.seconds ?? (item.quality ? qualities[item.quality]?.seconds : null);
+      say(`This ${what} took ${shortDuration(job.took)} of machine time${price ? `, about ${money((price * job.took) / 3600)} at ${money(price)} an hour` : ""}${guess ? `; the guess was ${shortDuration(guess)}${spec ? ", and the next guess is adjusted" : ""}` : ""}${job.loadSeconds > 5 ? `. Loading the model first took ${shortDuration(job.loadSeconds)}${price ? `, about ${money((price * job.loadSeconds) / 3600)}` : ""}` : ""}.`);
+      const qbox = box.querySelector("#quality");
+      if (qbox && !spec) {
+        const picked = box.querySelector("input[name=quality]:checked")?.value;
+        qbox.innerHTML = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === picked ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
+      }
+      refreshEstimate();
+    }
+    const blob = job.blob ?? b64ToBlob(job.video || job.image, job.video ? "video/mp4" : "image/png");
+    const kind = job.video || job.blob?.type === "video/mp4" ? "video" : "image";
+    const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy };
+    await keepResult(entry);
+    shownIds.add(entry.id);
+    const name = `${kind === "video" ? "clip" : "image"}-${entry.id}.${kind === "video" ? "mp4" : "png"}`;
+    const auto = autosaveSettings();
+    if (auto.on) {
+      if (blob.size <= auto.maxMb * 1048576) {
+        saveBlob(blob, name);
+        say(`Saved ${name} to this computer (${mbText(blob.size)}); it is kept in this browser as well.`);
+      } else say(`Kept in this browser; not saved to this computer by itself, as ${mbText(blob.size)} is over the ${auto.maxMb} MB limit. Download it below.`);
+    } else say("Kept in this browser; Download saves it to this computer.");
+    const show = (out) => {
+      if (kind === "video") showClip(out, { blob, prompt: item.prompt, name });
+      else showPicture(out, { data: job.image, prompt: item.prompt, negative: item.negative, model: t.repo, madeBy, agent: t.agent, repo, modelFile: args?.file ?? t.file, chain: [] });
+    };
+    // The window may have been left meanwhile: a note says it is ready,
+    // and the kept list shows it when the model is opened again.
+    if (state.open !== openedFor || !document.body.contains(box)) {
+      pictureReady(openedFor, kind);
+      return;
+    }
+    show(box.querySelector("#image-out"));
+    renderKept(box, t.repo, shownIds);
+  }
+
+  // Runs requests: one from the Generate button, several from the queue,
+  // or ones from before found still on the machine.
+  async function run(items, { resumed = false } = {}) {
     const log = $("#image-log");
     const goBtn = $("#image-go");
+    const qGo = box.querySelector("#queue-go");
     log.hidden = false;
-    log.textContent = "";
+    if (!resumed) log.textContent = "";
     goBtn.disabled = true;
+    if (qGo) qGo.disabled = true;
+    const say = (line) => {
+      log.textContent += line + "\n";
+      log.scrollTop = log.scrollHeight;
+    };
     try {
-      const quality = box.querySelector("input[name=quality]:checked")?.value ?? "default";
-      try {
-        localStorage.setItem("imageQuality", quality);
-      } catch {
-        // no storage
-      }
-      const negative = $("#image-negative").value.trim();
-      if (t.agent) {
-        // The rented GPU makes the picture; the browser asks it directly and
-        // keeps the result, which is saved only when downloaded.
-        let target = { repo: t.repo, file: t.file };
-        let extra = {};
-        if (video && t.startPicture) {
-          const startFile = box.querySelector("#video-start")?.files[0];
-          if (t.startPicture === "required" && !startFile) throw new Error("this model needs a starting picture");
-          if (startFile) {
-            extra.init = await new Promise((resolve, reject) => {
-              const r = new FileReader();
-              r.onload = () => resolve(String(r.result));
-              r.onerror = () => reject(new Error("could not read the picture"));
-              r.readAsDataURL(startFile);
-            });
-            extra.strength = 0.9;
-          }
-        }
-        if (addon) {
-          const base = bases[Number(box.querySelector("#addon-base")?.value ?? -1)];
-          if (!base) throw new Error("no base model on the rented GPU yet");
-          const variant = variants[Number(box.querySelector("#addon-variant").value)];
-          if (variant.xl !== base.xl) throw new Error(`${variant.label} is for ${variant.xl ? "SDXL" : "SD 1.5"} bases; pick a matching variant or base`);
-          const refFile = box.querySelector("#addon-ref")?.files[0];
-          if (t.addonKind === "ip-adapter" && !refFile) throw new Error("pick a reference picture first");
-          const ipImage = refFile ? await new Promise((resolve, reject) => {
-            const r = new FileReader();
-            r.onload = () => resolve(String(r.result));
-            r.onerror = () => reject(new Error("could not read the picture"));
-            r.readAsDataURL(refFile);
-          }) : null;
-          target = base;
-          extra = { addon: { kind: t.addonKind, repo: t.repo, file: variant.file, lora: variant.lora, scale: Number(box.querySelector("#addon-scale").value) }, ipImage, xl: base.xl };
-        }
-        const openedFor = state.model?.id ?? t.repo;
-        backgroundNote(box, state.model ?? { id: t.repo }, video ? "The clip is made" : "The picture is made");
-        const stopAfter = Boolean(box.querySelector("#image-stop-after")?.checked);
-        let job;
+      if (items[0]?.item?.quality ?? items[0]?.quality) {
         try {
-          job = await agentJob(t.agent, { ...target, prompt, negative, quality: plan?.qualities?.[quality], video, ...extra }, (line) => {
-            log.textContent += line + "\n";
-            log.scrollTop = log.scrollHeight;
-          });
-        } finally {
-          // Made or failed, the machine stops now if that was asked: the
-          // bill ends with the work, not after an idle wait.
-          if (stopAfter) stopAfterJob(log);
+          localStorage.setItem("imageQuality", items[0].item?.quality ?? items[0].quality);
+        } catch {
+          // no storage
         }
-        // What this one cost, and the presets now say the measured time.
-        if (job.took) {
-          rememberTook(target.repo, quality, job.took);
-          const price = state.rental?.costPerHour;
-          if (price) log.textContent += `This ${video ? "clip" : "picture"} took ${shortDuration(job.took)} of machine time, about ${money((price * job.took) / 3600)} at ${money(price)} an hour${job.loadSeconds > 5 ? `; loading the model first took ${shortDuration(job.loadSeconds)}, about ${money((price * job.loadSeconds) / 3600)}` : ""}.\n`;
-          const chosen = box.querySelector("input[name=quality]:checked")?.value;
-          const qbox = box.querySelector("#quality");
-          if (qbox && plan?.qualities) {
-            qbox.innerHTML = Object.entries(plan.qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === chosen ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
-          }
+      }
+      if (!t.agent) {
+        const item = items[0];
+        const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt: item.prompt, negative: item.negative, quality: item.quality } });
+        const result = await follow(id, say);
+        if (result.status === "done" && result.result) {
+          $("#image-out").innerHTML = "";
+          showPicture($("#image-out"), { file: result.result, prompt: item.prompt, negative: item.negative, model: t.repo, madeBy: t.file, chain: [] });
         }
-        const show = (out) => {
-          if (job.video) showClip(out, { data: job.video, prompt });
-          else showPicture(out, { data: job.image, prompt, negative, model: t.repo, madeBy: addon ? `${t.repo.split("/").pop()} on ${target.repo.split("/").pop()}` : t.file, agent: t.agent, repo: target.repo, modelFile: target.file, chain: [] });
-        };
-        // The window may have been left meanwhile: the result waits for it.
-        if (state.open !== openedFor || !document.body.contains(box)) {
-          pictureReady(openedFor, show);
-          return;
-        }
-        $("#image-out").innerHTML = "";
-        show($("#image-out"));
         return;
       }
-      const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt, negative, quality } });
-      const result = await follow(id, (line) => {
-        log.textContent += line + "\n";
-        log.scrollTop = log.scrollHeight;
-      });
-      if (result.status === "done" && result.result) {
-        $("#image-out").innerHTML = "";
-        showPicture($("#image-out"), { file: result.result, prompt, negative, model: t.repo, madeBy: t.file, chain: [] });
-      }
-    } catch (err) {
-      log.textContent += `Could not start: ${err.message}\n`;
-      // The way to go again is right under the failure.
-      if (!box.querySelector("#image-retry")) {
-        const row = document.createElement("p");
-        row.className = "tools-row";
-        row.innerHTML = `<button class="primary" id="image-retry">Try again</button>`;
-        log.after(row);
-        row.querySelector("#image-retry").addEventListener("click", () => {
-          row.remove();
-          goBtn.click();
+      const openedFor = state.model?.id ?? t.repo;
+      backgroundNote(box, state.model ?? { id: t.repo }, items.length > 1 ? `The ${what}s are made` : `The ${what} is made`);
+      const stopAfter = Boolean(box.querySelector("#image-stop-after")?.checked);
+      if (resumed) say(`${items.length} request${items.length === 1 ? "" : "s"} from before ${items.length === 1 ? "is" : "are"} still on the machine; following ${items.length === 1 ? "it" : "them"} again.`);
+      const requests = [];
+      for (const item of items) requests.push(resumed ? item : { item, args: await requestArgs(item) });
+      let made = 0;
+      const failedItems = [];
+      try {
+        await agentBatch(t.agent, requests, say, {
+          repo: t.repo,
+          onDone: async (req, job, err, i) => {
+            if (err) {
+              if (req.item) failedItems.push(req.item);
+              say(`Could not make ${requests.length > 1 ? `request ${i + 1}` : "it"}: ${err.message}`);
+              return;
+            }
+            made++;
+            await finishResult(req, job, openedFor, say);
+          },
         });
+      } finally {
+        // Made or failed, the machine stops now if that was asked: the
+        // bill ends with the work, not after an idle wait.
+        if (stopAfter) stopAfterJob(log);
       }
+      if (requests.length > 1) say(`All done: ${made} made${failedItems.length ? `, ${failedItems.length} failed` : ""}.`);
+      if (failedItems.length) retryRow(failedItems);
+    } catch (err) {
+      say(`Could not start: ${err.message}`);
+      retryRow(items.filter((it) => !it.id || it.item).map((it) => it.item ?? it));
     } finally {
       goBtn.disabled = false;
+      if (qGo) qGo.disabled = false;
     }
+  }
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("could not read the picture"));
+    r.readAsDataURL(file);
   });
+}
+
+function mbText(bytes) {
+  return `${(bytes / 1048576).toFixed(bytes < 10 * 1048576 ? 1 : 0)} MB`;
+}
+
+// Everything made with a model on the rented GPU, kept in this browser:
+// closing the window, leaving the page or the machine stopping loses
+// nothing. Listed under the try box with Download and Remove.
+async function renderKept(box, repo, shownIds = new Set()) {
+  const el = box.querySelector("#kept");
+  if (!el) return;
+  let list = [];
+  try {
+    list = await keptResults(repo);
+  } catch {
+    list = [];
+  }
+  if (!box.isConnected) return;
+  list = list.filter((e) => !shownIds.has(e.id)).sort((a, b) => b.madeAt - a.madeAt);
+  if (!list.length) {
+    el.innerHTML = "";
+    return;
+  }
+  const total = list.reduce((a, e) => a + (e.bytes || 0), 0);
+  el.innerHTML = `<div class="kept-head"><b>Kept here</b> <span class="muted small">${list.length} ${list.length === 1 ? "result" : "results"} made with this model, ${mbText(total)} in this browser. They stay until removed, whatever the machine does.</span></div>`;
+  for (const e of list) {
+    const url = URL.createObjectURL(e.blob);
+    const name = `${e.kind === "video" ? "clip" : "image"}-${e.id}.${e.kind === "video" ? "mp4" : "png"}`;
+    const card = document.createElement("div");
+    card.className = "image-card kept";
+    card.innerHTML = `${e.kind === "video" ? `<video class="result-image" src="${url}" controls loop muted playsinline title="${esc(e.prompt)}"></video>` : `<img class="result-image" src="${url}" alt="${esc(e.prompt)}">`}
+      <p class="muted small caption">${esc(e.prompt)}${e.settings ? ` · ${esc(e.settings)}` : ""} · ${new Date(e.madeAt).toLocaleString()}${e.took ? ` · ${shortDuration(e.took)} of machine time` : ""} · ${mbText(e.bytes || 0)}</p>
+      <p class="tools-row"><a class="button" href="${url}" download="${name}">Download</a><button class="ghost kept-remove">Remove</button></p>`;
+    card.querySelector(".kept-remove").addEventListener("click", async () => {
+      await forgetResult(e.id);
+      card.remove();
+      renderKept(box, repo, shownIds);
+    });
+    el.appendChild(card);
+  }
 }
 
 // A picture with its tools: download, Claude's check, and Improve, which
@@ -2401,21 +2600,58 @@ async function agentPicture(agent, args, onLine = () => {}) {
 // A job on the rented GPU: a picture, or a clip from a video family. The
 // browser asks the machine directly and keeps the result in the page.
 async function agentJob(agent, args, onLine = () => {}) {
-  // While a job runs, the machine's status changes (a restart below, say)
-  // do not redraw the window and lose its log, the still-there check
-  // waits, and the site is told every so often that the machine is in
-  // use, so its idle clock never stops a machine mid-clip.
+  const [req] = await agentBatch(agent, [{ args }], onLine);
+  if (req.err) throw req.err;
+  return req.job;
+}
+
+// Several jobs on the rented GPU, handed over all at once so the machine
+// goes on with them even if this page is left, then followed one after
+// another. While they run, the machine's status changes (a restart below,
+// say) do not redraw the window and lose its log, the still-there check
+// waits, and the site is told every so often that the machine is in use,
+// so its idle clock never stops a machine mid-clip. A worker that lost its
+// model is reset and that job asked once more.
+async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onDone = null } = {}) {
   state.agentBusy = (state.agentBusy ?? 0) + 1;
+  api.post("/api/rent/touch", {}).catch(() => {});
   const keep = setInterval(() => api.post("/api/rent/touch", {}).catch(() => {}), 45e3);
   try {
-    return await agentJobOnce(agent, args, onLine);
-  } catch (err) {
-    // The machine's worker drops its model after running out of memory;
-    // an agent that still believes it loaded sends the next job to an
-    // empty worker. The agent is reset and the job asked once more.
-    if (!/no model is loaded/i.test(err.message)) throw err;
-    await resetAgent(agent, err.jobId, onLine);
-    return agentJobOnce(agent, args, onLine);
+    for (const req of requests) {
+      if (req.id) continue;
+      req.started = Date.now();
+      req.id = await submitJob(agent, req.args, onLine);
+      if (repo) rememberPending(repo, req.id, req.item, req.started);
+    }
+    let stopped = null;
+    for (const [i, req] of requests.entries()) {
+      if (stopped) {
+        req.err = stopped;
+      } else {
+        if (requests.length > 1) onLine(`${i + 1} of ${requests.length}: ${req.item?.prompt ?? req.args?.prompt ?? ""}`);
+        try {
+          req.job = await followJob(agent, req.id, onLine, req.started ?? Date.now());
+        } catch (err) {
+          if (/no model is loaded/i.test(err.message) && req.args) {
+            try {
+              await resetAgent(agent, req.id, onLine);
+              if (repo) forgetPending(repo, req.id);
+              req.started = Date.now();
+              req.id = await submitJob(agent, req.args, onLine);
+              if (repo) rememberPending(repo, req.id, req.item, req.started);
+              req.job = await followJob(agent, req.id, onLine, req.started);
+            } catch (again) {
+              req.err = again;
+            }
+          } else req.err = err;
+        }
+        // The machine is gone or stopped: the rest cannot be made either.
+        if (req.err && /machine (stopped|is gone)/.test(req.err.message)) stopped = req.err;
+      }
+      if (repo) forgetPending(repo, req.id);
+      if (onDone) await onDone(req, req.job ?? null, req.err ?? null, i);
+    }
+    return requests;
   } finally {
     clearInterval(keep);
     state.agentBusy--;
@@ -2448,8 +2684,8 @@ async function resetAgent(agent, jobId, onLine) {
   onLine("The machine is back.");
 }
 
-async function agentJobOnce(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false }, onLine = () => {}) {
-  api.post("/api/rent/touch", {}).catch(() => {});
+// Hands one job to the machine and returns its id.
+async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false }, onLine = () => {}) {
   const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
   // An add-on on an SDXL base draws at SDXL's size.
   const width = addon && xl ? 1024 : (q.width ?? q.size);
@@ -2470,11 +2706,15 @@ async function agentJobOnce(agent, { repo, file, prompt, negative, quality, init
   onLine(video ? `Asking the rented GPU for a ${q.frames}-frame clip at ${width} by ${height}, ${q.steps} steps` : `Asking the rented GPU for a ${width} by ${height} picture, ${q.steps} steps${init ? ", painting over the picture" : ""}`);
   const res = await fetch(`${agent}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `the machine answered HTTP ${res.status}`);
-  const { id } = await res.json();
+  return (await res.json()).id;
+}
+
+// Follows a job on the machine to its end and brings back the result: a
+// Blob of the bytes, and for a picture the base64 as well.
+async function followJob(agent, id, onLine = () => {}, started = Date.now()) {
   let last = "";
   let noted = false;
   let misses = 0;
-  const started = Date.now();
   // When the machine began the picture itself, after any loading.
   let genStarted = 0;
   for (;;) {
@@ -2485,6 +2725,8 @@ async function agentJobOnce(agent, { repo, file, prompt, negative, quality, init
       if (misses >= 4) onLine("Reconnected to the machine.");
       misses = 0;
     } catch (err) {
+      // A machine with no record of the job (it restarted) will never have it.
+      if (err.gone) throw new Error("the machine no longer has this job: it restarted meanwhile; ask again");
       // The job goes on on the machine; a dropped connection is waited out.
       misses++;
       if (misses === 4) onLine("The connection to the machine dropped; the work goes on there, waiting to reconnect");
@@ -2518,15 +2760,36 @@ async function agentJobOnce(agent, { repo, file, prompt, negative, quality, init
       onLine(`Done in ${Math.round((Date.now() - started) / 1000)} s${job.loadSeconds > 5 ? ` (${Math.round(job.loadSeconds)} s of it loading the model)` : ""}.`);
       // A newer machine keeps the result apart from the status: fetched now, as bytes.
       if (!job.video && !job.image && job.result) {
-        const b64 = await fetchResult(agent, id, job.kind === "video" ? "clip" : "picture", job.bytes, onLine);
-        if (job.kind === "video") job.video = b64;
-        else job.image = b64;
-      }
+        job.blob = await fetchResult(agent, id, job.kind === "video" ? "clip" : "picture", job.bytes, onLine);
+        if (job.kind !== "video") job.image = await blobToBase64(job.blob);
+      } else if (job.video || job.image) job.blob = b64ToBlob(job.video || job.image, job.video ? "video/mp4" : "image/png");
       return job;
     }
     if (job.status === "failed") throw Object.assign(new Error(job.error || "the machine could not make the picture"), { jobId: id });
     if (Date.now() - started > 30 * 60e3) throw new Error("no picture after 30 minutes");
   }
+}
+
+async function agentJobOnce(agent, args, onLine = () => {}) {
+  const started = Date.now();
+  const id = await submitJob(agent, args, onLine);
+  return followJob(agent, id, onLine, started);
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1]);
+    r.onerror = () => reject(new Error("could not read the result"));
+    r.readAsDataURL(blob);
+  });
+}
+
+function b64ToBlob(b64, type) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
 }
 
 // One look at a job on the machine, without its result. The usual wait is
@@ -2542,6 +2805,7 @@ async function pollJob(agent, id) {
     if (err.name !== "TimeoutError" && err.name !== "AbortError") throw err;
     poll = await ask(5 * 60e3);
   }
+  if (poll.status === 404) throw Object.assign(new Error("HTTP 404"), { gone: true });
   if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
   return poll.json();
 }
@@ -2555,13 +2819,7 @@ async function fetchResult(agent, id, what, bytes, onLine) {
     try {
       const res = await fetch(`${agent}/jobs/${id}/result`, { signal: AbortSignal.timeout(10 * 60e3) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      return await new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result).split(",")[1]);
-        r.onerror = () => reject(new Error("could not read the result"));
-        r.readAsDataURL(blob);
-      });
+      return await res.blob();
     } catch (err) {
       last = err;
       await new Promise((r) => setTimeout(r, 3000));
@@ -2571,12 +2829,12 @@ async function fetchResult(agent, id, what, bytes, onLine) {
 }
 
 // A clip from the rented GPU, shown and kept in the page until downloaded.
-function showClip(into, { data, prompt }) {
+function showClip(into, { blob = null, data = null, prompt, name = `clip-${Date.now()}.mp4` }) {
   const card = document.createElement("div");
   card.className = "image-card";
-  const src = `data:video/mp4;base64,${data}`;
+  const src = blob ? URL.createObjectURL(blob) : `data:video/mp4;base64,${data}`;
   card.innerHTML = `<video class="result-image" src="${esc(src)}" controls autoplay loop muted playsinline title="${esc(prompt)}"></video>
-    <p class="muted small tools-row"><span>Made on the rented GPU; it lives in this page until you download it.</span><a class="button" href="${esc(src)}" download="clip-${Date.now()}.mp4">Download</a></p>`;
+    <p class="muted small tools-row"><span>Made on the rented GPU; kept in this browser under this model until removed.</span><a class="button" href="${esc(src)}" download="${esc(name)}">Download</a></p>`;
   into.appendChild(card);
 }
 
@@ -3196,6 +3454,205 @@ function tookSeconds(repo, q) {
 function rememberTook(repo, q, seconds) {
   try {
     localStorage.setItem(`took:${repo}|${q}`, String(Math.round(seconds)));
+  } catch {
+    // no storage
+  }
+}
+
+// How long loading the model took on the machine last time, kept here.
+function loadSeconds(repo) {
+  try {
+    const n = Number(localStorage.getItem(`load:${repo}`));
+    return n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+function rememberLoad(repo, seconds) {
+  try {
+    localStorage.setItem(`load:${repo}`, String(Math.round(seconds)));
+  } catch {
+    // no storage
+  }
+}
+
+// ---- guessing a clip's time, and learning from the clips made ------------------
+// The machine makes at most this many frames in one clip.
+const MAX_FRAMES = 361;
+// The frame count nearest a length in seconds that the model's video VAE
+// decodes (its step and offset), within what the machine makes.
+function framesFor(seconds, spec) {
+  const want = Math.max(spec.minSeconds, Math.min(spec.maxSeconds, Number(seconds) || spec.defaultSeconds)) * spec.fps;
+  let n = Math.max(1, Math.round((want - spec.frameAdd) / spec.frameStep));
+  while (n > 1 && n * spec.frameStep + spec.frameAdd > MAX_FRAMES) n--;
+  return n * spec.frameStep + spec.frameAdd;
+}
+// The guess: a pixel-step per frame, more for a model too big for one
+// card, times what the clips made here before taught (their time against
+// the guess made for them).
+function clipEstimate(spec, level, seconds, repo) {
+  const lv = spec.levels[level] ?? spec.levels.medium;
+  const frames = framesFor(seconds, spec);
+  const base = 0.5 * ((lv.width * lv.height) / 1e6) * frames * lv.steps * (spec.heavy ?? 1);
+  const c = calibration(repo);
+  return { frames, level: lv, base, seconds: Math.max(1, Math.round(base * (c?.factor ?? 1))), n: c?.n ?? 0 };
+}
+function calibration(repo) {
+  try {
+    const c = JSON.parse(localStorage.getItem(`calib:${repo}`) || "null");
+    return c && c.factor > 0 ? c : null;
+  } catch {
+    return null;
+  }
+}
+// A clip took so long against a guess: the next guess leans on that, half
+// on the newest clip and half on what came before.
+function noteEstimate(repo, base, took) {
+  if (!(base > 0 && took > 0)) return;
+  const c = calibration(repo);
+  const ratio = took / base;
+  const factor = c ? c.factor * 0.5 + ratio * 0.5 : ratio;
+  try {
+    localStorage.setItem(`calib:${repo}`, JSON.stringify({ factor, n: (c?.n ?? 0) + 1 }));
+  } catch {
+    // no storage
+  }
+}
+
+// ---- keeping what was made -------------------------------------------------------
+// Everything made on the rented GPU is kept in this browser (IndexedDB, by
+// model) until removed, up to a budget, oldest out first. A browser with
+// no such storage keeps them for the page's lifetime.
+const KEPT_BUDGET = 2 * 1024 ** 3;
+const keptMem = new Map();
+function keptDb() {
+  return new Promise((resolve, reject) => {
+    let req;
+    try {
+      req = indexedDB.open("huggingfound-kept", 1);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    req.onupgradeneeded = () => {
+      const store = req.result.createObjectStore("results", { keyPath: "id" });
+      store.createIndex("model", "model", { unique: false });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => reject(new Error("blocked"));
+  });
+}
+function keptOp(mode, run) {
+  return keptDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction("results", mode);
+    let out;
+    try {
+      out = run(tx.objectStore("results"));
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    tx.oncomplete = () => {
+      db.close();
+      resolve(out && "result" in out ? out.result : out);
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
+    };
+  }));
+}
+async function keepResult(entry) {
+  try {
+    await keptOp("readwrite", (s) => s.put(entry));
+    await trimKept();
+  } catch {
+    keptMem.set(entry.id, entry);
+  }
+}
+async function keptResults(model) {
+  const mem = [...keptMem.values()].filter((e) => e.model === model);
+  try {
+    const all = await keptOp("readonly", (s) => s.index("model").getAll(model));
+    return [...all, ...mem];
+  } catch {
+    return mem;
+  }
+}
+async function forgetResult(id) {
+  keptMem.delete(id);
+  try {
+    await keptOp("readwrite", (s) => s.delete(id));
+  } catch {
+    // nothing kept there
+  }
+}
+async function trimKept() {
+  const all = await keptOp("readonly", (s) => s.getAll());
+  let total = all.reduce((a, e) => a + (e.bytes || 0), 0);
+  if (total <= KEPT_BUDGET) return;
+  all.sort((a, b) => a.madeAt - b.madeAt);
+  for (const e of all) {
+    if (total <= KEPT_BUDGET) break;
+    await keptOp("readwrite", (s) => s.delete(e.id));
+    total -= e.bytes || 0;
+  }
+}
+
+// Saving each finished result to the computer as it comes, up to a size.
+function autosaveSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem("autosave") || "null");
+    if (s && typeof s.on === "boolean") return { on: s.on, maxMb: Number(s.maxMb) > 0 ? Number(s.maxMb) : 150 };
+  } catch {
+    // no storage
+  }
+  return { on: true, maxMb: 150 };
+}
+function rememberAutosave(s) {
+  try {
+    localStorage.setItem("autosave", JSON.stringify(s));
+  } catch {
+    // no storage
+  }
+}
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60e3);
+}
+
+// Jobs handed to the machine and not yet brought back, kept here so a
+// window left or a page reloaded finds them again.
+function pendingJobs(repo) {
+  try {
+    return JSON.parse(localStorage.getItem(`pending:${repo}`) || "[]").filter((p) => p.id && Date.now() - (p.at || 0) < 12 * 3600e3);
+  } catch {
+    return [];
+  }
+}
+function rememberPending(repo, id, item, at) {
+  try {
+    const list = pendingJobs(repo).filter((p) => p.id !== id);
+    list.push({ id, at, item: item ? { prompt: item.prompt, negative: item.negative, quality: item.quality ?? null, settings: item.settings, estimate: item.estimate ?? null } : null });
+    localStorage.setItem(`pending:${repo}`, JSON.stringify(list));
+  } catch {
+    // no storage
+  }
+}
+function forgetPending(repo, id) {
+  try {
+    localStorage.setItem(`pending:${repo}`, JSON.stringify(pendingJobs(repo).filter((p) => p.id !== id)));
   } catch {
     // no storage
   }

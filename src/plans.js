@@ -414,6 +414,12 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   // frame counts of 17n + 5 on a canvas of multiples of 32 with a 768
   // short edge; smaller canvases are its biggest speed lever.
   const minimax = /minimax-h3/i.test(model.id);
+  // What a clip can be, for the page to pick a length and a quality from
+  // and guess the time: frames a second, the lengths the model makes, the
+  // frame counts its video VAE decodes, and three levels of steps and size.
+  const videoSpec = video ? (minimax
+    ? { fps: 24, minSeconds: 5, maxSeconds: 15, defaultSeconds: 5, frameStep: 17, frameAdd: 5, sound: true, cfg, heavy: heavyFactor(repo.gb), levels: { low: { steps: 20, width: 960, height: 544, text: "960 by 544, 20 steps" }, medium: { steps: 30, width: 1344, height: 768, text: "768p, 30 steps" }, high: { steps: 40, width: 1344, height: 768, text: "768p, 40 steps, the most detail" } } }
+    : { fps: 16, minSeconds: 1, maxSeconds: 5, defaultSeconds: 3, frameStep: 4, frameAdd: 1, sound: false, cfg, heavy: heavyFactor(repo.gb), levels: { low: { steps: 20, width: 832, height: 480, text: "480p, 20 steps" }, medium: { steps: 30, width: 832, height: 480, text: "480p, 30 steps" }, high: { steps: 40, width: 1280, height: 704, text: "720p, 40 steps, the most detail" } } }) : null;
   const qualities = withGpuSeconds(video
     ? minimax
       ? {
@@ -442,7 +448,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const speed = { text: video ? "A short clip takes a few minutes on a data-centre card; the first one longer while the model loads." : "A picture takes some seconds to a minute on a data-centre card; the first one longer while the model loads.", seconds: null };
   // An image-to-video model animates a picture; a text-to-video one may take one as well.
   const startPicture = video ? (/image-to-video/.test(model.pipeline ?? "") && !(model.tags ?? []).includes("text-to-video") ? "required" : "optional") : null;
-  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, repo.modular), speed, measured: "", steps, qualities, fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
+  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, repo.modular), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
 }
 
 // How a folder model sits on the rented machine's card or cards: whole,
@@ -566,9 +572,24 @@ export function imageStyle(model) {
 // and prices it at the machine's hourly rate.
 export function gpuSeconds({ width = 1024, height = 1024, frames = 0, steps = 20, gb = 0 } = {}) {
   const megapixels = (width * height) / 1e6;
-  const heavy = gb > 60 ? 1.6 : gb > 30 ? 1.25 : 1;
+  const heavy = heavyFactor(gb);
   const seconds = frames ? 0.5 * megapixels * frames * steps * heavy : 0.15 * megapixels * steps * heavy + 2;
   return Math.round(seconds);
+}
+// A model too big for one card in full precision runs slower: its weights
+// are quantised or take turns on the card.
+export function heavyFactor(gb) {
+  return gb > 60 ? 1.6 : gb > 30 ? 1.25 : 1;
+}
+// The machine makes at most this many frames in one clip.
+export const MAX_FRAMES = 361;
+// The frame count nearest a length in seconds that the model's video VAE
+// decodes (its step and offset), within what the machine makes.
+export function framesFor(seconds, spec) {
+  const want = Math.max(spec.minSeconds, Math.min(spec.maxSeconds, Number(seconds) || spec.defaultSeconds)) * spec.fps;
+  let n = Math.max(1, Math.round((want - spec.frameAdd) / spec.frameStep));
+  while (n > 1 && n * spec.frameStep + spec.frameAdd > MAX_FRAMES) n--;
+  return n * spec.frameStep + spec.frameAdd;
 }
 function withGpuSeconds(qualities, gb) {
   for (const q of Object.values(qualities)) q.seconds = gpuSeconds({ width: q.width, height: q.height, frames: q.frames ?? 0, steps: q.steps, gb });
