@@ -93,6 +93,31 @@ const JOB_TTL = 30 * 60e3;
 fs.mkdirSync(MODELS_DIR, { recursive: true });
 fs.mkdirSync(ADDONS_DIR, { recursive: true });
 
+// A download cut off by a stop or a crash leaves a half-written .part on
+// the disk. Nothing is downloading when the agent starts, so they go, and
+// the room they took is back before the next download is weighed.
+function sweepParts(dir) {
+  let gone = 0;
+  const walk = (d) => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".part")) {
+        fs.rmSync(full, { force: true });
+        gone++;
+      }
+    }
+  };
+  try {
+    walk(dir);
+  } catch {
+    // a disk that cannot be read is reported when it is used
+  }
+  if (gone) console.log(`Removed ${gone} half-written download part${gone === 1 ? "" : "s"} from ${dir}`);
+}
+sweepParts(MODELS_DIR);
+sweepParts(ADDONS_DIR);
+
 // Whether the image server can start at all on this machine, checked once
 // at startup so a broken binary shows in the machine's status rather than
 // at the first picture.

@@ -948,3 +948,39 @@ test("the machine's disk grows for a model that does not fit it, and never shrin
   assert.match((await smaller.json()).error, /160 GB already; RunPod grows a disk but never shrinks one/);
   assert.equal((await post("/api/rent/delete", {})).status, 200);
 });
+
+test("a machine that stops under a download: the run says so within seconds, and running the step again starts the machine and goes on from the files it has", async () => {
+  const res = await post("/api/rent", { gb: 48, diskGb: 100 });
+  assert.equal(res.status, 200, await res.text());
+  const id = (await json("/api/rent")).id;
+  const QWEN_IMAGE = "Qwen/Qwen-Image";
+  const { plan } = await json(`/api/model?id=${QWEN_IMAGE}`);
+  agent.state.slowMs = 300;
+  const first = await post("/api/run", { kind: "pull-image-repo", args: plan.steps[0].args, where: "rented" });
+  assert.equal(first.status, 200);
+  const run1 = (await first.json()).id;
+  // Partway through, the machine stops (its idle timer, a cap, a Stop) and the agent with it.
+  await new Promise((r) => setTimeout(r, 400));
+  agent.state.down = true;
+  runpod.state.pods[id].status = "EXITED";
+  runpod.state.pods[id].runtime = null;
+  const log1 = await (await get(`/api/runs/${run1}`)).text();
+  assert.match(log1, /the machine stopped while downloading \(it was stopped\)\. What it fetched is kept on its disk: Run this step again starts the machine and goes on from there/);
+  assert.ok(!/could not be reached for five minutes/.test(log1), "told apart from a slow link");
+  // The plan says what the step does on a stopped machine.
+  assert.match((await json(`/api/model?id=${QWEN_IMAGE}`)).plan.steps[0].text, /The rented GPU is stopped\. Run this step starts it again, and a download goes on from the files already on its disk/);
+  // Run again: the machine is started by the step, and the download goes on.
+  const actions = runpod.state.actions.length;
+  agent.state.slowMs = 5;
+  const second = await post("/api/run", { kind: "pull-image-repo", args: plan.steps[0].args, where: "rented" });
+  const secondText = await second.text();
+  assert.equal(second.status, 200, secondText);
+  assert.equal(runpod.state.actions.slice(actions).join(","), `${id}:start`, "started by the step");
+  await new Promise((r) => setTimeout(r, 200));
+  agent.state.down = false;
+  const log2 = await (await get(`/api/runs/${JSON.parse(secondText).id}`)).text();
+  assert.match(log2, /Starting the rented GPU again; the download goes on from the files already on its disk/);
+  assert.match(log2, /Done/);
+  assert.equal((await json("/api/rent")).status, "RUNNING");
+  assert.equal((await post("/api/rent/delete", {})).status, 200);
+});

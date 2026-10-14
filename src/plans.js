@@ -514,7 +514,7 @@ function serverDownNote(rented) {
   if (rented?.rented) {
     if (["PROVISIONING", "STARTING", "UNKNOWN"].includes(rented.status)) return "The rented GPU is still starting; it usually answers within a few minutes of being rented.";
     if (rented.status === "RUNNING") return "The rented GPU is up but has not answered yet; try again in a moment.";
-    return "The rented GPU is stopped. Start it under Rent a GPU in Settings.";
+    return "The rented GPU is stopped. Run this step starts it again, and a download goes on from the files already on its disk.";
   }
   return "The server is not answering right now; check the address or the tunnel in Settings.";
 }

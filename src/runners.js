@@ -828,32 +828,32 @@ export async function removeAgentModel(repo, file, fetchImpl = fetch, agent = ""
   if (!res.ok) throw new Error(`The rented GPU replied HTTP ${res.status}`);
 }
 
-export function pullImageOnAgent(repo, file, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
+export function pullImageOnAgent(repo, file, fetchImpl = fetch, agent = "", { owner = null, token = "", machine = null, restarted = false } = {}) {
   if (!REPO_RE.test(String(repo)) || !FILE_RE.test(String(file))) throw new Error("Bad model arguments");
-  return agentDownload(`Downloading ${file} on the rented GPU`, "/download", { repo, file, token: token || undefined }, fetchImpl, agent, owner);
+  return agentDownload(`Downloading ${file} on the rented GPU`, "/download", { repo, file, token: token || undefined }, fetchImpl, agent, owner, { machine, restarted });
 }
 
 // A folder-layout model: the agent fetches the parts and merges them into
 // one checkpoint named `into`, the way this computer would.
-export function pullImageFolderOnAgent(repo, files, into, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
+export function pullImageFolderOnAgent(repo, files, into, fetchImpl = fetch, agent = "", { owner = null, token = "", machine = null, restarted = false } = {}) {
   const parts = Array.isArray(files) ? files.map((f) => ({ from: String(f?.from ?? ""), to: String(f?.to ?? f?.from ?? "") })) : [];
   if (!REPO_RE.test(String(repo)) || !FILE_RE.test(String(into)) || !parts.length || parts.length > 8 || !parts.every((p) => SUBPATH_RE.test(p.from) && SUBPATH_RE.test(p.to))) throw new Error("Bad model arguments");
-  return agentDownload(`Downloading ${parts.length} files of ${repo} on the rented GPU and merging them`, "/download-folder", { repo, files: parts, into, token: token || undefined }, fetchImpl, agent, owner);
+  return agentDownload(`Downloading ${parts.length} files of ${repo} on the rented GPU and merging them`, "/download-folder", { repo, files: parts, into, token: token || undefined }, fetchImpl, agent, owner, { machine, restarted });
 }
 
 // A model only the diffusers library loads: the agent fetches every file
 // it needs into the repository's folder.
-export function pullImageRepoOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "", gb = 0 } = {}) {
+export function pullImageRepoOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "", gb = 0, machine = null, restarted = false } = {}) {
   const list = Array.isArray(files) ? files.map((f) => String(typeof f === "string" ? f : (f?.from ?? ""))) : [];
   if (!REPO_RE.test(String(repo)) || !list.length || list.length > 120 || !list.every((f) => SUBPATH_RE.test(f))) throw new Error("Bad model arguments");
   // The model's size goes along so the machine weighs it against its disk first.
-  return agentDownload(`Downloading ${list.length} files of ${repo} on the rented GPU`, "/download-repo", { repo, files: list, token: token || undefined, gb: Number(gb) > 0 ? Number(gb) : undefined }, fetchImpl, agent, owner);
+  return agentDownload(`Downloading ${list.length} files of ${repo} on the rented GPU`, "/download-repo", { repo, files: list, token: token || undefined, gb: Number(gb) > 0 ? Number(gb) : undefined }, fetchImpl, agent, owner, { machine, restarted });
 }
 
-export function pullAddonOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "" } = {}) {
+export function pullAddonOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "", machine = null, restarted = false } = {}) {
   const list = Array.isArray(files) ? files.map((f) => String(f ?? "")) : [];
   if (!REPO_RE.test(String(repo)) || !list.length || list.length > 40 || !list.every((f) => SUBPATH_RE.test(f))) throw new Error("Bad add-on arguments");
-  return agentDownload(`Downloading the add-on ${repo} on the rented GPU`, "/download-addon", { repo, files: list, token: token || undefined }, fetchImpl, agent, owner);
+  return agentDownload(`Downloading the add-on ${repo} on the rented GPU`, "/download-addon", { repo, files: list, token: token || undefined }, fetchImpl, agent, owner, { machine, restarted });
 }
 
 export async function removeAgentAddon(repo, file, fetchImpl = fetch, agent = "") {
@@ -887,8 +887,31 @@ export async function agentAddons(agent, fetchImpl = fetch) {
   return ((await res.json()).addons ?? []).map((a) => `${a.repo}/${a.file}`);
 }
 
+// Why a stopped machine stopped, from the rental's note, for a message.
+function stoppedWhy(status) {
+  const reason = String(status?.stopReason ?? "");
+  const idle = reason.match(/^idle:(\d+)/);
+  if (idle) return `its idle timer stopped it after ${idle[1]} minutes without use`;
+  const cap = reason.match(/^cap:(\d+)/);
+  if (cap) return `the daily cap of $${cap[1]} stopped it`;
+  if (reason === "done") return "it was set to stop when a download finished";
+  return "it was stopped";
+}
+
+// A machine that is gone or stopped under a download: the run ends now,
+// not after minutes of waiting, and says what to do. `machine` asks the
+// rental for the machine's state; without one there is nothing to ask.
+async function machineGone(machine) {
+  if (!machine) return null;
+  const status = await machine().catch(() => null);
+  if (!status) return null;
+  if (!status.rented) return new Error("the rented machine is gone, and the files on it with it; rent one again and the download starts over");
+  if (status.status === "EXITED") return new Error(`the machine stopped while downloading (${stoppedWhy(status)}). What it fetched is kept on its disk: Run this step again starts the machine and goes on from there`);
+  return null;
+}
+
 // Follows a download task on the machine to its end, waiting out drops.
-async function pollAgentTask(agent, id, route, emit, cancelled, fetchImpl) {
+async function pollAgentTask(agent, id, route, emit, cancelled, fetchImpl, machine = null) {
   const lineText = (j) => (j.total ? `${Math.floor(((j.completed ?? 0) / j.total) * 100)}% of ${(j.total / 1024 ** 3).toFixed(2)} GB${j.file && route !== "/download" ? ` (${j.file})` : ""}` : String(j.status ?? ""));
   let cursor = 0;
   let failures = 0;
@@ -909,7 +932,12 @@ async function pollAgentTask(agent, id, route, emit, cancelled, fetchImpl) {
     } catch {
       failures++;
       // A machine pulling files at full speed answers slowly; a few
-      // misses are normal, and the download goes on regardless.
+      // misses are normal, and the download goes on regardless. A machine
+      // that has stopped or gone is another matter, and is asked about.
+      if (failures % 6 === 0) {
+        const gone = await machineGone(machine);
+        if (gone) throw gone;
+      }
       if (failures === 6) emit("The connection to the machine dropped; the download goes on there, waiting to reconnect");
       if (failures > 150) throw new Error("the machine could not be reached for five minutes; the download may still be going there, and opening the model again shows what has arrived");
       continue;
@@ -947,16 +975,21 @@ export function agentTaskKey(kind, args = {}) {
 
 // A run of this server that follows a task the machine already has going,
 // found again after this server forgot it (a restart, another tab).
-export function attachAgentTask(agent, task, title, fetchImpl = fetch, { owner = null } = {}) {
+export function attachAgentTask(agent, task, title, fetchImpl = fetch, { owner = null, machine = null } = {}) {
   const route = String(task.key ?? "").split("|")[0] || "/download";
-  return startCustomRun(title, (emit, cancelled) => pollAgentTask(agent, task.id, route, emit, cancelled, fetchImpl), { owner });
+  return startCustomRun(title, (emit, cancelled) => pollAgentTask(agent, task.id, route, emit, cancelled, fetchImpl, machine), { owner });
 }
 
-function agentDownload(title, route, body, fetchImpl, agent, owner) {
+// `machine` asks the rental for the machine's state, so a stop under the
+// download is told apart from a slow link; `restarted` says the machine was
+// just started again for this run, and the files it holds are kept.
+function agentDownload(title, route, body, fetchImpl, agent, owner, { machine = null, restarted = false } = {}) {
   if (!agent) throw new Error("No rented GPU");
   return startCustomRun(title, async (emit, cancelled) => {
     const started = Date.now();
     let said = false;
+    if (restarted) emit("Starting the rented GPU again; the download goes on from the files already on its disk.");
+    let tries = 0;
     for (;;) {
       if (cancelled()) return;
       try {
@@ -966,6 +999,11 @@ function agentDownload(title, route, body, fetchImpl, agent, owner) {
         // not up yet
       }
       if (Date.now() - started > 10 * 60e3) throw new Error("the rented GPU did not answer in ten minutes; check the machine in Settings");
+      // A machine that is not coming at all (stopped, gone) is not waited for.
+      if (++tries % 6 === 0) {
+        const gone = await machineGone(machine);
+        if (gone) throw gone;
+      }
       if (!said) emit("Waiting for the machine to start (a new machine takes a few minutes)");
       said = true;
       await new Promise((r) => setTimeout(r, 5000));
@@ -986,7 +1024,7 @@ function agentDownload(title, route, body, fetchImpl, agent, owner) {
       if (!started.ok) throw new Error(`the rented GPU answered HTTP ${started.status}`);
       const { id, attached } = await started.json();
       if (attached) emit("This download was already going on the machine; following it from where it is.");
-      return pollAgentTask(agent, id, route, emit, cancelled, fetchImpl);
+      return pollAgentTask(agent, id, route, emit, cancelled, fetchImpl, machine);
     }
     const stop = new AbortController();
     let res;

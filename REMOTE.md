@@ -144,6 +144,12 @@ The machine takes two to four minutes to start. Meanwhile:
   file as it goes, and stops with a plain message when the disk is full
   rather than dying partway; a folder that stopped partway is not taken for
   a whole model, and running the step again fetches only what is missing.
+- A machine that stops under a download (its idle timer, the daily cap, a
+  Stop, or RunPod itself) ends the step within seconds with the reason, not
+  after minutes of waiting on a dead link. The files it fetched stay on its
+  disk; running the step again starts the machine and goes on from them, and
+  half-written parts from the cut-off are swept when the machine comes up.
+  A download in progress keeps the idle timer from stopping the machine.
 - If the full machine image cannot be pulled (it is published as a GitHub
   package that has to be public), HuggingFound rents a plain Ollama machine
   instead: chat models work, image models stay on your computer, and the

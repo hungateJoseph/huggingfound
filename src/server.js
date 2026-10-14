@@ -675,7 +675,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         const taskKey = agentTaskKey(step.kind, step.args ?? {});
         const onMachine = taskKey && (detected.gpu?.tasks ?? []).find((t) => t.status === "running" && t.key === taskKey);
         if (onMachine) {
-          const run = attachAgentTask(detected.gpu.url, onMachine, `${step.title} (found going on the machine)`, fetchImpl, { owner });
+          const run = attachAgentTask(detected.gpu.url, onMachine, `${step.title} (found going on the machine)`, fetchImpl, { owner, machine: machineAsk(ctx, detected.gpu.url) });
           run.key = stepKey(step.kind, step.args ?? {});
           run.model = id;
           run.title = step.title;
@@ -859,16 +859,22 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
             if (body.stopAfter) stopWhenDone(ctx, getRun(going.id));
             return send(res, 200, { id: going.id, attached: true });
           }
+          // A machine that stopped (its idle timer, the daily cap, a Stop) is
+          // started again by the step that needs it; the files on its disk
+          // are kept, and the download goes on from them.
+          const restarted = await restartForStep(ctx, agent);
+          if (restarted instanceof Error) return send(res, restarted.status ?? 503, { error: restarted.message, ...(restarted.noGpu ? { noGpu: true } : {}) });
+          const machine = machineAsk(ctx, agent);
           const release = ctx.rental?.hold() ?? (() => {});
           const owner = ctx.user?.id ?? null;
           const token = tokenFor(ctx);
           const run = body.kind === "pull-image-folder"
-            ? pullImageFolderOnAgent(String(args.repo ?? ""), args.files, String(args.into ?? ""), fetchImpl, agent, { owner, token })
+            ? pullImageFolderOnAgent(String(args.repo ?? ""), args.files, String(args.into ?? ""), fetchImpl, agent, { owner, token, machine, restarted })
             : body.kind === "pull-image-repo"
-              ? pullImageRepoOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token, gb: Number(args.gb) || 0 })
+              ? pullImageRepoOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token, gb: Number(args.gb) || 0, machine, restarted })
             : body.kind === "pull-addon"
-              ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token })
-              : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner, token });
+              ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token, machine, restarted })
+              : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner, token, machine, restarted });
           run.finished.then(release);
           if (body.stopAfter) stopWhenDone(ctx, run);
           return send(res, 200, { id: tag(run).id });
@@ -1028,6 +1034,28 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       }
     }
     return out;
+  }
+
+  // How a download run asks after the machine it runs on, when the machine
+  // is this account's rental: whether it still exists and whether it runs.
+  function machineAsk(ctx, agent) {
+    if (!ctx.rental?.owns(agent)) return null;
+    return () => ctx.rental.status({ probe: false });
+  }
+
+  // Starts the rented machine again when a step needs it and it has stopped.
+  // True when it was started, false when it was running already or is not
+  // this account's rental, and the error when RunPod would not start it.
+  async function restartForStep(ctx, agent) {
+    if (!ctx.rental?.owns(agent)) return false;
+    const status = await ctx.rental.status({ probe: false }).catch(() => null);
+    if (!status?.rented || status.status !== "EXITED") return false;
+    try {
+      await ctx.rental.start();
+      return true;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
   }
 
   // What the rented machine's agent holds, for an image model's plan: the
