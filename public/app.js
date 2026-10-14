@@ -1704,6 +1704,7 @@ function renderChat(box, modelName) {
     out.id = "chat-live";
     out.classList.add("pending");
     chat.busy = true;
+    state.chatBusy = (state.chatBusy ?? 0) + 1;
     chat.reply = "";
     $("#chat-send").disabled = true;
     let reply = "";
@@ -1766,6 +1767,7 @@ function renderChat(box, modelName) {
       }
     } finally {
       chat.busy = false;
+      state.chatBusy--;
       chat.reply = null;
       $("#chat-live")?.removeAttribute("id");
       if (mine()) $("#chat-send").disabled = false;
@@ -2400,8 +2402,11 @@ async function agentPicture(agent, args, onLine = () => {}) {
 // browser asks the machine directly and keeps the result in the page.
 async function agentJob(agent, args, onLine = () => {}) {
   // While a job runs, the machine's status changes (a restart below, say)
-  // do not redraw the window and lose its log.
+  // do not redraw the window and lose its log, the still-there check
+  // waits, and the site is told every so often that the machine is in
+  // use, so its idle clock never stops a machine mid-clip.
   state.agentBusy = (state.agentBusy ?? 0) + 1;
+  const keep = setInterval(() => api.post("/api/rent/touch", {}).catch(() => {}), 45e3);
   try {
     return await agentJobOnce(agent, args, onLine);
   } catch (err) {
@@ -2412,6 +2417,7 @@ async function agentJob(agent, args, onLine = () => {}) {
     await resetAgent(agent, err.jobId, onLine);
     return agentJobOnce(agent, args, onLine);
   } finally {
+    clearInterval(keep);
     state.agentBusy--;
   }
 }
@@ -2484,6 +2490,17 @@ async function agentJobOnce(agent, { repo, file, prompt, negative, quality, init
       // The job goes on on the machine; a dropped connection is waited out.
       misses++;
       if (misses === 4) onLine("The connection to the machine dropped; the work goes on there, waiting to reconnect");
+      // Unless the machine itself stopped: then nothing goes on there, and
+      // waiting would be for ever. The site knows from RunPod.
+      if (misses % 6 === 0) {
+        const r = await api.get("/api/rent").catch(() => null);
+        if (r && !r.rented) throw new Error("the rented machine is gone, and this job with it; rent one again");
+        if (r && ["EXITED", "TERMINATED", "ERROR"].includes(r.status)) {
+          state.rental = r;
+          renderRental();
+          throw new Error(`the machine stopped while generating. ${stopWhy(r)}Start it from the bar and try again; it loads the model first`);
+        }
+      }
       if (misses > 200) throw new Error(`lost the machine for five minutes while waiting (${err.message}); the job may still finish there`);
       continue;
     }
@@ -3492,10 +3509,11 @@ for (const ev of ["pointerdown", "keydown"]) {
 
 // ---- the still-there check ---------------------------------------------------------
 // A machine costs money whether or not anyone is at the page. After some
-// minutes without a click or key while one runs, even in the middle of a
-// download or a picture, the page asks; with no answer in a short
-// countdown it stops the machine. The disk and its models stay, and Start
-// brings it back. The minutes are a setting; the default is short.
+// minutes without a click or key while one runs, the page asks; with no
+// answer in a short countdown it stops the machine. The disk and its
+// models stay, and Start brings it back. The minutes are a setting; the
+// default is short. Never in the middle of a picture, clip or answer the
+// page itself is waiting on: watching the log is being there.
 const presence = { shown: false, deadline: 0, timer: null };
 const PRESENCE_CHECK_MS = 5000;
 function presenceMs() {
@@ -3511,6 +3529,10 @@ function presenceTick() {
     return;
   }
   if (!machineBilling()) return;
+  if (state.agentBusy || state.chatBusy) {
+    state.lastTouch = Date.now();
+    return;
+  }
   if (Date.now() - state.lastTouch < presenceMs()) return;
   const r = state.rental;
   // A short countdown, shorter still when the setting itself is short.

@@ -188,6 +188,20 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     lastLease = now();
     fetchImpl(`${agentFor(id)}/lease`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes: idleMinutes() || 60 }), signal: AbortSignal.timeout(4000) }).catch(() => {});
   }
+  // Whether the machine says it is working: a picture or clip the browser
+  // asked it for directly, or a download of its own. Asked of the machine,
+  // never of RunPod; a machine that does not answer is not working.
+  async function machineBusy() {
+    const id = podId();
+    if (!id || !hasAgent()) return false;
+    try {
+      const res = await fetchImpl(`${agentFor(id)}/health`, { signal: AbortSignal.timeout(4000) });
+      if (!res.ok) return false;
+      return Boolean((await res.json()).busy);
+    } catch {
+      return false;
+    }
+  }
   // Downloads in progress, each with when it began: one that never ends
   // (a stuck connection, a lost page) cannot keep the machine awake and
   // billing for ever.
@@ -758,22 +772,37 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     },
 
     // Stops a machine nobody has used for the idle time. Called on a timer;
-    // a download in progress or an idle time of 0 keeps it running.
+    // a download in progress, work the machine itself reports, or an idle
+    // time of 0 keeps it running.
     async checkIdle() {
       const minutes = idleMinutes();
       if (!podId()) return false;
-      const active = holds() > 0 || (minutes ? now() - lastActivity < minutes * 60e3 : true);
+      let active = holds() > 0 || (minutes ? now() - lastActivity < minutes * 60e3 : true);
       // A session costing more than the cap stops whether or not it is in
-      // use; looked at every few minutes, on what RunPod last said.
+      // use, but never in the middle of a picture, clip or download: it
+      // stops as soon as that work ends. Looked at every few minutes, on
+      // what RunPod last said.
       const cap = maxSpend();
       if (cap && now() - lastSpendCheck > 5 * 60e3 && (!last || last.id !== podId() || ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status))) {
         lastSpendCheck = now();
         const current = await this.status({ probe: false }).catch(() => null);
         if (current?.rented && current.status === "RUNNING" && Math.max(current.spentToday ?? 0, current.spent ?? 0) >= cap) {
-          save({ RUNPOD_LAST_STOP: `cap:${cap}` });
-          await this.stop();
-          return true;
+          if (holds() > 0 || (await machineBusy())) {
+            // Asked again at the next tick, not in five minutes.
+            lastSpendCheck = now() - 4 * 60e3;
+          } else {
+            save({ RUNPOD_LAST_STOP: `cap:${cap}` });
+            await this.stop();
+            return true;
+          }
         }
+      }
+      if (!active && minutes && !(last && last.id === podId() && !["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status)) && (await machineBusy())) {
+        // The machine is working on something the site did not see start
+        // (the browser asks it for pictures and clips directly): that is
+        // activity, and the idle clock starts over.
+        noteActivity();
+        active = true;
       }
       if (active) {
         // In use: the machine's own watch is told so.

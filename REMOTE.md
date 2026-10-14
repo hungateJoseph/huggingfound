@@ -154,6 +154,14 @@ The machine takes two to four minutes to start. Meanwhile:
   disk; running the step again starts the machine and goes on from them, and
   half-written parts from the cut-off are swept when the machine comes up.
   A download in progress keeps the idle timer from stopping the machine.
+- A machine at work is never stopped: not by the idle timer, the spend
+  cap or the still-there check. The site asks the machine whether it is
+  busy (a picture or clip the browser asked it for directly, a download)
+  before any stop of its own, the page tells the site the machine is in use
+  every so often while a clip is made and holds the still-there check until
+  it is done, and the cap stops the machine as soon as the work ends. A
+  machine that stops under a clip anyway (a Stop from another tab, RunPod
+  itself) is reported within seconds, with the reason, not waited on.
 - A clip or picture that runs out of memory on the card fails with a plain
   message (fewer frames, a smaller picture, or a bigger card), and the
   machine's worker drops the model. The next job loads it again. A machine

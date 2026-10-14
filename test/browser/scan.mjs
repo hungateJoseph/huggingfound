@@ -1101,6 +1101,52 @@ await step("hosted: a machine whose agent lost track of its model is restarted i
   await visitor.keyboard.press("Escape");
 });
 
+await step("hosted: a machine busy on a clip is left alone: the still-there check waits for it, and a machine that stops anyway is reported with the reason", async () => {
+  await openSettings(visitor);
+  await visitor.waitForSelector("#rent-presence");
+  await visitor.fill("#rent-presence", "0.1");
+  await visitor.click("#rent-save-idle");
+  await visitor.waitForFunction(() => /Saved/.test(document.querySelector("#notice")?.textContent ?? ""));
+  await visitor.click("#close-settings");
+  await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
+  await visitor.waitForSelector("#image-go");
+  rentedAgent.state.release = false;
+  await visitor.fill("#image-prompt", "slow please");
+  await visitor.click("#image-go");
+  await visitor.waitForFunction(() => /Generating, 27%/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  // Six seconds without a click would bring the check; the clip keeps it away.
+  await new Promise((r) => setTimeout(r, 12000));
+  assert.equal(await visitor.locator("#presence").isHidden(), true, "no still-there check while the machine works on the clip");
+  assert.equal(await visitor.locator("#image-out .image-card").count(), 0, "still generating");
+  rentedAgent.state.release = true;
+  await visitor.waitForSelector("#image-out .image-card", { timeout: 20000 });
+  // Once the clip is made, the check comes as before.
+  await visitor.waitForSelector("#presence:not([hidden])", { timeout: 20000 });
+  await visitor.click("#presence-yes");
+  // A machine that stops under a clip anyway (a Stop from elsewhere, RunPod
+  // itself): the page says so within seconds instead of waiting to reconnect.
+  rentedAgent.state.release = false;
+  await visitor.fill("#image-prompt", "slow please, again");
+  await visitor.click("#image-go");
+  await visitor.waitForFunction(() => /Generating, 27%/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  rentedAgent.state.down = true;
+  await visitor.request.post(`${hostedBase}/api/rent/stop`, { data: {} });
+  await visitor.waitForFunction(() => /the machine stopped while generating/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
+  assert.match(await visitor.locator("#image-log").innerText(), /Start it from the bar and try again/);
+  assert.equal(await visitor.locator("#image-retry").count(), 1);
+  rentedAgent.state.down = false;
+  rentedAgent.state.release = true;
+  await visitor.request.post(`${hostedBase}/api/rent/start`, { data: {} });
+  for (let i = 0; i < 4 && (await (await visitor.request.get(`${hostedBase}/api/rent`)).json()).status !== "RUNNING"; i++);
+  await visitor.keyboard.press("Escape");
+  await openSettings(visitor);
+  await visitor.waitForSelector("#rent-presence");
+  await visitor.fill("#rent-presence", "10");
+  await visitor.click("#rent-save-idle");
+  await visitor.waitForFunction(() => /Saved/.test(document.querySelector("#notice")?.textContent ?? ""));
+  await visitor.click("#close-settings");
+});
+
 await step("hosted: the bar opens one list of everything on the machine, with Open and Remove", async () => {
   // The poll refreshes the counts in the bar.
   await visitor.request.get(`${hostedBase}/api/rent`);

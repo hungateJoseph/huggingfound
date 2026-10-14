@@ -687,7 +687,7 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   let clock = 1_000_000_000_000;
   const file = path.join(home, "idle.env");
   writeEnv(file, { RUNPOD_API_KEY: KEY, RUNPOD_IDLE_MINUTES: "20" });
-  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0, now: () => clock });
+  const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, agentUrl: () => agent.url, imageCheck: async () => true, statusTtl: 0, now: () => clock });
   assert.equal(await rental.checkIdle(), false, "nothing rented");
   const r = await rental.rent({ gb: 24, diskGb: 50 });
   assert.equal(runpod.state.created.at(-1).env.HF_IDLE_MINUTES, "20", "the machine's own watch gets the same idle time");
@@ -705,6 +705,13 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   clock += 21 * 60e3;
   rental.touch();
   assert.equal(await rental.checkIdle(), false, "a chat restarted it too");
+  // A clip the browser asked the machine for directly: the site never saw
+  // it start, but the machine says it is working, and that is activity.
+  clock += 21 * 60e3;
+  agent.state.busy = true;
+  assert.equal(await rental.checkIdle(), false, "a machine at work is never stopped as idle");
+  agent.state.busy = false;
+  assert.equal(await rental.checkIdle(), false, "seen working a moment ago: the clock started over");
   clock += 21 * 60e3;
   assert.equal(await rental.checkIdle(), true);
   assert.equal(runpod.state.pods[r.id].status, "EXITED");
@@ -743,6 +750,12 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   assert.ok((await rental.status({ probe: false })).spent >= 0.3, "the stand-in machine has run long enough to pass the cap");
   rental.touch();
   clock += 6 * 60e3;
+  // Not in the middle of a clip, though: the cap stops it as soon as the clip ends.
+  agent.state.busy = true;
+  assert.equal(await rental.checkIdle(), false, "over the cap but at work: it goes on");
+  assert.ok(!readEnv(file).RUNPOD_LAST_STOP);
+  agent.state.busy = false;
+  clock += 61e3;
   assert.equal(await rental.checkIdle(), true, "stopped at the cap although it was just used");
   assert.equal(readEnv(file).RUNPOD_LAST_STOP, "cap:0.3");
   writeEnv(file, { RUNPOD_MAX_SPEND: "0" });

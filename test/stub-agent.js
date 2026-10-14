@@ -51,7 +51,7 @@ export function startStubAgent() {
         Object.defineProperty(data, "__state", { value: state, enumerable: false });
       }
       res.setHeader("Content-Type", "application/json");
-      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 9), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length, ...(state.diskFreeGb != null ? { diskFreeGb: state.diskFreeGb, diskTotalGb: state.diskTotalGb ?? 50 } : {}) }));
+      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 9), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length, busy: Boolean(state.busy) || state.jobs.some((j) => /slow please/.test(j.prompt) && !state.release), ...(state.diskFreeGb != null ? { diskFreeGb: state.diskFreeGb, diskTotalGb: state.diskTotalGb ?? 50 } : {}) }));
       if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files, addons: state.addons }));
       if (req.url === "/lease") {
         state.leases.push(data.minutes ?? null);
@@ -135,6 +135,8 @@ export function startStubAgent() {
           return res.end("{}");
         }
         if (/fail please/.test(job.prompt)) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the model choked", image: null }));
+        // A long clip: generating until the test releases it.
+        if (/slow please/.test(job.prompt) && !state.release) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: "image", progress: 0.27, error: null, image: null, video: null }));
         // An agent that believes its model loaded while the worker dropped it, until it is reset.
         if (/lost model/.test(job.prompt) && !state.lostOnce) {
           state.lostOnce = true;

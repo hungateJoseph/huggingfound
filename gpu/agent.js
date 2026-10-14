@@ -912,7 +912,7 @@ const server = http.createServer(async (req, res) => {
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
       const loaded = sd.file ? rel(sd.file) : py.dir ? (py.dir.endsWith(".safetensors") || py.dir.endsWith(".ckpt") ? rel(py.dir) : `${rel(py.dir)}/${INDEX}`) : null;
       const room = diskSpace();
-      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null });
+      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, busy: busy(), idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
     // The image server's recent output and the Python side's, for a look
