@@ -375,7 +375,7 @@ const jobs = new Map();
 
 function startJob(input) {
   const id = crypto.randomBytes(8).toString("hex");
-  const job = { id, status: "loading", createdAt: Date.now(), image: null, video: null, kind: "image", progress: null, error: null, note: "" };
+  const job = { id, status: "loading", createdAt: Date.now(), image: null, video: null, kind: "image", progress: null, error: null, note: "", seed: input.seed ?? null };
   jobs.set(id, job);
   (async () => {
     try {
@@ -392,7 +392,7 @@ function startJob(input) {
           if (lora && !fs.existsSync(lora)) throw new Error("the add-on's LoRA is not on this machine yet");
           adapters.push({ kind: input.addon.kind, path: main, lora, scale: input.addon.scale, faceid: /faceid/i.test(input.addon.file), plus: /plus/i.test(input.addon.file), xl: /sdxl/i.test(input.addon.file) });
         }
-        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined };
+        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined, seed: input.seed ?? undefined };
         let answer;
         for (let attempt = 0; ; attempt++) {
           await ensureWorkerLoaded(file, adapters);
@@ -430,7 +430,7 @@ function startJob(input) {
         negative_prompt: input.negative || "",
         width: input.width,
         height: input.height,
-        seed: -1,
+        seed: input.seed ?? -1,
         sample_params: { sample_steps: input.steps, sample_method: input.sampler, scheduler: input.scheduler, guidance: { txt_cfg: input.cfg } },
         vae_tiling_params: { enabled: true },
         output_format: "png",
@@ -1062,7 +1062,9 @@ const server = http.createServer(async (req, res) => {
         init = data;
         strength = Math.min(0.95, Math.max(0.1, Number(body.strength) || 0.55));
       }
-      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage });
+      // The same seed with revised words keeps a scene close to the one before.
+      const seed = Number.isInteger(body.seed) && body.seed >= 0 && body.seed < 2 ** 31 ? body.seed : null;
+      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed });
       return send(res, 202, { id: job.id, status: job.status });
     }
     const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})(\/result)?$/);
@@ -1082,7 +1084,7 @@ const server = http.createServer(async (req, res) => {
       // A lean poll leaves the result out and says it is there to fetch;
       // the plain one carries it, for pages from before.
       const lean = url.searchParams.get("lean") === "1";
-      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, note: job.note || "", error: job.error, image: done && !lean ? job.image : null, video: done && !lean ? job.video : null, result: Boolean(b64), bytes: b64 ? Buffer.byteLength(b64, "base64") : 0 });
+      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, note: job.note || "", error: job.error, seed: job.seed, image: done && !lean ? job.image : null, video: done && !lean ? job.video : null, result: Boolean(b64), bytes: b64 ? Buffer.byteLength(b64, "base64") : 0 });
     }
     send(res, 404, { error: "Not found" });
   } catch (err) {

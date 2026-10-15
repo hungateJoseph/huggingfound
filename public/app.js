@@ -2248,7 +2248,7 @@ function renderImage(box, t) {
     ${loaded}
     ${t.agent ? `<label class="check autosave" title="Finished results are kept in this browser whatever happens; this also saves each one to your computer as it comes, so a finished clip is never lost to a stopped machine or a closed page"><input type="checkbox" id="autosave" ${save.on ? "checked" : ""}> Save each finished ${what} to this computer as it comes, up to <input type="number" id="autosave-mb" min="1" max="5000" step="1" value="${save.maxMb}"> MB <small class="muted">(the browser may ask once to allow several downloads)</small></label>` : ""}
     ${t.agent ? `<label class="check stop-after" title="The machine stops once everything asked for here is made or has failed; its models stay on its disk and Start brings it back"><input type="checkbox" id="image-stop-after"> Stop the rented GPU when everything asked for here is made${state.rental?.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}</label>` : ""}
-    <pre class="log" id="image-log" hidden></pre>
+    <pre class="log" id="image-log" data-repo="${esc(t.repo)}" hidden></pre>
     <div id="image-out"></div>
     <div id="kept"></div>`;
   box.querySelector("#unload-model")?.addEventListener("click", async () => {
@@ -2270,7 +2270,7 @@ function renderImage(box, t) {
       return { quality, q, text: q?.text ? `${quality}, ${q.text}` : quality, estimate: null };
     }
     const lvl = box.querySelector("input[name=level]:checked")?.value ?? "medium";
-    const seconds = Number(box.querySelector("#video-seconds").value) || spec.defaultSeconds;
+    const seconds = Number(box.querySelector("#video-seconds")?.value) || spec.defaultSeconds;
     const est = clipEstimate(spec, lvl, seconds, t.repo);
     const q = { steps: est.level.steps, width: est.level.width, height: est.level.height, frames: est.frames, fps: spec.fps, cfg: spec.cfg };
     return { level: lvl, seconds, q, text: `${(est.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${est.level.width} by ${est.level.height}, ${est.frames} frames, ${est.level.steps} steps`, estimate: est };
@@ -2293,23 +2293,44 @@ function renderImage(box, t) {
     refreshEstimate();
   });
   refreshEstimate();
-  // Results made in this window, on show above the kept ones.
-  const shownIds = new Set();
-  renderKept(box, t.repo, shownIds);
+  // What is going on with this model, kept apart from the window: the log
+  // lines and whether requests are running. A window left and opened again
+  // shows the work as it stands and the lines go on landing in it.
+  const rec = ((state.runs ??= {})[t.repo] ??= { lines: [], active: false, failed: [] });
+  // Results shown in this window, above the kept ones.
+  rec.shown = new Set();
+  // The window as it stands now: this box while it is on show, or the one
+  // drawn in its place for the same model; nothing once the model is closed.
+  const liveBox = () => {
+    const log = document.getElementById("image-log");
+    return log && log.dataset.repo === t.repo ? log.parentElement : null;
+  };
+  const setBusy = (b, on) => {
+    const go = b.querySelector("#image-go");
+    if (go) go.disabled = on;
+    const qGo = b.querySelector("#queue-go");
+    if (qGo) qGo.disabled = on;
+  };
+  renderKept(box, t.repo, rec.shown, t.agent ? reply : null);
   // A request as it will be sent: the words, what to avoid, the settings as
-  // chosen right now, and the files picked, read when it is sent.
+  // chosen right now, a seed of its own, and the files picked, read when it
+  // is sent.
   const makeItem = (prompt) => {
     const c = chosen();
-    return { prompt, negative: $("#image-negative").value.trim(), quality: c.quality ?? null, q: c.q, settings: c.text, estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null };
+    return { prompt, negative: $("#image-negative").value.trim(), quality: c.quality ?? null, q: c.q, settings: c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null };
   };
-  // The queue: several requests, run one after another by one click.
-  const queue = [];
+  // The queue: several requests, run one after another by one click. It is
+  // kept in this browser under the model, so leaving the window or the page
+  // loses none of it; a starting picture picked from the disk cannot be
+  // kept, and is picked again.
+  const queue = t.agent ? (rec.queue ??= queueItems(t.repo)) : [];
   const renderQueue = () => {
     const wrap = box.querySelector("#queue");
     if (!wrap) return;
+    rememberQueue(t.repo, queue);
     wrap.hidden = !queue.length;
     const list = wrap.querySelector("#queue-list");
-    list.innerHTML = queue.map((item, i) => `<li>${esc(item.prompt)} <span class="muted small">${esc(item.settings)}${item.estimate ? `, about ${esc(shortDuration(item.estimate.seconds))}` : ""}</span><button class="ghost queue-remove" data-i="${i}">Remove</button></li>`).join("");
+    list.innerHTML = queue.map((item, i) => `<li>${esc(item.prompt)} <span class="muted small">${esc(item.settings)}${item.estimate ? `, about ${esc(shortDuration(item.estimate.seconds))}` : ""}${item.replyTo ? ` · a reply to an earlier ${item.paintOver ? "picture" : "clip"}` : ""}${item.startName && !item.startFile ? ` · the starting picture ${esc(item.startName)} has to be picked again` : ""}</span><button class="ghost queue-remove" data-i="${i}">Remove</button></li>`).join("");
     for (const btn of list.querySelectorAll(".queue-remove")) btn.addEventListener("click", () => {
       queue.splice(Number(btn.dataset.i), 1);
       renderQueue();
@@ -2334,29 +2355,86 @@ function renderImage(box, t) {
     run(queue.splice(0));
     renderQueue();
   });
+  renderQueue();
   $("#image-go").addEventListener("click", () => {
     const prompt = $("#image-prompt").value.trim();
     if (!prompt) return;
     run([makeItem(prompt)]);
   });
-  // Requests from before that are still on the machine (this window was
-  // left or the page reloaded while they ran): followed again.
-  const pending = t.agent ? pendingJobs(t.repo) : [];
+  // Work still going from before this window was drawn: its log is back
+  // on show and the lines keep coming; the buttons wait for it.
+  if (rec.lines.length) {
+    const log = box.querySelector("#image-log");
+    log.hidden = false;
+    log.textContent = rec.lines.join("\n") + "\n";
+    log.scrollTop = log.scrollHeight;
+  }
+  if (rec.active) setBusy(box, true);
+  else if (rec.failed.length) retryRow(rec.failed);
+  // Requests from before that are still on the machine (the page was
+  // reloaded while they ran): followed again, unless they are being followed.
+  const pending = t.agent && !rec.active ? pendingJobs(t.repo) : [];
   if (pending.length) run(pending.map((pj) => ({ item: pj.item, id: pj.id, started: pj.at, args: null })), { resumed: true });
 
   // The way to go again, right under the failure: the failed requests
   // once more. A single one is read afresh from the box, so changed words
   // or settings count; a queue's failures go again as they were.
   function retryRow(items) {
-    if (!items.length || box.querySelector("#image-retry")) return;
+    const b = liveBox();
+    if (!items.length || !b || b.querySelector("#image-retry")) return;
     const row = document.createElement("p");
     row.className = "tools-row";
     row.innerHTML = `<button class="primary" id="image-retry">Try again</button>`;
-    $("#image-log").after(row);
+    b.querySelector("#image-log").after(row);
     row.querySelector("#image-retry").addEventListener("click", () => {
       row.remove();
-      run(items.length === 1 ? [makeItem($("#image-prompt").value.trim() || items[0].prompt)] : items);
+      const fresh = items.length === 1 && !items[0].replyTo;
+      run(fresh ? [makeItem($("#image-prompt").value.trim() || items[0].prompt)] : items);
     });
+  }
+
+  // A reply to a result: what should change, said as to a person. The
+  // words are revised with the change in them, by Claude when a key is
+  // there and from the reply itself otherwise, and the same model is asked
+  // again with the same seed. A picture is painted over at a strength that
+  // fits the size of the change, which costs that fraction of a fresh one;
+  // a clip cannot be changed in place by these models, so it is made again
+  // whole, and the seed keeps the scene close.
+  async function reply(entry, text, foot) {
+    const picture = entry.kind !== "video";
+    foot.textContent = claudeAvailable() ? "Claude is writing the revised description" : "Revising the words";
+    const revised = await reviseFor(entry, text, t.repo);
+    const c = chosen();
+    const q = entry.q ?? c.q;
+    const item = { prompt: revised.prompt, negative: revised.negative, quality: entry.quality ?? c.quality ?? null, q, settings: entry.settings ?? c.text, seed: entry.seed ?? randomSeed(), replyTo: { id: entry.id, text }, startFile: null, estimate: null };
+    const lines = [`Reply to the earlier ${picture ? "picture" : "clip"}: "${text}"`, `${revised.by === "Claude" ? "Claude's revised description" : "From your words"}: "${item.prompt}"${item.negative ? `, avoiding "${item.negative}"` : ""}.`];
+    if (picture) {
+      item.paintOver = true;
+      item.strength = Math.min(0.9, Math.max(0.2, 1 - revised.keep / 100));
+      const took = entry.took ?? (item.quality ? tookSeconds(t.repo, item.quality) : null);
+      lines.push(`Painting over the earlier picture with the same seed, keeping about ${Math.round((1 - item.strength) * 100)}% of it: about ${Math.round(item.strength * 100)}% of the time of a fresh one${took ? `, around ${shortDuration(took * item.strength)}` : ""}.`);
+    } else {
+      if (spec && q?.frames) {
+        const base = 0.5 * ((q.width * q.height) / 1e6) * q.frames * q.steps * (spec.heavy ?? 1);
+        item.estimate = { base, seconds: Math.max(1, Math.round(base * (calibration(t.repo)?.factor ?? 1))) };
+      }
+      lines.push(`This model cannot change a clip in place, so it is made again whole from the revised words with the same seed; the scene stays close.${item.estimate ? ` About ${shortDuration(item.estimate.seconds)}.` : ""}`);
+    }
+    if (entry.seedKept === false) lines.push("This machine's image is from before seeds were passed along, so the remake may differ more than that; a machine on the current image keeps to it.");
+    const b = liveBox();
+    if (b) {
+      b.querySelector("#image-prompt").value = item.prompt;
+      b.querySelector("#image-negative").value = item.negative;
+    }
+    if (rec.active) {
+      queue.push(item);
+      renderQueue();
+      for (const line of lines) rec.lines.push(line);
+      foot.textContent = "Added to the queue; it goes after what is running.";
+      return;
+    }
+    foot.textContent = "Asked; the log above follows it.";
+    run([item], { intro: lines });
   }
 
   // A request's arguments for the machine: the files it needs are read now.
@@ -2370,6 +2448,13 @@ function renderImage(box, t) {
         extra.strength = 0.9;
       }
     }
+    // A reply paints over the picture it answers, kept in this browser.
+    if (item.paintOver) {
+      const src = (await keptResults(t.repo)).find((e) => e.id === item.replyTo?.id);
+      if (!src?.blob) throw new Error("the picture this replies to is no longer kept here");
+      extra.init = await readAsDataUrl(src.blob);
+      extra.strength = item.strength ?? 0.4;
+    }
     if (addon) {
       const base = bases[Number(box.querySelector("#addon-base")?.value ?? -1)];
       if (!base) throw new Error("no base model on the rented GPU yet");
@@ -2381,7 +2466,7 @@ function renderImage(box, t) {
       target = base;
       extra = { addon: { kind: t.addonKind, repo: t.repo, file: variant.file, lora: variant.lora, scale: Number(box.querySelector("#addon-scale").value) }, ipImage, xl: base.xl };
     }
-    return { ...target, prompt: item.prompt, negative: item.negative, quality: item.q, video, ...extra };
+    return { ...target, prompt: item.prompt, negative: item.negative, quality: item.q, video, seed: item.seed ?? null, ...extra };
   }
 
   // A finished result: timed against the guess, kept in this browser,
@@ -2389,25 +2474,29 @@ function renderImage(box, t) {
   async function finishResult(req, job, openedFor, say) {
     const { item, args } = req;
     const repo = args?.repo ?? t.repo;
-    if (job.took) {
+    const blob = job.blob ?? b64ToBlob(job.video || job.image, job.video ? "video/mp4" : "image/png");
+    const kind = job.video || job.blob?.type === "video/mp4" ? "video" : "image";
+    // A picture painted over takes a fraction of the time, which says
+    // nothing about a fresh one: the guess is not adjusted from it.
+    if (job.took && !(item.paintOver && kind === "image")) {
       if (spec && item.estimate?.base) noteEstimate(t.repo, item.estimate.base, job.took);
       else if (item.quality) rememberTook(repo, item.quality, job.took);
       if (job.loadSeconds > 5) rememberLoad(t.repo, job.loadSeconds);
       const guess = item.estimate?.seconds ?? (item.quality ? qualities[item.quality]?.seconds : null);
       say(`This ${what} took ${shortDuration(job.took)} of machine time${price ? `, about ${money((price * job.took) / 3600)} at ${money(price)} an hour` : ""}${guess ? `; the guess was ${shortDuration(guess)}${spec ? ", and the next guess is adjusted" : ""}` : ""}${job.loadSeconds > 5 ? `. Loading the model first took ${shortDuration(job.loadSeconds)}${price ? `, about ${money((price * job.loadSeconds) / 3600)}` : ""}` : ""}.`);
-      const qbox = box.querySelector("#quality");
+      const qbox = liveBox()?.querySelector("#quality");
       if (qbox && !spec) {
-        const picked = box.querySelector("input[name=quality]:checked")?.value;
+        const picked = qbox.querySelector("input[name=quality]:checked")?.value;
         qbox.innerHTML = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === picked ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
       }
       refreshEstimate();
-    }
-    const blob = job.blob ?? b64ToBlob(job.video || job.image, job.video ? "video/mp4" : "image/png");
-    const kind = job.video || job.blob?.type === "video/mp4" ? "video" : "image";
+    } else if (job.took) say(`This picture took ${shortDuration(job.took)} of machine time${price ? `, about ${money((price * job.took) / 3600)}` : ""}.`);
     const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
-    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy };
+    // The seed the machine used, so a reply can keep to it; a machine from
+    // before seeds were passed along says nothing, and that is remembered.
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, replyTo: item.replyTo ?? null };
     await keepResult(entry);
-    shownIds.add(entry.id);
+    rec.shown.add(entry.id);
     const name = `${kind === "video" ? "clip" : "image"}-${entry.id}.${kind === "video" ? "mp4" : "png"}`;
     const auto = autosaveSettings();
     if (auto.on) {
@@ -2421,29 +2510,43 @@ function renderImage(box, t) {
       else showPicture(out, { data: job.image, prompt: item.prompt, negative: item.negative, model: t.repo, madeBy, agent: t.agent, repo, modelFile: args?.file ?? t.file, chain: [] });
     };
     // The window may have been left meanwhile: a note says it is ready,
-    // and the kept list shows it when the model is opened again.
-    if (state.open !== openedFor || !document.body.contains(box)) {
+    // and the kept list shows it when the model is opened again. Drawn
+    // again for the same model, the window as it stands now shows it.
+    const b = liveBox();
+    if (!b) {
       pictureReady(openedFor, kind);
       return;
     }
-    show(box.querySelector("#image-out"));
-    renderKept(box, t.repo, shownIds);
+    const out = b.querySelector("#image-out");
+    show(out);
+    addReply(out.lastElementChild, entry, reply);
+    renderKept(b, t.repo, rec.shown, reply);
   }
 
   // Runs requests: one from the Generate button, several from the queue,
   // or ones from before found still on the machine.
-  async function run(items, { resumed = false } = {}) {
-    const log = $("#image-log");
-    const goBtn = $("#image-go");
-    const qGo = box.querySelector("#queue-go");
-    log.hidden = false;
-    if (!resumed) log.textContent = "";
-    goBtn.disabled = true;
-    if (qGo) qGo.disabled = true;
+  async function run(items, { resumed = false, intro = [] } = {}) {
+    rec.active = true;
+    rec.failed = [];
+    if (!resumed) rec.lines = [];
+    const first = liveBox();
+    if (first) {
+      const log = first.querySelector("#image-log");
+      log.hidden = false;
+      if (!resumed) log.textContent = "";
+      first.querySelector("#image-retry")?.closest("p")?.remove();
+      setBusy(first, true);
+    }
+    // A line lands in the record and in the window as it stands now.
     const say = (line) => {
+      rec.lines.push(line);
+      const log = liveBox()?.querySelector("#image-log");
+      if (!log) return;
+      log.hidden = false;
       log.textContent += line + "\n";
       log.scrollTop = log.scrollHeight;
     };
+    for (const line of intro) say(line);
     try {
       if (items[0]?.item?.quality ?? items[0]?.quality) {
         try {
@@ -2456,15 +2559,16 @@ function renderImage(box, t) {
         const item = items[0];
         const { id } = await api.post("/api/run", { kind: "generate-image", args: { repo: t.repo, file: t.file, prompt: item.prompt, negative: item.negative, quality: item.quality } });
         const result = await follow(id, say);
-        if (result.status === "done" && result.result) {
-          $("#image-out").innerHTML = "";
-          showPicture($("#image-out"), { file: result.result, prompt: item.prompt, negative: item.negative, model: t.repo, madeBy: t.file, chain: [] });
+        const out = liveBox()?.querySelector("#image-out");
+        if (result.status === "done" && result.result && out) {
+          out.innerHTML = "";
+          showPicture(out, { file: result.result, prompt: item.prompt, negative: item.negative, model: t.repo, madeBy: t.file, chain: [] });
         }
         return;
       }
       const openedFor = state.model?.id ?? t.repo;
-      backgroundNote(box, state.model ?? { id: t.repo }, items.length > 1 ? `The ${what}s are made` : `The ${what} is made`);
-      const stopAfter = Boolean(box.querySelector("#image-stop-after")?.checked);
+      backgroundNote(liveBox(), state.model ?? { id: t.repo }, items.length > 1 ? `The ${what}s are made` : `The ${what} is made`);
+      const stopAfter = Boolean(liveBox()?.querySelector("#image-stop-after")?.checked);
       if (resumed) say(`${items.length} request${items.length === 1 ? "" : "s"} from before ${items.length === 1 ? "is" : "are"} still on the machine; following ${items.length === 1 ? "it" : "them"} again.`);
       const requests = [];
       for (const item of items) requests.push(resumed ? item : { item, args: await requestArgs(item) });
@@ -2486,16 +2590,21 @@ function renderImage(box, t) {
       } finally {
         // Made or failed, the machine stops now if that was asked: the
         // bill ends with the work, not after an idle wait.
-        if (stopAfter) stopAfterJob(log);
+        if (stopAfter) stopAfterJob(say);
       }
       if (requests.length > 1) say(`All done: ${made} made${failedItems.length ? `, ${failedItems.length} failed` : ""}.`);
-      if (failedItems.length) retryRow(failedItems);
+      if (failedItems.length) {
+        rec.failed = failedItems;
+        retryRow(failedItems);
+      }
     } catch (err) {
       say(`Could not start: ${err.message}`);
-      retryRow(items.filter((it) => !it.id || it.item).map((it) => it.item ?? it));
+      rec.failed = items.filter((it) => !it.id || it.item).map((it) => it.item ?? it);
+      retryRow(rec.failed);
     } finally {
-      goBtn.disabled = false;
-      if (qGo) qGo.disabled = false;
+      rec.active = false;
+      const b = liveBox();
+      if (b) setBusy(b, false);
     }
   }
 }
@@ -2516,7 +2625,7 @@ function mbText(bytes) {
 // Everything made with a model on the rented GPU, kept in this browser:
 // closing the window, leaving the page or the machine stopping loses
 // nothing. Listed under the try box with Download and Remove.
-async function renderKept(box, repo, shownIds = new Set()) {
+async function renderKept(box, repo, shownIds = new Set(), onReply = null) {
   const el = box.querySelector("#kept");
   if (!el) return;
   let list = [];
@@ -2539,13 +2648,14 @@ async function renderKept(box, repo, shownIds = new Set()) {
     const card = document.createElement("div");
     card.className = "image-card kept";
     card.innerHTML = `${e.kind === "video" ? `<video class="result-image" src="${url}" controls loop muted playsinline title="${esc(e.prompt)}"></video>` : `<img class="result-image" src="${url}" alt="${esc(e.prompt)}">`}
-      <p class="muted small caption">${esc(e.prompt)}${e.settings ? ` · ${esc(e.settings)}` : ""} · ${new Date(e.madeAt).toLocaleString()}${e.took ? ` · ${shortDuration(e.took)} of machine time` : ""} · ${mbText(e.bytes || 0)}</p>
+      <p class="muted small caption">${e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${esc(e.replyTo.text)}") · ` : ""}${esc(e.prompt)}${e.settings ? ` · ${esc(e.settings)}` : ""} · ${new Date(e.madeAt).toLocaleString()}${e.took ? ` · ${shortDuration(e.took)} of machine time` : ""} · ${mbText(e.bytes || 0)}</p>
       <p class="tools-row"><a class="button" href="${url}" download="${name}">Download</a><button class="ghost kept-remove">Remove</button></p>`;
     card.querySelector(".kept-remove").addEventListener("click", async () => {
       await forgetResult(e.id);
       card.remove();
-      renderKept(box, repo, shownIds);
+      renderKept(box, repo, shownIds, onReply);
     });
+    addReply(card, e, onReply);
     el.appendChild(card);
   }
 }
@@ -2685,12 +2795,13 @@ async function resetAgent(agent, jobId, onLine) {
 }
 
 // Hands one job to the machine and returns its id.
-async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false }, onLine = () => {}) {
+async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false, seed = null }, onLine = () => {}) {
   const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
   // An add-on on an SDXL base draws at SDXL's size.
   const width = addon && xl ? 1024 : (q.width ?? q.size);
   const height = addon && xl ? 1024 : (q.height ?? q.size);
   const body = { repo, file, prompt, negative, steps: q.steps, width, height, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler };
+  if (Number.isInteger(seed)) body.seed = seed;
   if (addon) {
     body.addon = addon;
     if (ipImage) body.ipImage = ipImage;
@@ -3644,7 +3755,7 @@ function pendingJobs(repo) {
 function rememberPending(repo, id, item, at) {
   try {
     const list = pendingJobs(repo).filter((p) => p.id !== id);
-    list.push({ id, at, item: item ? { prompt: item.prompt, negative: item.negative, quality: item.quality ?? null, settings: item.settings, estimate: item.estimate ?? null } : null });
+    list.push({ id, at, item: item ? { ...item, startFile: undefined } : null });
     localStorage.setItem(`pending:${repo}`, JSON.stringify(list));
   } catch {
     // no storage
@@ -3656,6 +3767,150 @@ function forgetPending(repo, id) {
   } catch {
     // no storage
   }
+}
+
+// The queue under a model, kept in this browser so that leaving the window
+// or the page keeps it; a picked file cannot be kept, only its name.
+function queueItems(repo) {
+  try {
+    return JSON.parse(localStorage.getItem(`queue:${repo}`) || "[]").map((item) => ({ ...item, startFile: null }));
+  } catch {
+    return [];
+  }
+}
+function rememberQueue(repo, items) {
+  try {
+    localStorage.setItem(`queue:${repo}`, JSON.stringify(items.map(({ startFile, ...rest }) => ({ ...rest, startName: startFile?.name ?? rest.startName ?? null }))));
+  } catch {
+    // no storage
+  }
+}
+
+// A seed for one request: the same seed with the same words gives the same
+// result, and with revised words one close to it.
+function randomSeed() {
+  return Math.floor(Math.random() * 2 ** 31);
+}
+
+// The revised description for a reply: Claude writes it, with the picture
+// in front of it when there is one, when a key is there; otherwise, or
+// when Claude gives nothing usable, it comes from the words of the reply.
+async function reviseFor(entry, text, model) {
+  const local = reviseWords(entry.prompt, entry.negative, text);
+  if (!claudeAvailable()) return local;
+  try {
+    const creds = state.hosted ? hostedCredentials() ?? {} : {};
+    const picture = entry.kind !== "video" && entry.blob && entry.blob.size <= 5 * 1048576 ? { media_type: "image/png", data: await blobToBase64(entry.blob) } : null;
+    const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify({ kind: "image", mode: "reply", clip: entry.kind === "video", model, request: text, prompt: entry.prompt, negative: entry.negative, ...(picture ? { image: picture } : {}) }) });
+    if (!res.ok) return local;
+    let out = "";
+    let end = null;
+    await readLines(res, (j) => {
+      if (j.error) throw new Error(j.error);
+      if (j.text) out += j.text;
+      if (j.done) end = j;
+    });
+    if (end?.declined) return local;
+    const description = /^Description:\s*(.+)$/m.exec(out)?.[1]?.trim();
+    if (!description) return local;
+    const avoid = /^Avoid:\s*(.+)$/m.exec(out)?.[1]?.trim() ?? "";
+    const keep = Number(/^Keep:\s*(\d+)/m.exec(out)?.[1]);
+    return { prompt: description, negative: /^(nothing|none|-)\.?$/i.test(avoid) ? entry.negative || "" : avoid, keep: Number.isFinite(keep) ? keep : local.keep, by: "Claude" };
+  } catch {
+    return local;
+  }
+}
+
+// The revised words from the reply alone. Praise and the framing of the
+// complaint go; what is asked for joins the description and what is asked
+// away joins the avoid list. "looks good but I asked for two jump ropes,
+// you only showed one" adds "two jump ropes" to the description. The size
+// of the change is read from the words too: how much of the picture to keep.
+function reviseWords(prompt, negative, text) {
+  let s = ` ${String(text).trim()} `;
+  const keep = keepFromWords(s);
+  // Everything before a "but" is the praise; the ask follows it.
+  const turn = /\b(but|however|except|although|though|apart from that|other than that)\b[,:\s]*/i.exec(s);
+  if (turn && turn.index < 140) s = s.slice(turn.index + turn[0].length);
+  const adds = [];
+  const avoids = [];
+  for (let clause of s.split(/[,.;!?\n]+|\b(?:and|also|plus)\b/i)) {
+    clause = clause.trim();
+    if (!clause) continue;
+    // A complaint about what came rather than an ask: "you only showed one", "there is only one".
+    if (/^(you|it|there|this|that|the (picture|clip|image|video|photo))\b.*\b(only|just|one|single|none|no|nothing|missing|wrong)\b/i.test(clause) && !/\b(should|needs?|must|want|make|add|more|give|put|show me)\b/i.test(clause)) continue;
+    if (/\b(looks?|is|was|came out|turned out)\b.*\b(good|great|nice|fine|lovely|perfect|close|better|right)\b|^(thanks?|thank you|good|great|nice|ok|okay|love it|i like (it|this|that))\b/i.test(clause)) continue;
+    let core = clause
+      .replace(/^(and |so |please |also |now |then |well )+/i, "")
+      .replace(/^(i|we) (don't|do not|didn't|did not) (want|need|like|ask for)( to see| any)?\s*/i, "without ")
+      .replace(/^(i|we)('d| would| only| just| really| actually| had)? (asked|ask|wanted|want|said|meant|need|needed|hoped|expected|was hoping|would like|like)( for| to see| to have| to get| it to be| it to have| there to be| you to)?\s*/i, "")
+      .replace(/^(can|could|would|will) (you|it|we)( please)? /i, "")
+      .replace(/^(please )?(make|turn|have|let|get|give|show|put) (it|them|him|her|me)( be| have| with)? /i, "")
+      .replace(/^(please )?(make|turn|have|let|get|give|show|put|add|include|use|try)\s+/i, "")
+      .replace(/^(it|they|there|this|that|he|she) (should|needs? to|must|has to|have to|ought to)( be| have| show| include)?\s*/i, "")
+      .replace(/^(there should be|i'd like|i would like|i want|with|needs?)\s+/i, "")
+      .replace(/^(a bit|a little|a touch|slightly|much|way|far|a lot) /i, "")
+      .trim();
+    if (!core) continue;
+    const away = /^(no|not|without|remove|get rid of|take (away|out|off)|drop|lose|delete|don't|do not|never|less|fewer|minus)\b\s*/i.exec(core);
+    if (away) {
+      const rest = core.slice(away[0].length).replace(/^(any|the|a|an|all|of|some|that|this) /i, "").trim();
+      if (rest) avoids.push(rest);
+      continue;
+    }
+    core = core.replace(/^(instead|rather)( of)?\s*/i, "").replace(/\s+(instead|too|as well|though)$/i, "").replace(/\bplease\b/gi, "").replace(/\s+/g, " ").trim();
+    // The size of the change is not part of the picture.
+    if (/^((completely|entirely|totally|very|quite|a bit|slightly) )?(different|changed|new|again|better|more)$/i.test(core)) continue;
+    if (core) adds.push(core);
+  }
+  const extra = adds.filter((a) => !prompt.toLowerCase().includes(a.toLowerCase()));
+  const avoid = [negative, ...avoids.filter((a) => !(negative || "").toLowerCase().includes(a.toLowerCase()))].filter(Boolean).join(", ");
+  return { prompt: extra.length ? `${prompt}, ${extra.join(", ")}` : prompt, negative: avoid, keep, by: "words" };
+}
+function keepFromWords(s) {
+  if (/\b(completely|entirely|totally|instead|different|redo|start over|from scratch|new scene|another|nothing like)\b/i.test(s)) return 35;
+  if (/\b(slightly|a (bit|little|touch|tad)|tiny|subtle|lighting|colou?rs?|brighter|darker|warmer|cooler|tone|contrast|sharper)\b/i.test(s)) return 80;
+  return 60;
+}
+
+// Under a result: a reply, said as to a person, that asks the same model
+// for the change. The form folds out of a button, so a card stays small.
+function addReply(card, entry, onReply) {
+  if (!card || !onReply || !entry || card.querySelector(".reply-wrap")) return;
+  const clip = entry.kind === "video";
+  const wrap = document.createElement("div");
+  wrap.className = "reply-wrap";
+  wrap.innerHTML = `<button class="ghost reply-go">Reply with a change</button>
+    <div class="reply" hidden>
+      <textarea class="reply-text" rows="2" placeholder="${clip ? "Say what to change, as to a person: good, but the camera should move slower" : "Say what to change, as to a person: good, but I asked for two jump ropes and there is one"}"></textarea>
+      <div class="row"><button class="primary reply-run">Ask again</button><span class="muted small">${clip ? "The clip is made again from the revised words with the same seed, so the scene stays close." : "The same model paints over this picture with the change: a fraction of the time of a fresh one."}</span></div>
+      <div class="muted small reply-foot"></div>
+    </div>`;
+  card.appendChild(wrap);
+  const form = wrap.querySelector(".reply");
+  const text = wrap.querySelector(".reply-text");
+  const foot = wrap.querySelector(".reply-foot");
+  wrap.querySelector(".reply-go").addEventListener("click", () => {
+    form.hidden = !form.hidden;
+    if (!form.hidden) text.focus();
+  });
+  wrap.querySelector(".reply-run").addEventListener("click", async () => {
+    const ask = text.value.trim();
+    if (!ask) {
+      text.focus();
+      return;
+    }
+    const run = wrap.querySelector(".reply-run");
+    run.disabled = true;
+    try {
+      await onReply(entry, ask, foot);
+      text.value = "";
+    } catch (err) {
+      foot.textContent = `Could not ask: ${err.message}`;
+    } finally {
+      run.disabled = false;
+    }
+  });
 }
 
 function safeguardText(pricePerHour) {
@@ -3671,17 +3926,17 @@ const DISK_STOPPED_PER_GB_MONTH = 0.2;
 
 // Stops the rented machine after a picture or clip the person ticked the box
 // for, and says so in the log; a download still going keeps it up instead.
-async function stopAfterJob(log) {
+async function stopAfterJob(say) {
   try {
     if (state.rental?.downloading) {
-      log.textContent += "The machine stays up: a download of yours is still going on it.\n";
+      say("The machine stays up: a download of yours is still going on it.");
       return;
     }
     state.rental = await api.post("/api/rent/stop", { reason: "done" });
-    log.textContent += "Stopped the rented GPU, as asked: the hourly charge has ended. Start brings it back from the bar.\n";
+    say("Stopped the rented GPU, as asked: the hourly charge has ended. Start brings it back from the bar.");
     renderRental();
   } catch (err) {
-    log.textContent += `Could not stop the machine: ${err.message}. Stop it from the bar.\n`;
+    say(`Could not stop the machine: ${err.message}. Stop it from the bar.`);
   }
 }
 

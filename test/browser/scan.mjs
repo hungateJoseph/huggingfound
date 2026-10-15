@@ -1073,6 +1073,67 @@ await step("hosted: an image model is downloaded onto the rented GPU and picture
   await visitor.keyboard.press("Escape");
 });
 
+await step("hosted: the queue and a running log survive leaving the window, and a reply paints over the picture with the same seed at a fraction of the time", async () => {
+  const openSd = async () => {
+    await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
+    await visitor.waitForSelector("#image-go");
+  };
+  await openSd();
+  // The queue is kept under the model.
+  await visitor.fill("#image-prompt", "a red barn");
+  await visitor.click("#queue-add");
+  await visitor.fill("#image-prompt", "a blue barn");
+  await visitor.click("#queue-add");
+  assert.equal(await visitor.locator("#queue-list li").count(), 2);
+  await visitor.keyboard.press("Escape");
+  await openSd();
+  await visitor.waitForSelector("#queue-list li");
+  assert.equal(await visitor.locator("#queue-list li").count(), 2, "the queue is back after leaving the window");
+  assert.match(await visitor.locator("#queue-list").innerText(), /a red barn[\s\S]*a blue barn/);
+  await visitor.click("#queue-clear");
+  // A picture under way when the window is left: opened again, the log is
+  // back as it stood, the lines keep coming, and the picture lands there.
+  rentedAgent.state.release = false;
+  await visitor.fill("#image-prompt", "slow please");
+  await visitor.click("#image-go");
+  await visitor.waitForFunction(() => /Generating, 27%/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  await visitor.keyboard.press("Escape");
+  await openSd();
+  await visitor.waitForSelector("#image-log:not([hidden])");
+  assert.match(await visitor.locator("#image-log").innerText(), /Asking the rented GPU[\s\S]*Generating, 27%/, "the log is back as it stood");
+  assert.equal(await visitor.locator("#image-go").isDisabled(), true, "the buttons wait for it");
+  rentedAgent.state.release = true;
+  await visitor.waitForFunction(() => /Done in \d+ s/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  await visitor.waitForSelector("#image-out .image-card");
+  assert.equal(await visitor.locator("#image-out .image-card").count(), 1, "the picture landed in the window opened again");
+  await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled);
+  const made = rentedAgent.state.jobs.at(-1);
+  assert.ok(Number.isInteger(made.seed), "each request carries a seed of its own");
+  // A reply, as to a person: the words are revised with the change in them,
+  // and the same model paints over the picture with the same seed.
+  await visitor.locator("#image-out .reply-go").click();
+  await visitor.locator("#image-out .reply-text").fill("looks good but I asked for two barns, there is only one");
+  await visitor.locator("#image-out .reply-run").click();
+  await visitor.waitForFunction(() => document.querySelectorAll("#image-out .image-card").length === 2, null, { timeout: 20000 });
+  const again = rentedAgent.state.jobs.at(-1);
+  assert.equal(again.prompt, "slow please, two barns");
+  assert.equal(again.seed, made.seed, "the same seed");
+  assert.ok(/^(data:image\/png;base64,)?iVBOR/.test(again.init), "painted over the earlier picture");
+  assert.equal(again.strength, 0.4);
+  const log = await visitor.locator("#image-log").innerText();
+  assert.match(log, /Reply to the earlier picture: "looks good but I asked for two barns, there is only one"/);
+  assert.match(log, /From your words: "slow please, two barns"/);
+  assert.match(log, /keeping about 60% of it: about 40% of the time of a fresh one/);
+  assert.doesNotMatch(log, /the guess was/, "a picture painted over does not adjust the guess");
+  // Kept under the model, the reply says what it answered, and a kept result can be replied to as well.
+  await visitor.keyboard.press("Escape");
+  await openSd();
+  await visitor.waitForSelector("#kept .image-card");
+  assert.match(await visitor.locator("#kept").innerText(), /In reply to an earlier picture \("looks good but I asked for two barns, there is only one"\)/);
+  assert.ok((await visitor.locator("#kept .reply-go").count()) >= 2);
+  await visitor.keyboard.press("Escape");
+});
+
 await step("hosted: a machine whose agent lost track of its model is restarted in place, or reset when it can be, and the picture asked again", async () => {
   await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
   await visitor.waitForSelector("#image-go");
@@ -1202,15 +1263,27 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.match(downloads[0], /^clip-[\w-]+\.mp4$/);
   assert.match(await visitor.locator("#estimate").innerText(), /adjusted from the last 2 clips made here/);
   assert.equal(runpod.state.actions.at(-1).split(":")[1], "stop");
+  // A reply to a clip: no painting over with these models, so the same
+  // model makes it again from the revised words with the same seed and settings.
+  await visitor.uncheck("#image-stop-after");
+  const firstClip = rentedAgent.state.jobs.at(-2);
+  const firstCard = visitor.locator("#image-out .image-card").first();
+  await firstCard.locator(".reply-go").click();
+  await firstCard.locator(".reply-text").fill("slower camera pan");
+  await firstCard.locator(".reply-run").click();
+  await visitor.waitForFunction(() => document.querySelectorAll("#image-out .image-card").length === 3, null, { timeout: 20000 });
+  const remade = rentedAgent.state.jobs.at(-1);
+  assert.deepEqual([remade.prompt, remade.seed, remade.init ?? null, remade.frames, remade.width, remade.steps], ["waves at dusk, slower camera pan", firstClip.seed, null, 81, 1280, 40]);
+  assert.match(await visitor.locator("#image-log").innerText(), /made again whole from the revised words with the same seed/);
   // Leaving the window loses nothing: the clips are kept under the model.
   await visitor.keyboard.press("Escape");
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   // The machine is stopped, so the window offers to start it; the clips show all the same.
   await visitor.waitForSelector("#kept .image-card");
-  assert.equal(await visitor.locator("#kept .image-card").count(), 2);
-  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*2 results made with this model[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
+  assert.equal(await visitor.locator("#kept .image-card").count(), 3);
+  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*3 results made with this model[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
   await visitor.locator("#kept .kept-remove").first().click();
-  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 1);
+  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 2);
   await visitor.keyboard.press("Escape");
   // The machine stopped as asked; started again, and the clip model taken
   // off the stand-in machine, for what follows.

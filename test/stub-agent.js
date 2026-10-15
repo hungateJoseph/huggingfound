@@ -120,6 +120,8 @@ export function startStubAgent() {
       }
       if (req.url === "/jobs" && req.method === "POST") {
         const id = `${state.jobs.length + 1}`.padStart(16, "0");
+        // A test that empties the job list reuses ids: a new job starts unpolled.
+        polls.delete(id);
         state.jobs.push({ id, ...data });
         state.loaded = `${data.repo}/${data.file}`;
         res.statusCode = 202;
@@ -145,6 +147,8 @@ export function startStubAgent() {
         const n = (polls.get(m[1]) ?? 0) + 1;
         polls.set(m[1], n);
         if (/fail please/.test(job.prompt)) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the model choked", image: null }));
+        // A newer agent says which seed it used; this stand-in does when asked to.
+        const seed = state.seeds === false ? {} : { seed: job.seed ?? null };
         // A long clip: generating until the test releases it.
         if (/slow please/.test(job.prompt) && !state.release) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: "image", progress: 0.27, error: null, image: null, video: null }));
         // An agent that believes its model loaded while the worker dropped it, until it is reset.
@@ -154,8 +158,8 @@ export function startStubAgent() {
         }
         // A folder model of a video family answers with a clip.
         if (n < 2) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: video ? "video" : "image", progress: 0.5, error: null, image: null, video: null }));
-        if (lean) return res.end(JSON.stringify({ id: m[1], status: "completed", kind: video ? "video" : "image", error: null, image: null, video: null, result: true, bytes: video ? 8 : Buffer.from(PNG, "base64").length }));
-        return res.end(JSON.stringify(video ? { id: m[1], status: "completed", kind: "video", error: null, image: null, video: Buffer.from("fake mp4").toString("base64") } : { id: m[1], status: "completed", kind: "image", error: null, image: PNG, video: null }));
+        if (lean) return res.end(JSON.stringify({ id: m[1], status: "completed", kind: video ? "video" : "image", error: null, image: null, video: null, result: true, bytes: video ? 8 : Buffer.from(PNG, "base64").length, ...seed }));
+        return res.end(JSON.stringify(video ? { id: m[1], status: "completed", kind: "video", error: null, image: null, video: Buffer.from("fake mp4").toString("base64"), ...seed } : { id: m[1], status: "completed", kind: "image", error: null, image: PNG, video: null, ...seed }));
       }
       res.statusCode = 404;
       res.end("{}");

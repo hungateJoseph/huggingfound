@@ -48,6 +48,18 @@ Keep: a whole number from 20 to 90, the percentage of the current picture to kee
 
 Then one or two plain sentences on what this edit can and cannot achieve with such a model. Plain text only; no markdown.`;
 
+// A clip cannot be painted over by the video models here, so a reply to
+// one is a revised description for the same model and seed: the words
+// change where the reply says, and the rest stays, so the scene does too.
+const EDIT_CLIP_SYSTEM = `You help people revise short video clips made by open-source video models they run on rented GPUs. The person will show you the description the clip was made from and what they want changed. The clip will be made again by the same model from a new description with the same random seed, so the scene stays close wherever the words stay the same; the model reads short comma-separated phrases, not sentences or "no" and "not".
+
+Reply with exactly these lines, each starting with the word shown:
+
+Description: the full new description, every important element of the old one included, with the change made
+Avoid: what the model must not show, comma-separated, or the word nothing
+
+Then one plain sentence on what this remake can and cannot achieve. Plain text only; no markdown.`;
+
 export class ReviewError extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -68,7 +80,11 @@ export function buildRequest(input, { outputDir } = {}) {
     fallbacks: "default",
   };
   const from = input.model ? `a local model (${input.model})` : "a local model";
-  const editing = input.mode === "edit";
+  // A reply to a result is an edit written from the person's words; for a
+  // clip, or a picture no longer at hand, it is written from the words alone.
+  const replying = input.mode === "reply";
+  const editing = input.mode === "edit" || replying;
+  const clip = replying && Boolean(input.clip);
   const request = String(input.request ?? "").trim();
   if (editing && !request) throw new ReviewError("Say what should change.");
   if (input.kind === "text") {
@@ -88,8 +104,11 @@ export function buildRequest(input, { outputDir } = {}) {
     // The picture is either one this app made (named by file) or, on the
     // hosted site, one the visitor picked (sent as base64 with its type).
     let mediaType;
-    let bytes;
-    if (input.image) {
+    let bytes = null;
+    const pictureless = replying && !input.image && (!input.file || clip);
+    if (pictureless) {
+      // nothing to look at: the words carry the request
+    } else if (input.image) {
       mediaType = String(input.image.media_type ?? "");
       if (!Object.values(MEDIA_TYPES).includes(mediaType)) throw new ReviewError("The picture has to be a PNG, JPEG or WebP file.");
       const data = String(input.image.data ?? "");
@@ -103,16 +122,17 @@ export function buildRequest(input, { outputDir } = {}) {
       if (!fs.existsSync(full)) throw new ReviewError("That picture is no longer on this computer.", 404);
       bytes = fs.readFileSync(full);
     }
-    if (bytes.length > MAX_IMAGE_BYTES) throw new ReviewError("That picture is larger than 5 MB, which is more than Claude accepts.");
+    if (bytes && bytes.length > MAX_IMAGE_BYTES) throw new ReviewError("That picture is larger than 5 MB, which is more than Claude accepts.");
     const prompt = String(input.prompt ?? "").trim();
     const negative = String(input.negative ?? "").trim();
     const focus = String(input.focus ?? "").trim();
-    const ask = editing ? `I want this changed about the picture:\n\n<change>\n${request}\n</change>\n\nWrite the Description, Avoid and Keep lines for the image-to-image pass.` : `How well does the picture match, what is wrong with it, and what should I ask for instead?${focus ? ` Pay particular attention to: ${focus}` : ""}`;
-    const text = [`${from[0].toUpperCase()}${from.slice(1)} made this picture from my description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, negative ? `I asked it to avoid:\n\n<avoid>\n${negative}\n</avoid>` : "I gave it nothing to avoid.", ask].join("\n\n");
+    const thing = clip ? "clip" : "picture";
+    const ask = clip ? `I want this changed about the clip:\n\n<change>\n${request}\n</change>\n\nWrite the Description and Avoid lines for the remake.` : editing ? `I want this changed about the picture:\n\n<change>\n${request}\n</change>\n\nWrite the Description, Avoid and Keep lines for the image-to-image pass.` : `How well does the picture match, what is wrong with it, and what should I ask for instead?${focus ? ` Pay particular attention to: ${focus}` : ""}`;
+    const text = [`${from[0].toUpperCase()}${from.slice(1)} made this ${thing} from my description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, negative ? `I asked it to avoid:\n\n<avoid>\n${negative}\n</avoid>` : "I gave it nothing to avoid.", ...(pictureless && !clip ? ["The picture itself is not at hand; go by the description."] : []), ask].join("\n\n");
     return {
       ...base,
-      system: editing ? EDIT_IMAGE_SYSTEM : IMAGE_SYSTEM,
-      messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: mediaType, data: bytes.toString("base64") } }, { type: "text", text }] }],
+      system: clip ? EDIT_CLIP_SYSTEM : editing ? EDIT_IMAGE_SYSTEM : IMAGE_SYSTEM,
+      messages: [{ role: "user", content: bytes ? [{ type: "image", source: { type: "base64", media_type: mediaType, data: bytes.toString("base64") } }, { type: "text", text }] : text }],
     };
   }
   throw new ReviewError("Unknown kind of check.");

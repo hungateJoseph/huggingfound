@@ -219,6 +219,14 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   const h = await (await get("/health")).json();
   assert.equal(h.loaded, `${QWEN}/model_index.json`);
   assert.equal(h.ready, true);
+  // A seed goes to the worker and comes back with the job, so a reply can
+  // keep to it; a seed out of range is dropped rather than refused.
+  const seeded = await (await post("/jobs", { repo: QWEN, file: "model_index.json", prompt: "a lighthouse", seed: 42 })).json();
+  assert.equal((await finish(seeded.id)).seed, 42);
+  assert.equal(fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1).seed, 42);
+  const unseeded = await (await post("/jobs", { repo: QWEN, file: "model_index.json", prompt: "a lighthouse", seed: -5 })).json();
+  assert.equal((await finish(unseeded.id)).seed, null);
+  assert.equal(fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1).seed, undefined);
   // A failed generation is explained; the worker stays up for the next one.
   const bad = await (await post("/jobs", { repo: QWEN, file: "model_index.json", prompt: "fail please" })).json();
   assert.match((await finish(bad.id)).error, /the model choked/);

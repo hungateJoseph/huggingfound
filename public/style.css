@@ -474,6 +474,12 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .queue ol { margin: 6px 0; padding-left: 20px; }
 .queue li { margin: 3px 0; }
 .queue li button { font-size: 12px; padding: 1px 8px; margin-left: 6px; }
+.reply-wrap { margin-top: 6px; display: grid; gap: 6px; justify-items: start; }
+.reply-wrap > button { font-size: 13px; padding: 4px 10px; }
+.reply { display: grid; gap: 6px; width: 100%; }
+.reply textarea { font: inherit; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; width: 100%; background: var(--surface); color: var(--ink); resize: vertical; }
+.reply .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.reply .row button { font-size: 13px; padding: 4px 10px; }
 .try .autosave { margin: 6px 0 0; display: block; }
 .try .autosave input[type=number] { width: 72px; margin: 0 4px; }
 .kept-head { margin-top: 18px; }

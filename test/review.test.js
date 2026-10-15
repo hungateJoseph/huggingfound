@@ -69,6 +69,24 @@ test("a picture check sends the image with its description and avoid list", () =
   assert.match(req.system, /Description:.*Avoid:/s);
 });
 
+test("a reply to a result is an edit written from the words: with the picture when it is at hand, from the description alone for a clip", () => {
+  const pic = buildRequest({ kind: "image", mode: "reply", model: "sd15", request: "two lighthouses, not one", prompt: "a lighthouse at dusk", image: { media_type: "image/png", data: PNG.toString("base64") } });
+  assert.match(pic.system, /Keep:/);
+  const [image, text] = pic.messages[0].content;
+  assert.equal(image.type, "image");
+  assert.match(text.text, /<change>\ntwo lighthouses, not one\n<\/change>/);
+  const clip = buildRequest({ kind: "image", mode: "reply", clip: true, model: "wan", request: "slower camera pan", prompt: "waves at dusk", negative: "blurry" });
+  assert.match(clip.system, /same random seed/);
+  assert.doesNotMatch(clip.system, /Keep:/);
+  assert.equal(typeof clip.messages[0].content, "string", "nothing to look at: words only");
+  assert.match(clip.messages[0].content, /made this clip from my description:[\s\S]*<description>\nwaves at dusk\n<\/description>[\s\S]*<avoid>\nblurry\n<\/avoid>[\s\S]*<change>\nslower camera pan\n<\/change>/);
+  // A picture no longer at hand is replied to from its description.
+  const blind = buildRequest({ kind: "image", mode: "reply", request: "darker", prompt: "a barn" });
+  assert.equal(typeof blind.messages[0].content, "string");
+  assert.match(blind.messages[0].content, /The picture itself is not at hand/);
+  assert.throws(() => buildRequest({ kind: "image", mode: "reply", prompt: "a barn", request: " " }), /Say what should change/);
+});
+
 test("bad requests are refused before anything is sent", () => {
   assert.throws(() => buildRequest({ kind: "text", question: "q", answer: "  " }), ReviewError);
   assert.throws(() => buildRequest({ kind: "image", file: "notes.txt" }, { outputDir }), /not a picture/);

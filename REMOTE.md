@@ -174,6 +174,21 @@ The machine takes two to four minutes to start. Meanwhile:
   2 GB, oldest out first) until removed, whatever happens to the machine or
   the window, and each finished result is also saved to the computer as it
   comes, up to a size set in the try box.
+- The queue and the log live under the model, not in the window: leaving
+  the model and coming back shows the queue as it was and the log as it
+  stands, with the lines still coming, and a result made meanwhile lands in
+  the window that is open then. A page reloaded while jobs ran finds them
+  on the machine and follows them again.
+- A result can be replied to, as to a person ("good, but I asked for two
+  jump ropes and there is one"). The description is revised with the change
+  in it, by Claude when a key is saved and from the words of the reply
+  otherwise, and the same model is asked again with the same seed. A
+  picture is painted over at a strength that fits the size of the change,
+  so it costs that fraction of a fresh one and keeps the rest; a clip
+  cannot be changed in place by the video models here, so it is made again
+  whole, and the seed keeps the scene close. Every request carries a seed,
+  which the machine reports with the result; a machine on an older image
+  ignores it, and a reply there says the remake may differ more.
 - A finished clip is fetched from the machine as bytes, apart from the
   status the page polls for; a machine on an older image sends it with the
   status, tens of megabytes at once, and the page waits for that patiently
