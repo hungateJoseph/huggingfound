@@ -59,6 +59,11 @@ const reviewer = {
       onText(`${input.prompt}, in golden light, a slow pan`);
       return { declined: false, model: "claude-opus-5", note: "" };
     }
+    // A better description for what was typed: the motion spelt out, the unwanted moved to the avoid list.
+    if (input.mode === "suggest") {
+      onText(`Description: a woman in a bright gym doing jumping jacks in bare feet, feet apart as her hands meet overhead, then together as her arms come down; medium shot, camera still, whole body in frame.${input.image ? " She stays as she is in the picture." : ""}\nAvoid: socks, shoes, zooming in, closed eyes\nWhy: Spelt out the motion and moved what you did not want into the avoid list, since the model cannot read "not".`);
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
     // The next shot: what happens next, as the scene goes on.
     if (input.mode === "continue") {
       onText(`${input.request.replace(/^ok, now /, "")}, the scene going on`);
@@ -1298,6 +1303,19 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.fill("#video-seconds", "5");
   await visitor.click("#video-level input[value=high]");
   assert.match(await visitor.locator("#estimate").innerText(), /5\.1-second clip at 1280 by 704, 81 frames, 50 steps/);
+  // Claude suggests the description to use instead of the words typed,
+  // at any quality; the person chooses to use it, and the avoid list comes along.
+  await visitor.fill("#image-prompt", "jumping jacks in bare feet, do not zoom in");
+  await visitor.click("#suggest-go");
+  await visitor.waitForSelector("#suggest .suggest-text");
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).prompt, reviewed.at(-1).clip, reviewed.at(-1).image ?? null], ["suggest", "jumping jacks in bare feet, do not zoom in", true, null]);
+  assert.match(await visitor.locator("#suggest").innerText(), /Claude suggests · Spelt out the motion[\s\S]*Avoid: socks, shoes, zooming in, closed eyes/);
+  assert.match(await visitor.locator("#suggest .suggest-text").inputValue(), /^a woman in a bright gym doing jumping jacks in bare feet, feet apart as her hands meet overhead/);
+  await visitor.click("#suggest-use");
+  assert.match(await visitor.locator("#image-prompt").inputValue(), /^a woman in a bright gym doing jumping jacks/);
+  assert.equal(await visitor.locator("#image-negative").inputValue(), "socks, shoes, zooming in, closed eyes");
+  assert.equal(await visitor.locator("#suggest").isHidden(), true);
+  await visitor.fill("#image-negative", "");
   // Two clips queued with different settings, saved to the computer as
   // they come, and the machine stopped once the last is made.
   const downloads = [];

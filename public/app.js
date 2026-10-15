@@ -2254,6 +2254,8 @@ function renderImage(box, t) {
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
       <span class="go-buttons"><button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>${t.agent ? `<button class="ghost" id="queue-add" title="Several requests run one after another on the machine; each is kept here and saved as it finishes">Add to queue</button>` : ""}</span>
     </div>
+    ${t.agent && claudeAvailable() ? `<p class="tools-row suggest-row"><button class="ghost" id="suggest-go" title="Claude reads what you typed, and the starting picture if there is one, and writes the description these models follow best; you choose whether to use it">Suggest a better description</button></p>
+    <div class="suggest" id="suggest" hidden></div>` : ""}
     <label class="field avoid">
       <span>Avoid</span>
       <input type="text" id="image-negative" placeholder="anime, cartoon, drawing, blurry, extra fingers">
@@ -2277,6 +2279,54 @@ function renderImage(box, t) {
     notice("The image model was unloaded from memory.", "ok");
   });
   box.querySelector("#addon-scale")?.addEventListener("input", (e) => (box.querySelector("#addon-scale-out").value = e.target.value));
+  // Claude suggests a better description for what was typed, with the
+  // starting picture in front of it when there is one: the words these
+  // models follow, the unwanted moved to the avoid list, the motion spelt
+  // out. The person reads it and chooses to use it or not.
+  box.querySelector("#suggest-go")?.addEventListener("click", async () => {
+    const btn = box.querySelector("#suggest-go");
+    const out = box.querySelector("#suggest");
+    const typed = $("#image-prompt").value.trim();
+    if (!typed) {
+      $("#image-prompt").focus();
+      return;
+    }
+    btn.disabled = true;
+    out.hidden = false;
+    out.innerHTML = `<p class="muted small">Claude is reading what you typed${box.querySelector("#video-start")?.files[0] ? " and the starting picture" : ""}</p>`;
+    let image = null;
+    const file = box.querySelector("#video-start")?.files[0] ?? null;
+    if (file && file.size <= 5 * 1048576) {
+      try {
+        image = { media_type: file.type || "image/png", data: (await readAsDataUrl(file)).split(",")[1] };
+      } catch {
+        image = null;
+      }
+    }
+    const got = await claudeText({ kind: "prompt", mode: "suggest", clip: video, model: t.repo, prompt: typed, negative: $("#image-negative").value.trim(), ...(image ? { image } : {}) });
+    btn.disabled = false;
+    const description = /^Description:\s*(.+)$/m.exec(got.text)?.[1]?.trim();
+    if (!got.text || !description) {
+      out.innerHTML = `<p class="muted small">No suggestion: ${esc(got.why || "Claude wrote no Description line")}.</p>`;
+      return;
+    }
+    const avoid = (/^Avoid:\s*(.+)$/m.exec(got.text)?.[1] ?? "").trim();
+    const avoidText = /^(nothing|none|-)\.?$/i.test(avoid) ? "" : avoid;
+    const why = (/^Why:\s*([\s\S]+)$/m.exec(got.text)?.[1] ?? "").trim();
+    out.innerHTML = `<p class="muted small"><b>Claude suggests</b>${why ? ` · ${esc(why)}` : ""}</p>
+      <textarea class="suggest-text" rows="4">${esc(description)}</textarea>
+      ${avoidText ? `<p class="muted small">Avoid: <span class="suggest-avoid">${esc(avoidText)}</span></p>` : ""}
+      <p class="tools-row"><button class="primary" id="suggest-use">Use it</button><button class="ghost" id="suggest-keep">Keep mine</button></p>`;
+    out.querySelector("#suggest-use").addEventListener("click", () => {
+      $("#image-prompt").value = out.querySelector(".suggest-text").value.trim();
+      if (avoidText) $("#image-negative").value = avoidText;
+      out.hidden = true;
+      $("#image-prompt").focus();
+    });
+    out.querySelector("#suggest-keep").addEventListener("click", () => {
+      out.hidden = true;
+    });
+  });
   const saveAutosave = () => rememberAutosave({ on: box.querySelector("#autosave").checked, maxMb: Number(box.querySelector("#autosave-mb").value) || 150 });
   box.querySelector("#autosave")?.addEventListener("change", saveAutosave);
   box.querySelector("#autosave-mb")?.addEventListener("change", saveAutosave);

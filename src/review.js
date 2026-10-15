@@ -72,6 +72,22 @@ const CONTINUE_SYSTEM = `You write descriptions for open-source video models tha
 
 Reply with only the description of the next clip: 40 to 90 words in one paragraph of plain text, no heading, no list, no quotation marks, no comment.`;
 
+// A better description for what the person wants, before anything is made:
+// literal, concrete, in the phrasing these models follow, with the
+// unwanted moved to the avoid list, and the starting picture taken into
+// account when there is one.
+const SUGGEST_SYSTEM = `You help people write descriptions for open-source image and video models they run on rented GPUs, for ordinary creative work: short films, ads, music videos, illustrations. The person shows you what they typed, and sometimes the picture the clip or image will start from. Such models follow plain, literal, concrete description and cannot read instructions, "no", "not" or "do not": anything unwanted belongs in a separate avoid list.
+
+Write the description they should use instead: what is in the frame and what happens, in order; for a motion, how it is actually performed, so the model gets it right (for jumping jacks, the feet apart as the hands meet overhead, then together as the arms come down); the framing and the camera, kept still unless movement is asked for; and, with a starting picture, what stays as it is and what changes. Keep every element the person asked for and add nothing that changes what they asked for. Everyday actions and scenes are described plainly, as in a shooting script.
+
+Reply with exactly these lines, each starting with the word shown:
+
+Description: the description to use, 40 to 120 words, one paragraph
+Avoid: what the model must not show, comma-separated, or the word nothing
+Why: one or two plain sentences on what you changed and why
+
+Plain text only; no markdown.`;
+
 export class ReviewError extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -146,6 +162,26 @@ export function buildRequest(input, { outputDir } = {}) {
       system: clip ? EDIT_CLIP_SYSTEM : editing ? EDIT_IMAGE_SYSTEM : IMAGE_SYSTEM,
       messages: [{ role: "user", content: bytes ? [{ type: "image", source: { type: "base64", media_type: mediaType, data: bytes.toString("base64") } }, { type: "text", text }] : text }],
     };
+  }
+  if (input.kind === "prompt" && input.mode === "suggest") {
+    const prompt = String(input.prompt ?? "").trim();
+    if (!prompt) throw new ReviewError("Type what the picture or clip should show first.");
+    const negative = String(input.negative ?? "").trim();
+    const thing = input.clip ? "clip" : "picture";
+    const parts = [`I want a ${thing} from ${input.model ? `${input.model}` : "an open-source model"}. I typed:`, `<description>\n${prompt}\n</description>`, negative ? `I asked it to avoid: ${negative}.` : "I gave it nothing to avoid."];
+    let picture = null;
+    if (input.image) {
+      const mediaType = String(input.image.media_type ?? "");
+      if (!Object.values(MEDIA_TYPES).includes(mediaType)) throw new ReviewError("The starting picture has to be a PNG, JPEG or WebP file.");
+      const data = String(input.image.data ?? "");
+      if (!data || !/^[A-Za-z0-9+/]+=*$/.test(data)) throw new ReviewError("The starting picture did not arrive intact.");
+      if (Buffer.from(data, "base64").length > MAX_IMAGE_BYTES) throw new ReviewError("That picture is larger than 5 MB, which is more than Claude accepts.");
+      picture = { type: "image", source: { type: "base64", media_type: mediaType, data } };
+      parts.push(`The ${thing} starts from the picture shown.`);
+    }
+    parts.push("Write the Description, Avoid and Why lines.");
+    const text = parts.join("\n\n");
+    return { ...base, max_tokens: 4000, system: SUGGEST_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   if (input.kind === "prompt" && input.mode === "continue") {
     const prompt = String(input.prompt ?? "").trim();

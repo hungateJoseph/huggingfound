@@ -162,6 +162,14 @@ The machine takes two to four minutes to start. Meanwhile:
   it is done, and the cap stops the machine as soon as the work ends. A
   machine that stops under a clip anyway (a Stop from another tab, RunPod
   itself) is reported within seconds, with the reason, not waited on.
+- "Suggest a better description" under the prompt (with an Anthropic key)
+  has Claude read what was typed, and the starting picture when there is
+  one, and write the description these models follow: literal and
+  concrete, the motion spelt out, the camera stated, anything unwanted
+  moved to the avoid list since the models cannot read "no" or "do not".
+  It shows the suggestion, the avoid list and why, with Use it or Keep
+  mine; nothing is sent until the button is clicked. At High the words are
+  still expanded on their own at request time.
 - A clip is asked for by length in seconds and a quality (low, medium,
   high); the page says what the model will make (the nearest frame count
   its video VAE decodes) and guesses the time and cost. The levels differ

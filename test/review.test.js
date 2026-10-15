@@ -87,6 +87,20 @@ test("a reply to a result is an edit written from the words: with the picture wh
   assert.throws(() => buildRequest({ kind: "image", mode: "reply", prompt: "a barn", request: " " }), /Say what should change/);
 });
 
+test("a suggestion asks for the description to use instead, with the starting picture when there is one", () => {
+  const plain = buildRequest({ kind: "prompt", mode: "suggest", clip: true, model: "wan", prompt: "jumping jacks in bare feet", negative: "blurry" });
+  assert.match(plain.system, /cannot read instructions, "no", "not" or "do not"/);
+  assert.match(plain.system, /Description:[\s\S]*Avoid:[\s\S]*Why:/);
+  assert.equal(typeof plain.messages[0].content, "string");
+  assert.match(plain.messages[0].content, /I want a clip from wan\. I typed:[\s\S]*<description>\njumping jacks in bare feet\n<\/description>[\s\S]*avoid: blurry\./);
+  const withPicture = buildRequest({ kind: "prompt", mode: "suggest", clip: true, prompt: "jumping jacks", image: { media_type: "image/png", data: PNG.toString("base64") } });
+  const [image, text] = withPicture.messages[0].content;
+  assert.equal(image.type, "image");
+  assert.match(text.text, /starts from the picture shown/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "suggest", prompt: " " }), /Type what/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "suggest", prompt: "x", image: { media_type: "image/gif", data: "AAAA" } }), /PNG, JPEG or WebP/);
+});
+
 test("continuing a clip asks for the next shot from the first description and what happens next", () => {
   const req = buildRequest({ kind: "prompt", mode: "continue", clip: true, model: "wan", prompt: "a man dealing a deck of cards", request: "now he stands up and leaves the cards on the table" });
   assert.match(req.system, /starting from the last frame of the first/);
