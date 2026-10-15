@@ -736,8 +736,15 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   assert.equal(await rental.checkIdle(), false, "a machine at work is never stopped as idle");
   agent.state.busy = false;
   assert.equal(await rental.checkIdle(), false, "seen working a moment ago: the clock started over");
+  // A machine that cannot be asked (a dropped link to it) may be mid-clip:
+  // not idle, for half an hour of not knowing.
   clock += 21 * 60e3;
-  assert.equal(await rental.checkIdle(), true);
+  agent.state.down = true;
+  assert.equal(await rental.checkIdle(), false, "unknown is not idle");
+  assert.equal(runpod.state.pods[r.id].status, "RUNNING");
+  agent.state.down = false;
+  clock += 21 * 60e3;
+  assert.equal(await rental.checkIdle(), true, "reachable and idle: stopped");
   assert.equal(runpod.state.pods[r.id].status, "EXITED");
   assert.equal(readEnv(file).OLLAMA_SERVER, undefined);
   assert.equal(readEnv(file).RUNPOD_LAST_STOP, "idle:20");
@@ -780,7 +787,12 @@ test("the idle watch stops a machine nobody has used, but not during a download 
   assert.ok(!readEnv(file).RUNPOD_LAST_STOP);
   agent.state.busy = false;
   clock += 61e3;
-  assert.equal(await rental.checkIdle(), true, "stopped at the cap although it was just used");
+  // Just used, so someone is there: the stop at the cap is announced with
+  // ten minutes to raise the cap, then comes.
+  assert.equal(await rental.checkIdle(), false, "over the cap with someone there: announced first");
+  assert.ok((await rental.status({ probe: false })).capGraceUntil > clock, "the time the stop comes is told");
+  clock += 11 * 60e3;
+  assert.equal(await rental.checkIdle(), true, "stopped at the cap once the notice has run out");
   assert.equal(readEnv(file).RUNPOD_LAST_STOP, "cap:0.3");
   writeEnv(file, { RUNPOD_MAX_SPEND: "0" });
   // Turned off, it never stops; quitting still does unless that is off too.
@@ -804,7 +816,7 @@ test("what today's machines cost is counted across stops, starts and a restart o
   let clock = Date.UTC(2026, 9, 12, 10, 0, 0);
   const file = path.join(home, "meter.env");
   writeEnv(file, { RUNPOD_API_KEY: KEY });
-  const make = () => createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0, now: () => clock });
+  const make = () => createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, agentUrl: () => agent.url, imageCheck: async () => true, statusTtl: 0, now: () => clock });
   let rental = make();
   const r = await rental.rent({ gb: 24, diskGb: 50 });
   for (let i = 0; i < 6; i++) await rental.status({ probe: false });
@@ -828,8 +840,16 @@ test("what today's machines cost is counted across stops, starts and a restart o
   writeEnv(file, { RUNPOD_MAX_SPEND: String(second.spentToday) });
   rental.touch();
   clock += 6 * 60e3;
+  // Someone is at it (a touch four minutes ago): the stop is announced, ten
+  // minutes' notice to raise the cap, and comes only after that.
+  assert.equal(await rental.checkIdle(), false, "at the cap with someone there: announced, not yet stopped");
+  const announced = await rental.status({ probe: false });
+  assert.equal(announced.status, "RUNNING");
+  assert.equal(announced.capGraceUntil, clock + 10 * 60e3, "when the stop comes");
+  clock += 11 * 60e3;
   assert.equal(await rental.checkIdle(), true, "stopped at the cap on the day's total");
   assert.equal(readEnv(file).RUNPOD_LAST_STOP, `cap:${second.spentToday}`);
+  assert.equal((await rental.status({ probe: false })).capGraceUntil, null);
   // Midnight UTC starts the count again.
   clock = Date.UTC(2026, 9, 13, 0, 1, 0);
   assert.equal((await rental.status({ probe: false })).spentToday, 0);

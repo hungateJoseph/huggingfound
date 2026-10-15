@@ -1232,6 +1232,17 @@ await step("hosted: a machine busy on a clip is left alone: the still-there chec
   await new Promise((r) => setTimeout(r, 12000));
   assert.equal(await visitor.locator("#presence").isHidden(), true, "no still-there check while the machine works on the clip");
   assert.equal(await visitor.locator("#image-out .image-card").count(), 0, "still generating");
+  // Nothing gives up by the clock; the person can, beside the log: the
+  // machine drops the job, which fails and can be asked again.
+  assert.equal(await visitor.locator("#image-abort").innerText(), "Give up on this");
+  rentedAgent.state.unloadRoute = true;
+  await visitor.click("#image-abort");
+  await visitor.waitForFunction(() => /Asked the machine to drop what it is working on[\s\S]*Could not make it: the machine's worker was reset from the page/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  await visitor.waitForSelector("#image-retry");
+  assert.equal(await visitor.locator("#image-abort").count(), 0, "the way to give up goes with the run");
+  rentedAgent.state.unloadRoute = false;
+  await visitor.click("#image-retry");
+  await visitor.waitForFunction(() => /Generating, 27%/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
   rentedAgent.state.release = true;
   await visitor.waitForSelector("#image-out .image-card", { timeout: 20000 });
   // Once the clip is made, the check comes as before.

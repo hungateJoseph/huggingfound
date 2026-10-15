@@ -46,6 +46,14 @@ rl.on("line", (line) => {
       loaded = null;
       return say({ ok: false, error: "the GPU ran out of memory for this model at this size; try a smaller picture, fewer frames, or a bigger card", unloaded: !/quietly/.test(req.prompt) });
     }
+    // A slow clip: progress now and then, the answer after a while, so a
+    // reset from the page can be seen to stop it.
+    if (/slowly/.test(req.prompt)) {
+      const kind = loaded.kind;
+      setTimeout(() => say({ progress: 0.1 }), 300);
+      setTimeout(() => say(kind === "video" ? { ok: true, video: MP4, frames: req.frames ?? 33, fps: 16, last: PNG } : { ok: true, image: PNG, width: 512, height: 512 }), 15000);
+      return;
+    }
     say({ progress: 0.5 });
     if (loaded.kind === "video") return say({ ok: true, video: MP4, frames: req.frames ?? 33, fps: 16, last: PNG });
     return say({ ok: true, image: PNG, width: req.width ?? 1024, height: req.height ?? 1024 });

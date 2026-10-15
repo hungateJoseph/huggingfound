@@ -210,6 +210,7 @@ function startWorker() {
     }
     if (!py.pending) return;
     if (msg.progress != null && msg.ok === undefined) {
+      py.pending.touch?.();
       py.pending.onProgress?.(msg.progress);
       return;
     }
@@ -232,12 +233,16 @@ function startWorker() {
 }
 
 // Sends one request and waits for its answer; requests queue behind each other.
+// `timeoutMs` is a silence: a long clip takes as long as it takes, and the
+// worker is given up on only when nothing has come from it, not even a
+// step of progress, for that long.
 function askWorker(req, onProgress = null, timeoutMs = 60 * 60e3, onStart = null) {
   const run = () => new Promise((resolve) => {
     startWorker();
     if (!py.proc) return resolve({ ok: false, error: "the Python worker could not start" });
     onStart?.();
     let settled = false;
+    let timer = null;
     const finish = (msg) => {
       if (settled) return;
       settled = true;
@@ -245,12 +250,16 @@ function askWorker(req, onProgress = null, timeoutMs = 60 * 60e3, onStart = null
       if (py.pending?.resolve === finish) py.pending = null;
       resolve(msg);
     };
-    const timer = setTimeout(() => {
-      if (settled) return;
-      stopWorker();
-      finish({ ok: false, error: "the Python worker did not answer in time" });
-    }, timeoutMs);
-    py.pending = { resolve: finish, onProgress };
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (settled) return;
+        stopWorker();
+        finish({ ok: false, error: `the Python worker gave no sign of life for ${Math.round(timeoutMs / 60e3)} minutes and was stopped; ask again` });
+      }, timeoutMs);
+    };
+    arm();
+    py.pending = { resolve: finish, onProgress, touch: arm };
     py.proc.stdin.write(`${JSON.stringify(req)}\n`, (err) => {
       if (err) finish({ ok: false, error: err.message });
     });
@@ -1004,6 +1013,15 @@ const server = http.createServer(async (req, res) => {
     // afresh: the site's way to reset a worker whose state it doubts.
     if (req.method === "POST" && url.pathname === "/unload") {
       stopServer();
+      // A request in flight is not waited for: the worker is stopped, the
+      // job fails with the reason, and the next job starts a fresh worker.
+      if (py.pending) {
+        const pending = py.pending;
+        py.pending = null;
+        stopWorker();
+        pending.resolve({ ok: false, error: "the machine's worker was reset from the page while working on this; ask again" });
+        return send(res, 200, { ok: true, stopped: true });
+      }
       await unloadWorker().catch(() => forgetWorkerModel());
       return send(res, 200, { ok: true });
     }

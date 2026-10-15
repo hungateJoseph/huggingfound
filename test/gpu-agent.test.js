@@ -280,6 +280,23 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   assert.equal(joined.kind, "video");
   assert.equal(joined.last, true, "the joined clip's last frame is the last piece's");
   assert.equal(Buffer.from(await (await get(`/jobs/${joined.id}/result`)).arrayBuffer()).toString(), "fake mp4 bytesfake mp4 bytes", "the pieces, in order, as one file");
+  // A reset from the page while a job is in flight stops the worker on it:
+  // the job fails with the reason instead of being waited for, and the next
+  // job starts a fresh worker and loads the model again.
+  const slow = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "waves, slowly", frames: 33 })).json();
+  for (let i = 0; i < 100 && (await (await get(`/jobs/${slow.id}?lean=1`)).json()).progress == null; i++) await new Promise((r) => setTimeout(r, 50));
+  assert.equal((await (await get(`/jobs/${slow.id}?lean=1`)).json()).status, "generating");
+  const reset = await (await post("/unload", {})).json();
+  assert.deepEqual(reset, { ok: true, stopped: true });
+  const stopped = await finish(slow.id);
+  assert.equal(stopped.status, "failed");
+  assert.match(stopped.error, /reset from the page while working on this/);
+  assert.equal((await (await get("/health")).json()).loaded, null);
+  const countLoads = () => fs.readFileSync(workerLog, "utf8").trim().split("\n").filter((l) => JSON.parse(l).op === "load").length;
+  const beforeReset = countLoads();
+  const after = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "waves after the reset", frames: 33 })).json();
+  assert.equal((await finish(after.id)).status, "completed");
+  assert.equal(countLoads() - beforeReset, 1, "a fresh worker loaded the model again");
   // A ten-second clip at 24 fps, as MiniMax-H3 makes, is within the frame limit.
   const long = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "a long walk", frames: 243, fps: 24, width: 1344, height: 768, steps: 30 })).json();
   assert.equal((await finish(long.id)).status, "completed");

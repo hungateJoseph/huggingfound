@@ -233,6 +233,22 @@ The machine takes two to four minutes to start. Meanwhile:
   status the page polls for; a machine on an older image sends it with the
   status, tens of megabytes at once, and the page waits for that patiently
   rather than taking a slow answer for a lost machine.
+- At the day's spend cap with someone at the site (a touch within ten
+  minutes), the stop is announced first: the bar says the machine stops in
+  about ten minutes once nothing is being made, with a button that raises
+  the cap by $25; nobody there, it stops at once, and never mid-request. A
+  stopped machine may not start again if its host's card has been taken
+  (RunPod pins a stopped disk to its host), so an announced stop is worth
+  heading off when more work is coming.
+- Nothing gives up on a request by the clock. The page follows a job for as
+  long as the machine says it is at it (past twice the guess the log says
+  so every ten minutes); "Give up on this" beside the log asks the machine
+  to drop the job (POST /unload stops a worker in flight, the job fails with
+  the reason, the next job starts a fresh worker). The agent's own limit is
+  a silence, an hour with no answer and no step of progress, not a length.
+  The site's idle check takes a machine it cannot reach for unknown, not
+  idle, for half an hour. Before this, the page gave up at 30 minutes while
+  the clip went on, and every retry queued behind it until a stop.
 - A size that ran out of memory on the machine is remembered in the browser
   by model (the smallest load of frames by canvas that failed, and the
   largest that was made): the estimate line warns above it before asking,

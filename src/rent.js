@@ -207,17 +207,28 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   // Whether the machine says it is working: a picture or clip the browser
   // asked it for directly, or a download of its own. Asked of the machine,
   // never of RunPod; a machine that does not answer is not working.
+  // Whether the machine is working on something: true, false, or null when
+  // it cannot be asked (a dropped link, a proxy hiccup), which is not idle.
   async function machineBusy() {
     const id = podId();
     if (!id || !hasAgent()) return false;
     try {
       const res = await agentCall(`${agentFor(id)}/health`, { signal: AbortSignal.timeout(4000) });
-      if (!res.ok) return false;
+      if (!res.ok) return null;
       return Boolean((await res.json()).busy);
     } catch {
-      return false;
+      return null;
     }
   }
+  // Since when the machine could not be asked whether it is busy. Not
+  // knowing holds an idle stop for a while; a machine unreachable for half
+  // an hour is taken at its idle clock after all.
+  let busyUnknownSince = 0;
+  // Since when the day's cap has been reached with someone at the site: the
+  // stop is announced first, and comes ten minutes later unless the cap is
+  // raised meanwhile. Nobody there, it comes at once.
+  let capGraceSince = 0;
+  const CAP_GRACE_MS = 10 * 60e3;
   // Downloads in progress, each with when it began: one that never ends
   // (a stuck connection, a lost page) cannot keep the machine awake and
   // billing for ever.
@@ -384,6 +395,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       images: hasAgent(),
       imagesReady: Boolean(imagesReady),
       agentRefused: Boolean(counts.agentRefused),
+      // When the announced stop at the cap comes, if one is announced.
+      capGraceUntil: capGraceSince && pod.status === "RUNNING" ? capGraceSince + CAP_GRACE_MS : null,
       // How many models the machine holds, so the page can say so at a glance.
       chatModels: counts.chat ?? 0,
       imageModels: counts.images ?? 0,
@@ -821,23 +834,41 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       if (cap && now() - lastSpendCheck > 5 * 60e3 && (!last || last.id !== podId() || ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status))) {
         lastSpendCheck = now();
         const current = await this.status({ probe: false }).catch(() => null);
-        if (current?.rented && current.status === "RUNNING" && Math.max(current.spentToday ?? 0, current.spent ?? 0) >= cap) {
-          if (holds() > 0 || (await machineBusy())) {
-            // Asked again at the next tick, not in five minutes.
+        const overCap = current?.rented && current.status === "RUNNING" && Math.max(current.spentToday ?? 0, current.spent ?? 0) >= cap;
+        if (!overCap) capGraceSince = 0;
+        if (overCap) {
+          const busy = await machineBusy();
+          if (busy === null) busyUnknownSince ||= now();
+          else busyUnknownSince = 0;
+          // Working, or not known to be idle for less than half an hour: asked
+          // again at the next tick, not in five minutes.
+          const present = now() - lastActivity < 10 * 60e3;
+          if (present) capGraceSince ||= now();
+          if (holds() > 0 || busy === true || (busy === null && now() - busyUnknownSince < 30 * 60e3) || (present && now() - capGraceSince < CAP_GRACE_MS)) {
             lastSpendCheck = now() - 4 * 60e3;
           } else {
             save({ RUNPOD_LAST_STOP: `cap:${cap}` });
+            capGraceSince = 0;
             await this.stop();
             return true;
           }
         }
       }
-      if (!active && minutes && !(last && last.id === podId() && !["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status)) && (await machineBusy())) {
-        // The machine is working on something the site did not see start
-        // (the browser asks it for pictures and clips directly): that is
-        // activity, and the idle clock starts over.
-        noteActivity();
-        active = true;
+      if (!active && minutes && !(last && last.id === podId() && !["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(last.status))) {
+        const busy = await machineBusy();
+        if (busy === true) {
+          // The machine is working on something the site did not see start
+          // (the browser asks it for pictures and clips directly): that is
+          // activity, and the idle clock starts over.
+          noteActivity();
+          active = true;
+          busyUnknownSince = 0;
+        } else if (busy === null) {
+          // Not known: a machine that may be mid-clip is not stopped on a
+          // dropped link. Only one unreachable for half an hour is.
+          busyUnknownSince ||= now();
+          if (now() - busyUnknownSince < 30 * 60e3) return false;
+        } else busyUnknownSince = 0;
       }
       if (active) {
         // In use: the machine's own watch is told so.

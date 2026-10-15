@@ -129,7 +129,10 @@ export function startStubAgent() {
         }
         state.unloads = (state.unloads ?? 0) + 1;
         state.loaded = null;
-        return res.end(JSON.stringify({ ok: true }));
+        // A slow job in flight is stopped by it, as the agent does.
+        let stopped = false;
+        for (const j of state.jobs) if (/slow please/.test(j.prompt) && !state.release && !j.aborted) j.aborted = stopped = true;
+        return res.end(JSON.stringify({ ok: true, ...(stopped ? { stopped: true } : {}) }));
       }
       // Pieces joined into one clip, as a newer agent does with ffmpeg.
       if (req.url === "/jobs/join" && req.method === "POST") {
@@ -182,6 +185,7 @@ export function startStubAgent() {
         if (/out of memory/.test(job.prompt)) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the GPU ran out of memory for this model at this size; try a smaller picture, fewer frames, or a bigger card", image: null }));
         // A newer agent says which seed it used; this stand-in does when asked to.
         const seed = state.seeds === false ? {} : { seed: job.seed ?? null };
+        if (job.aborted) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the machine's worker was reset from the page while working on this; ask again", image: null }));
         // A long clip: generating until the test releases it.
         if (/slow please/.test(job.prompt) && !state.release) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: "image", progress: 0.27, error: null, image: null, video: null }));
         // An agent that believes its model loaded while the worker dropped it, until it is reset.

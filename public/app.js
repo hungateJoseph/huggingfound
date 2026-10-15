@@ -2357,6 +2357,26 @@ function renderImage(box, t) {
     if (go) go.disabled = on;
     const qGo = b.querySelector("#queue-go");
     if (qGo) qGo.disabled = on;
+    // While the machine works: the way to stop it there by hand, which
+    // fails the request so it can be asked again. Nothing stops by itself.
+    let abort = b.querySelector("#image-abort");
+    if (on && !abort && t.agent) {
+      abort = document.createElement("p");
+      abort.className = "tools-row abort-row";
+      abort.innerHTML = `<button class="ghost" id="image-abort" title="Stops the machine's worker on what it is doing; the request fails and can be asked again. The machine itself stays up.">Give up on this</button>`;
+      b.querySelector("#image-log").after(abort);
+      abort.querySelector("button").addEventListener("click", async () => {
+        abort.querySelector("button").disabled = true;
+        const res = await fetch(`${t.agent}/unload`, { method: "POST", headers: agentHeaders() }).catch(() => null);
+        const line = res?.ok ? "Asked the machine to drop what it is working on; the request fails and can be asked again." : res?.status === 404 ? "This machine's image has no way to drop a job; Stop and Start it from the bar." : `The machine could not be asked (${res ? `HTTP ${res.status}` : "no answer"}); Stop and Start it from the bar.`;
+        rec.lines.push(line);
+        const log = liveBox()?.querySelector("#image-log");
+        if (log) {
+          log.textContent += line + "\n";
+          log.scrollTop = log.scrollHeight;
+        }
+      });
+    } else if (!on && abort) abort.closest(".abort-row")?.remove();
   };
   reply.canContinue = Boolean(video && t.startPicture);
   renderKept(box, t.repo, rec.shown, t.agent ? reply : null);
@@ -2922,7 +2942,7 @@ async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onD
       } else {
         if (requests.length > 1) onLine(`${i + 1} of ${requests.length}: ${req.item?.prompt ?? req.args?.prompt ?? ""}`);
         try {
-          req.job = await followJob(agent, req.id, onLine, req.started ?? Date.now());
+          req.job = await followJob(agent, req.id, onLine, req.started ?? Date.now(), { patienceMs: patienceFor(req.item) });
         } catch (err) {
           if (/no model is loaded/i.test(err.message) && req.args) {
             try {
@@ -2931,7 +2951,7 @@ async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onD
               req.started = Date.now();
               req.id = await submitJob(agent, req.args, onLine);
               if (repo) rememberPending(repo, req.id, req.item, req.started);
-              req.job = await followJob(agent, req.id, onLine, req.started);
+              req.job = await followJob(agent, req.id, onLine, req.started, { patienceMs: patienceFor(req.item) });
             } catch (again) {
               req.err = again;
             }
@@ -2948,6 +2968,13 @@ async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onD
     clearInterval(keep);
     state.agentBusy--;
   }
+}
+
+// How long a request may take before the log remarks on it: twice the
+// guess, and twenty minutes at the least.
+function patienceFor(item) {
+  const guess = Number(item?.estimate?.seconds) || 0;
+  return Math.max(20 * 60e3, 2 * guess * 1000);
 }
 
 // Resets the machine's agent. A newer agent drops its model on request; an
@@ -3012,10 +3039,14 @@ async function submitJob(agent, { repo, file, prompt, negative, quality, init = 
 
 // Follows a job on the machine to its end and brings back the result: a
 // Blob of the bytes, and for a picture the base64 as well.
-async function followJob(agent, id, onLine = () => {}, started = Date.now()) {
+// There is no giving up by the clock: a clip takes as long as it takes and
+// the machine says whether it is still at it. Past `patienceMs` (twice the
+// guess) the log says so now and then, and the way to stop is by hand.
+async function followJob(agent, id, onLine = () => {}, started = Date.now(), { patienceMs = 20 * 60e3 } = {}) {
   let last = "";
   let noted = false;
   let misses = 0;
+  let nudged = 0;
   // When the machine began the picture itself, after any loading.
   let genStarted = 0;
   for (;;) {
@@ -3069,7 +3100,11 @@ async function followJob(agent, id, onLine = () => {}, started = Date.now()) {
       return job;
     }
     if (job.status === "failed") throw Object.assign(new Error(job.error || "the machine could not make the picture"), { jobId: id });
-    if (Date.now() - started > 30 * 60e3) throw new Error("no picture after 30 minutes");
+    const waited = Date.now() - started;
+    if (waited > patienceMs && waited - nudged > 10 * 60e3) {
+      nudged = waited;
+      onLine(`Still going on the machine after ${Math.round(waited / 60e3)} min${job.progress ? ` (${Math.round(job.progress * 100)}%)` : job.status === "loading" ? " (loading the model)" : ""}; longer than guessed, but it is waited for as long as the machine is at it. Give up beside the log stops it there.`);
+    }
   }
 }
 
@@ -3514,12 +3549,17 @@ function renderRental() {
     const why = stopWhy(r);
     const stopped = r.status === "EXITED" ? `Stopped: no hourly charge. ${why}The ${r.diskGb ? `${r.diskGb} GB ` : ""}disk keeps its models for ${r.diskPerDay ? `about ${money(r.diskPerDay)} a day (${money(r.diskPerDay * 30)} a month)` : "a small charge a day"}; Start brings it back in a minute or two, Delete removes it and the models.` : "";
     const todaySpend = r.spentToday ? `Today's machines have cost about ${money(r.spentToday)} so far. ` : "";
+    // At the day's cap with someone here: the stop is announced, with the
+    // way to put it off by raising the cap.
+    const graceLeft = r.capGraceUntil ? Math.max(0, r.capGraceUntil - Date.now()) : 0;
+    const capNote = running && graceLeft > 0 ? `<div class="notice warn cap-note"><span>Today's machines have reached the ${money(r.maxSpend ?? state.maxSpend ?? 50)} spend cap. This machine stops in about ${Math.max(1, Math.ceil(graceLeft / 60e3))} min, once nothing is being made on it, unless the cap is raised.</span> <button class="primary" id="rent-raise-cap">Raise the cap to ${money((r.maxSpend ?? state.maxSpend ?? 50) + 25)}</button></div>` : "";
     const trouble = r.imageProblem ? ` The image server on it cannot start (${r.imageProblem}); chat still works, and a machine rented after the image is fixed will make pictures.` : "";
     const older = r.agentVersion != null && r.agentCurrent != null && r.agentVersion < r.agentCurrent;
     const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a ${state.hosted ? "download" : "chat or download"}${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.${state.hosted ? " Chats go straight from your browser to the machine, so the site cannot see them; each message you send counts as use." : ""}` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
     panel.innerHTML = `<div class="rent-card">
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(todaySpend)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
+      ${capNote}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
       ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
@@ -3555,6 +3595,18 @@ function renderRental() {
     loadOthers(panel);
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-replace")?.addEventListener("click", replaceMachine);
+    panel.querySelector("#rent-raise-cap")?.addEventListener("click", async () => {
+      const cap = (r.maxSpend ?? state.maxSpend ?? 50) + 25;
+      try {
+        await api.post("/api/settings", { RUNPOD_MAX_SPEND: cap });
+        state.maxSpend = cap;
+        notice(`The spend cap for today is now ${money(cap)}; the machine stays up.`, "ok");
+        state.rental = await api.get("/api/rent");
+        renderRental();
+      } catch (err) {
+        notice(`Could not raise the cap: ${err.message}`, "bad");
+      }
+    });
     panel.querySelector("#rent-key-focus")?.addEventListener("click", () => {
       $("#runpod-key").scrollIntoView({ block: "center" });
       $("#runpod-key").focus();
@@ -4529,7 +4581,8 @@ async function renderGpuModels() {
     return;
   }
   const row = (m, kind) => {
-    const title = kind === "chat" ? m.name : `${m.file}`;
+    // A folder model is named by its model; its index file is a detail.
+    const title = kind === "chat" ? m.name : m.file === "model_index.json" ? `${(m.repo ?? m.id ?? "").split("/").pop() || m.file} (folder model)` : `${m.file}`;
     const live = kind === "chat" ? m.running : m.loaded;
     return `<li data-kind="${kind}" data-id="${esc(m.id ?? "")}" data-name="${esc(m.name ?? "")}" data-repo="${esc(m.repo ?? "")}" data-file="${esc(m.file ?? "")}">
       <div><div class="name">${esc(title)}</div><div class="sub">${m.id ? `<span>${esc(m.id)}</span>` : ""}<span>${m.gb ? `${m.gb} GB` : ""}</span>${live ? `<span class="pill live">${kind === "chat" ? "loaded, answering" : "loaded in the GPU"}</span>` : ""}</div></div>
@@ -4540,7 +4593,8 @@ async function renderGpuModels() {
   const images = !r.images ? `<p class="muted small">This machine runs chat models only; a machine rented now runs image models too.</p>` : r.imageProblem ? `<p class="muted small">The image server on this machine cannot start (${esc(r.imageProblem)}). This is a fault in the machine image, not in your setup; a machine rented after it is fixed will work.</p>` : models.imagesOk ? (models.images.length ? `<ul class="gpu-list">${models.images.map((m) => row(m, "image")).join("")}</ul>` : `<p class="muted small">No image models on it yet. Open an image model and download it there.</p>`) : `<p class="muted small">The image agent on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
   // What is being downloaded right now, and what just finished, each with
   // the way to its model's window where the full log is.
-  const runs = models.runs ?? [];
+  // A download that is done shows as its model below, not twice.
+  const runs = (models.runs ?? []).filter((run) => run.status !== "done");
   const runRow = (run) => {
     const name = run.model ? run.model.split("/").pop() : run.title || run.first;
     const pill = run.status === "running" ? `<span class="pill live">downloading</span>` : run.status === "done" ? `<span class="pill good">done</span>` : `<span class="pill bad">failed</span>`;
