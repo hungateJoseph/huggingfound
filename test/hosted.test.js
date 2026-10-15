@@ -7,6 +7,7 @@ import { startStubHub } from "./stub-hub.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-hosted-"));
 const { createServer } = await import("../src/server.js");
+const { ReviewError } = await import("../src/review.js");
 
 // The public copy of the site: it may search, browse and show what people
 // say, and it refreshes its own catalogue; it must not run or download
@@ -23,6 +24,8 @@ before(async () => {
   server = createServer({ envFile: path.join(home, ".env"), scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, hosted: true, refreshHours: 0, devCode: "open-sesame-123", reviewLimit: 3, reviewer: {
     async review(input, onText, use) {
       checks.push({ input, use });
+      // Anthropic refusing the key, as the real reviewer reports it.
+      if (input.answer === "refuse the key") throw new ReviewError("Anthropic refused the API key. Check that it is entered correctly and still active.", 401);
       onText("Looks right.");
       return { declined: false, model: "claude-opus-5", note: "" };
     },
@@ -111,6 +114,14 @@ test("a server token reaches the Hub but never unlocks a visitor's plan", async 
 
 const OWN_KEY = "sk-ant-api03-visitorvisitorvisitorvisitor";
 const check = (headers, body = { kind: "text", question: "q", answer: "a" }) => post("/api/review", body, headers);
+
+test("a refused key is named: the one typed into the page is used ahead of a saved one, and the message says so", async () => {
+  const res = await check({ "X-Forwarded-For": "10.0.0.9", "X-Anthropic-Key": OWN_KEY }, { kind: "text", question: "q", answer: "refuse the key" });
+  assert.equal(res.status, 401);
+  assert.match((await res.json()).error, /Anthropic refused the API key\.[\s\S]*The key used was the one typed into the Check an answer panel, not the one saved in Settings; clear that field to use the saved key\./);
+  assert.equal(checks.at(-1).use.from, "typed");
+  checks.pop();
+});
 
 test("a check needs the visitor's own key or the owner's dev code", async () => {
   assert.equal((await (await get("/api/state")).json()).claudeHosted.devCode, true);

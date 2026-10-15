@@ -190,12 +190,15 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // Who pays for a hosted check: { apiKey } to use, or { status, error }.
   const hostedAccess = (req, ctx) => {
     const who = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "unknown";
-    const own = String(req.headers["x-anthropic-key"] ?? "").trim() || (ctx.user ? ctx.settings().ANTHROPIC_API_KEY || "" : "");
+    const typed = String(req.headers["x-anthropic-key"] ?? "").trim();
+    const own = typed || (ctx.user ? ctx.settings().ANTHROPIC_API_KEY || "" : "");
     const code = String(req.headers["x-dev-code"] ?? "").trim();
     if (own) {
       if (!/^sk-ant-[\w-]{20,300}$/.test(own)) return { status: 400, error: "That does not look like an Anthropic API key (they start with sk-ant-)." };
       if (tooMany(ctx.user?.id ?? who, "check", reviewLimit)) return { status: 429, error: "That is a lot of checks in an hour. Try again later." };
-      return { apiKey: own };
+      // Which key this is, so a refusal can say so: one typed into the page
+      // for this call, or the one saved with the account.
+      return { apiKey: own, from: typed ? "typed" : "saved" };
     }
     if (code) {
       // Only wrong codes count toward the limit, so guessing stops after a few tries.
@@ -957,7 +960,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (hosted) {
         const access = hostedAccess(req, ctx);
         if (access.error) return send(res, access.status, { error: access.error });
-        use = { apiKey: access.apiKey };
+        use = { apiKey: access.apiKey, from: access.from };
       } else if (!claudeReady()) {
         return send(res, 400, { error: "Add an Anthropic API key in Settings to have Claude check answers and pictures." });
       }
@@ -977,7 +980,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         const result = await checker.review(body, (text) => line({ text }), use);
         line({ done: true, ...result });
       } catch (err) {
-        const message = err instanceof ReviewError ? err.message : `The check failed: ${err.message}`;
+        let message = err instanceof ReviewError ? err.message : `The check failed: ${err.message}`;
+        // A refused key: which one was sent, since a key typed into the page
+        // is used ahead of the one saved, and a stale one there looks like
+        // the saved one failing.
+        if (err instanceof ReviewError && err.status === 401 && use.from) message += use.from === "typed" ? " The key used was the one typed into the Check an answer panel, not the one saved in Settings; clear that field to use the saved key." : " The key used was the one saved in Settings.";
         if (!started) return send(res, err instanceof ReviewError ? err.status : 500, { error: message });
         line({ error: message });
       }

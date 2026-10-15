@@ -4214,7 +4214,10 @@ function qFromSettings(settings, spec, qualities) {
 // answer, or a reason why there is none (the site refused, Claude
 // declined, the connection failed), for the log to say.
 async function claudeText(payload) {
-  const creds = state.hosted ? hostedCredentials() ?? {} : {};
+  // With a key saved on the account, that is the key: one typed into the
+  // Check an answer panel is for that panel, and a stale one there must not
+  // speak for every expansion and suggestion.
+  const creds = state.hosted ? (state.claudeHosted?.saved ? {} : hostedCredentials() ?? {}) : {};
   let res;
   try {
     res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify(payload) });
