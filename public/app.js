@@ -2268,6 +2268,7 @@ function renderImage(box, t) {
     ${loaded}
     ${t.agent ? `<label class="check autosave" title="Finished results are kept in this browser whatever happens; this also saves each one to your computer as it comes, so a finished clip is never lost to a stopped machine or a closed page"><input type="checkbox" id="autosave" ${save.on ? "checked" : ""}> Save each finished ${what} to this computer as it comes, up to <input type="number" id="autosave-mb" min="1" max="5000" step="1" value="${save.maxMb}"> MB <small class="muted">(the browser may ask once to allow several downloads)</small></label>` : ""}
     ${t.agent ? `<label class="check stop-after" title="The machine stops once everything asked for here is made or has failed; its models stay on its disk and Start brings it back"><input type="checkbox" id="image-stop-after"> Stop the rented GPU when everything asked for here is made${state.rental?.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}</label>` : ""}
+    <div class="status-line muted small" id="image-status" hidden></div>
     <pre class="log" id="image-log" data-repo="${esc(t.repo)}" hidden></pre>
     <div id="image-out"></div>
     <div id="kept"></div>`;
@@ -2349,8 +2350,8 @@ function renderImage(box, t) {
   // The window as it stands now: this box while it is on show, or the one
   // drawn in its place for the same model; nothing once the model is closed.
   const liveBox = () => {
-    const log = document.getElementById("image-log");
-    return log && log.dataset.repo === t.repo ? log.parentElement : null;
+    for (const log of document.querySelectorAll("#image-log")) if (log.dataset.repo === t.repo && log.isConnected) return log.parentElement;
+    return null;
   };
   const setBusy = (b, on) => {
     const go = b.querySelector("#image-go");
@@ -2438,8 +2439,14 @@ function renderImage(box, t) {
     log.textContent = rec.lines.join("\n") + "\n";
     log.scrollTop = log.scrollHeight;
   }
-  if (rec.active) setBusy(box, true);
-  else if (rec.failed.length) retryRow(rec.failed);
+  if (rec.active) {
+    setBusy(box, true);
+    if (rec.status) {
+      const st = box.querySelector("#image-status");
+      st.hidden = false;
+      st.textContent = rec.status;
+    }
+  } else if (rec.failed.length) retryRow(rec.failed);
   // Requests from before that are still on the machine (the page was
   // reloaded while they ran): followed again, unless they are being followed.
   const pending = t.agent && !rec.active ? pendingJobs(t.repo) : [];
@@ -2660,6 +2667,7 @@ function renderImage(box, t) {
   // A long clip: pieces made one after another, each from the last frame of
   // the one before, kept and shown as they come, then joined on the machine
   // into one clip. A machine from before joining leaves the pieces as they are.
+  const onStatusFor = (text) => rec.onStatus?.(text);
   async function runPieces(item, openedFor, say) {
     const group = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     say(`A ${((item.q.frames * item.pieces) / spec.fps).toFixed(1)}-second clip, made as ${item.pieces} pieces of ${(item.q.frames / spec.fps).toFixed(1)} s, each starting where the last ended, then joined.`);
@@ -2672,6 +2680,7 @@ function renderImage(box, t) {
       if (piece.expanded) item.expanded = piece.expanded;
       await agentBatch(t.agent, [req], say, {
         repo: t.repo,
+        onStatus: (text) => onStatusFor(text),
         onDone: async (r, job, err) => {
           if (err) throw err;
           prev = await finishResult(r, job, openedFor, say);
@@ -2725,6 +2734,15 @@ function renderImage(box, t) {
       log.scrollTop = log.scrollHeight;
     };
     for (const line of intro) say(line);
+    // The state of the request in flight, refreshed every poll.
+    const onStatus = (text) => {
+      rec.status = text;
+      const st = liveBox()?.querySelector("#image-status");
+      if (!st) return;
+      st.hidden = !text;
+      st.textContent = text;
+    };
+    rec.onStatus = onStatus;
     try {
       if (items[0]?.item?.quality ?? items[0]?.quality) {
         try {
@@ -2756,6 +2774,7 @@ function renderImage(box, t) {
       try {
         if (requests.length) await agentBatch(t.agent, requests, say, {
           repo: t.repo,
+          onStatus,
           onDone: async (req, job, err, i) => {
             if (err) {
               if (req.item) failedItems.push(req.item);
@@ -2805,6 +2824,7 @@ function renderImage(box, t) {
       retryRow(rec.failed);
     } finally {
       rec.active = false;
+      onStatus("");
       const b = liveBox();
       if (b) setBusy(b, false);
     }
@@ -2924,7 +2944,7 @@ async function agentJob(agent, args, onLine = () => {}) {
 // waits, and the site is told every so often that the machine is in use,
 // so its idle clock never stops a machine mid-clip. A worker that lost its
 // model is reset and that job asked once more.
-async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onDone = null } = {}) {
+async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onDone = null, onStatus = () => {} } = {}) {
   state.agentBusy = (state.agentBusy ?? 0) + 1;
   api.post("/api/rent/touch", {}).catch(() => {});
   const keep = setInterval(() => api.post("/api/rent/touch", {}).catch(() => {}), 45e3);
@@ -2942,7 +2962,7 @@ async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onD
       } else {
         if (requests.length > 1) onLine(`${i + 1} of ${requests.length}: ${req.item?.prompt ?? req.args?.prompt ?? ""}`);
         try {
-          req.job = await followJob(agent, req.id, onLine, req.started ?? Date.now(), { patienceMs: patienceFor(req.item) });
+          req.job = await followJob(agent, req.id, onLine, req.started ?? Date.now(), { patienceMs: patienceFor(req.item), onStatus });
         } catch (err) {
           if (/no model is loaded/i.test(err.message) && req.args) {
             try {
@@ -2951,7 +2971,7 @@ async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onD
               req.started = Date.now();
               req.id = await submitJob(agent, req.args, onLine);
               if (repo) rememberPending(repo, req.id, req.item, req.started);
-              req.job = await followJob(agent, req.id, onLine, req.started, { patienceMs: patienceFor(req.item) });
+              req.job = await followJob(agent, req.id, onLine, req.started, { patienceMs: patienceFor(req.item), onStatus });
             } catch (again) {
               req.err = again;
             }
@@ -3042,13 +3062,22 @@ async function submitJob(agent, { repo, file, prompt, negative, quality, init = 
 // There is no giving up by the clock: a clip takes as long as it takes and
 // the machine says whether it is still at it. Past `patienceMs` (twice the
 // guess) the log says so now and then, and the way to stop is by hand.
-async function followJob(agent, id, onLine = () => {}, started = Date.now(), { patienceMs = 20 * 60e3 } = {}) {
+async function followJob(agent, id, onLine = () => {}, started = Date.now(), { patienceMs = 20 * 60e3, onStatus = () => {} } = {}) {
   let last = "";
   let noted = false;
   let misses = 0;
   let nudged = 0;
   // When the machine began the picture itself, after any loading.
   let genStarted = 0;
+  // The state as of the last poll, said every poll whether or not it
+  // changed, with how long this has gone on and when the machine last
+  // answered: the line that shows the wait is alive.
+  let lastWord = "Asked";
+  let lastOk = Date.now();
+  const status = () => {
+    const quiet = Date.now() - lastOk;
+    onStatus(`${lastWord} · ${shortDuration((Date.now() - started) / 1000)} in${quiet > 15e3 ? ` · no answer from the machine for ${Math.round(quiet / 1000)} s` : ""}`);
+  };
   for (;;) {
     await new Promise((r) => setTimeout(r, 1500));
     let job;
@@ -3056,7 +3085,9 @@ async function followJob(agent, id, onLine = () => {}, started = Date.now(), { p
       job = await pollJob(agent, id);
       if (misses >= 4) onLine("Reconnected to the machine.");
       misses = 0;
+      lastOk = Date.now();
     } catch (err) {
+      status();
       // A machine with no record of the job (it restarted) will never have it.
       if (err.gone) throw new Error("the machine no longer has this job: it restarted meanwhile; ask again");
       // The job goes on on the machine; a dropped connection is waited out.
@@ -3078,6 +3109,10 @@ async function followJob(agent, id, onLine = () => {}, started = Date.now(), { p
     }
     if (!genStarted && ["generating", "completed"].includes(job.status)) genStarted = Date.now();
     const word = { loading: "Loading the model into the GPU (the first picture with a model takes longer)", queued: "Waiting for the GPU", generating: job.progress ? `Generating, ${Math.round(job.progress * 100)}%` : "Generating" }[job.status];
+    if (word) {
+      lastWord = { loading: "Loading the model", queued: "Waiting for the GPU", generating: job.progress ? `Generating, ${Math.round(job.progress * 100)}%` : "Generating, first step" }[job.status];
+      status();
+    }
     if (word && word !== last) {
       onLine(word);
       last = word;
@@ -3141,7 +3176,10 @@ async function pollJob(agent, id) {
     poll = await ask(10000);
   } catch (err) {
     if (err.name !== "TimeoutError" && err.name !== "AbortError") throw err;
-    poll = await ask(5 * 60e3);
+    // A machine from before sends a finished clip with the status, which
+    // takes a while; a longer wait, but not one that freezes the display
+    // for minutes: past it the poll counts as missed and is tried again.
+    poll = await ask(90e3);
   }
   if (poll.status === 404) throw Object.assign(new Error("HTTP 404"), { gone: true });
   if (!poll.ok) throw new Error(`HTTP ${poll.status}`);

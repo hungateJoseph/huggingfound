@@ -1228,8 +1228,15 @@ await step("hosted: a machine busy on a clip is left alone: the still-there chec
   await visitor.fill("#image-prompt", "slow please");
   await visitor.click("#image-go");
   await visitor.waitForFunction(() => /Generating, 27%/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  // The state of the request, refreshed every poll above the log, whether or not the log gains a line.
+  await visitor.waitForFunction(() => /^Generating, 27% · (\d+ s|[\d.]+ min) in$/.test(document.querySelector("#image-status")?.textContent ?? ""), null, { timeout: 10000 });
   // Six seconds without a click would bring the check; the clip keeps it away.
   await new Promise((r) => setTimeout(r, 12000));
+  // Left and opened again: the status line is back with the log.
+  await visitor.keyboard.press("Escape");
+  await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
+  await visitor.waitForSelector("#image-status:not([hidden])");
+  assert.match(await visitor.locator("#image-status").innerText(), /^Generating, 27% · (\d+ s|[\d.]+ min) in$/);
   assert.equal(await visitor.locator("#presence").isHidden(), true, "no still-there check while the machine works on the clip");
   assert.equal(await visitor.locator("#image-out .image-card").count(), 0, "still generating");
   // Nothing gives up by the clock; the person can, beside the log: the
