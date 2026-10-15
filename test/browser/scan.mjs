@@ -54,6 +54,7 @@ const reviewer = {
   async review(input, onText) {
     reviewed.push(input);
     // An expansion comes back as the words with more in them.
+    if (input.mode === "expand" && /declined please/.test(input.prompt)) return { declined: true, discard: false, model: "claude-opus-5", note: "Claude declined to expand this one." };
     if (input.mode === "expand") {
       onText(`${input.prompt}, in golden light, a slow pan`);
       return { declined: false, model: "claude-opus-5", note: "" };
@@ -1164,7 +1165,7 @@ await step("hosted: the queue and a running log survive leaving the window, and 
   assert.equal(again.strength, 0.4);
   const log = await visitor.locator("#image-log").innerText();
   assert.match(log, /Reply to the earlier picture: "looks good but I asked for two barns, there is only one"/);
-  assert.match(log, /From your words: "slow please, two barns"/);
+  assert.match(log, /From your words \(Claude: Claude wrote no Description line\): "slow please, two barns"/, "when Claude gives nothing usable, the log says why and the words are used");
   assert.match(log, /keeping about 60% of it: about 40% of the time of a fresh one/);
   assert.doesNotMatch(log, /the guess was/, "a picture painted over does not adjust the guess");
   // Kept under the model, the reply says what it answered, and a kept result can be replied to as well.
@@ -1362,6 +1363,14 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.equal(await visitor.$eval("#video-seconds", (e) => e.value), "4.8");
   await visitor.fill("#video-seconds", "2");
   assert.doesNotMatch(await visitor.locator("#estimate").innerText(), /ran out of memory/, "under the limit, no warning");
+  // Claude declining an expansion is said in the log, and the words go as they are.
+  await visitor.fill("#video-seconds", "2");
+  await visitor.click("#video-level input[value=high]");
+  await visitor.fill("#image-prompt", "declined please");
+  await visitor.click("#image-go");
+  await visitor.waitForFunction(() => /Claude gave no expansion \(Claude declined to expand this one\.\); the words go as they are\./.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 20000 });
+  assert.equal(rentedAgent.state.jobs.at(-1).prompt, "declined please", "sent as typed");
   // Longer than one shot: the clip is made as pieces, each from the last
   // frame of the one before, then joined on the machine into one.
   assert.equal(await visitor.$eval("#video-seconds", (e) => e.max), "30", "up to six shots' worth on a model that starts from a picture");
@@ -1405,10 +1414,10 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   // The machine is stopped, so the window offers to start it; the clips show all the same.
   await visitor.waitForSelector("#kept .image-card");
-  assert.equal(await visitor.locator("#kept .image-card").count(), 8, "the two clips, the reply, the three pieces, the joined clip and the continuation");
-  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*8 results made with this model[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
+  assert.equal(await visitor.locator("#kept .image-card").count(), 9, "the two clips, the reply, the unexpanded one, the three pieces, the joined clip and the continuation");
+  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*9 results made with this model[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
   await visitor.locator("#kept .kept-remove").first().click();
-  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 7);
+  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 8);
   await visitor.keyboard.press("Escape");
   // The machine stopped as asked; started again, and the clip model taken
   // off the stand-in machine, for what follows.

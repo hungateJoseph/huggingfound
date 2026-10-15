@@ -2493,7 +2493,7 @@ function renderImage(box, t) {
     // settings chosen for something else.
     const q = entry.q ?? qFromSettings(entry.settings, spec, qualities) ?? c.q;
     const item = { prompt: revised.prompt, negative: revised.negative, quality: entry.quality ?? (!spec && entry.settings ? entry.settings.split(",")[0].trim() : null) ?? c.quality ?? null, q, settings: entry.settings ?? c.text, seed: entry.seed ?? randomSeed(), replyTo: { id: entry.id, text }, startFile: null, estimate: null };
-    const lines = [`Reply to the earlier ${picture ? "picture" : "clip"}: "${text}"`, `${revised.by === "Claude" ? "Claude's revised description" : "From your words"}: "${item.prompt}"${item.negative ? `, avoiding "${item.negative}"` : ""}.`];
+    const lines = [`Reply to the earlier ${picture ? "picture" : "clip"}: "${text}"`, `${revised.by === "Claude" ? "Claude's revised description" : `From your words${revised.why ? ` (Claude: ${revised.why})` : ""}`}: "${item.prompt}"${item.negative ? `, avoiding "${item.negative}"` : ""}.`];
     if (picture) {
       item.paintOver = true;
       item.strength = Math.min(0.9, Math.max(0.2, 1 - revised.keep / 100));
@@ -2537,7 +2537,7 @@ function renderImage(box, t) {
       const base = 0.5 * ((q.width * q.height) / 1e6) * q.frames * q.steps * (spec.heavy ?? 1);
       item.estimate = { base, seconds: Math.max(1, Math.round(base * (calibration(t.repo)?.factor ?? 1))) };
     }
-    const lines = [`Continuing the earlier clip: "${text}"`, `${words.by === "Claude" ? "Claude's next shot" : "From your words"}: "${item.prompt}". It starts from that clip's last frame${entry.last ? "" : ", read from the clip in this browser"}.${item.estimate ? ` About ${shortDuration(item.estimate.seconds)}.` : ""}`];
+    const lines = [`Continuing the earlier clip: "${text}"`, `${words.by === "Claude" ? "Claude's next shot" : `From your words${words.why ? ` (Claude: ${words.why})` : ""}`}: "${item.prompt}". It starts from that clip's last frame${entry.last ? "" : ", read from the clip in this browser"}.${item.estimate ? ` About ${shortDuration(item.estimate.seconds)}.` : ""}`];
     if (rec.active) {
       queue.push(item);
       renderQueue();
@@ -2557,10 +2557,10 @@ function renderImage(box, t) {
     if (item.expand && !item.replyTo && !item.expanded && claudeAvailable()) {
       say("Claude is expanding the description");
       const expanded = await expandWords(item.prompt, video, t.repo, item.negative);
-      if (expanded) {
-        item.expanded = expanded;
-        say(`Expanded: "${expanded}"`);
-      } else say("Claude gave no expansion; the words go as they are.");
+      if (expanded.text) {
+        item.expanded = expanded.text;
+        say(`Expanded: "${expanded.text}"`);
+      } else say(`Claude gave no expansion (${expanded.why}); the words go as they are.`);
     }
     if (video && t.startPicture) {
       if (t.startPicture === "required" && !item.startFile) throw new Error("this model needs a starting picture");
@@ -4091,25 +4091,40 @@ function qFromSettings(settings, spec, qualities) {
   return qualities?.[name] ?? null;
 }
 
-// Claude expands a short description into the detailed one these models do
-// best with; nothing, when it cannot, and the words go as they are.
-async function expandWords(prompt, clip, model, negative) {
+// Text from Claude through the site, with the person's own key: the whole
+// answer, or a reason why there is none (the site refused, Claude
+// declined, the connection failed), for the log to say.
+async function claudeText(payload) {
+  const creds = state.hosted ? hostedCredentials() ?? {} : {};
+  let res;
   try {
-    const creds = state.hosted ? hostedCredentials() ?? {} : {};
-    const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify({ kind: "prompt", mode: "expand", clip, model, prompt, negative }) });
-    if (!res.ok) return null;
-    let out = "";
-    let end = null;
+    res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify(payload) });
+  } catch (err) {
+    return { text: "", why: `the site could not be reached (${err.message})` };
+  }
+  if (!res.ok) return { text: "", why: (await res.json().catch(() => ({}))).error || `the site answered HTTP ${res.status}` };
+  let out = "";
+  let end = null;
+  try {
     await readLines(res, (j) => {
       if (j.error) throw new Error(j.error);
       if (j.text) out += j.text;
       if (j.done) end = j;
     });
-    out = out.trim().replace(/^["“]|["”]$/g, "");
-    return !end?.declined && out.length > prompt.length ? out : null;
-  } catch {
-    return null;
+  } catch (err) {
+    return { text: "", why: err.message };
   }
+  if (end?.declined) return { text: "", why: end.note || "Claude declined this one" };
+  out = out.trim().replace(/^["“]|["”]$/g, "");
+  return { text: out, why: out ? "" : "Claude answered with nothing" };
+}
+
+// Claude expands a short description into the detailed one these models do
+// best with; or says why not, and the words go as they are.
+async function expandWords(prompt, clip, model, negative) {
+  const got = await claudeText({ kind: "prompt", mode: "expand", clip, model, prompt, negative });
+  if (got.text && got.text.length <= prompt.length) return { text: "", why: "Claude's description was no longer than yours" };
+  return got;
 }
 
 // What a machine could and could not hold for a model, learned from its
@@ -4200,22 +4215,8 @@ function frameFromClip(blob) {
 async function continueWords(entry, text, model) {
   const local = { prompt: nextWords(text), by: "words" };
   if (!claudeAvailable()) return local;
-  try {
-    const creds = state.hosted ? hostedCredentials() ?? {} : {};
-    const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify({ kind: "prompt", mode: "continue", clip: true, model, prompt: entry.prompt, request: text }) });
-    if (!res.ok) return local;
-    let out = "";
-    let end = null;
-    await readLines(res, (j) => {
-      if (j.error) throw new Error(j.error);
-      if (j.text) out += j.text;
-      if (j.done) end = j;
-    });
-    out = out.trim().replace(/^["“]|["”]$/g, "");
-    return !end?.declined && out ? { prompt: out, by: "Claude" } : local;
-  } catch {
-    return local;
-  }
+  const got = await claudeText({ kind: "prompt", mode: "continue", clip: true, model, prompt: entry.prompt, request: text });
+  return got.text ? { prompt: got.text, by: "Claude" } : { ...local, why: got.why };
 }
 function nextWords(text) {
   let s = String(text).trim();
@@ -4235,27 +4236,19 @@ function randomSeed() {
 async function reviseFor(entry, text, model) {
   const local = reviseWords(entry.prompt, entry.negative, text);
   if (!claudeAvailable()) return local;
+  let picture = null;
   try {
-    const creds = state.hosted ? hostedCredentials() ?? {} : {};
-    const picture = entry.kind !== "video" && entry.blob && entry.blob.size <= 5 * 1048576 ? { media_type: "image/png", data: await blobToBase64(entry.blob) } : null;
-    const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify({ kind: "image", mode: "reply", clip: entry.kind === "video", model, request: text, prompt: entry.prompt, negative: entry.negative, ...(picture ? { image: picture } : {}) }) });
-    if (!res.ok) return local;
-    let out = "";
-    let end = null;
-    await readLines(res, (j) => {
-      if (j.error) throw new Error(j.error);
-      if (j.text) out += j.text;
-      if (j.done) end = j;
-    });
-    if (end?.declined) return local;
-    const description = /^Description:\s*(.+)$/m.exec(out)?.[1]?.trim();
-    if (!description) return local;
-    const avoid = /^Avoid:\s*(.+)$/m.exec(out)?.[1]?.trim() ?? "";
-    const keep = Number(/^Keep:\s*(\d+)/m.exec(out)?.[1]);
-    return { prompt: description, negative: /^(nothing|none|-)\.?$/i.test(avoid) ? entry.negative || "" : avoid, keep: Number.isFinite(keep) ? keep : local.keep, by: "Claude" };
+    picture = entry.kind !== "video" && entry.blob && entry.blob.size <= 5 * 1048576 ? { media_type: "image/png", data: await blobToBase64(entry.blob) } : null;
   } catch {
-    return local;
+    picture = null;
   }
+  const got = await claudeText({ kind: "image", mode: "reply", clip: entry.kind === "video", model, request: text, prompt: entry.prompt, negative: entry.negative, ...(picture ? { image: picture } : {}) });
+  if (!got.text) return { ...local, why: got.why };
+  const description = /^Description:\s*(.+)$/m.exec(got.text)?.[1]?.trim();
+  if (!description) return { ...local, why: "Claude wrote no Description line" };
+  const avoid = /^Avoid:\s*(.+)$/m.exec(got.text)?.[1]?.trim() ?? "";
+  const keep = Number(/^Keep:\s*(\d+)/m.exec(got.text)?.[1]);
+  return { prompt: description, negative: /^(nothing|none|-)\.?$/i.test(avoid) ? entry.negative || "" : avoid, keep: Number.isFinite(keep) ? keep : local.keep, by: "Claude" };
 }
 
 // The revised words from the reply alone. Praise and the framing of the
