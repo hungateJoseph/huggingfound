@@ -122,7 +122,7 @@ export class RentError extends Error {
 // rental's own calls, and the ones runners.js makes on the site's behalf.
 const agentTokens = new Map();
 export function agentAuth(url) {
-  for (const [agent, token] of agentTokens) if (url === agent || String(url).startsWith(`${agent}/`)) return { Authorization: `Bearer ${token}` };
+  for (const [agent, token] of agentTokens) if (url === agent || String(url).startsWith(`${agent}/`)) return { Authorization: `Bearer ${token}`, "X-Agent-Token": token };
   return {};
 }
 export function agentFetch(fetchImpl) {
@@ -383,6 +383,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       agentToken: hasAgent() ? agentToken() || null : null,
       images: hasAgent(),
       imagesReady: Boolean(imagesReady),
+      agentRefused: Boolean(counts.agentRefused),
       // How many models the machine holds, so the page can say so at a glance.
       chatModels: counts.chat ?? 0,
       imageModels: counts.images ?? 0,
@@ -401,9 +402,13 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   }
 
   // Asks the machine's Ollama or agent; the parsed answer, or null when it does not answer.
+  // Whether the agent last answered the site's secret with a refusal: then
+  // the machine is up and reachable, and waiting for it would be for ever.
+  let agentRefused = false;
   async function probe(url, path = "/api/tags") {
     try {
       const res = await fetchImpl(`${url}${path}`, { signal: AbortSignal.timeout(4000) });
+      if (path === "/health") agentRefused = res.status === 401;
       return res.ok ? await res.json() : null;
     } catch {
       return null;
@@ -596,12 +601,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const running = pod.status === "RUNNING";
       let ready = Boolean(last?.ready) && running;
       let imagesReady = Boolean(last?.imagesReady) && running;
-      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "", agentVersion: last?.agentVersion ?? null };
+      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "", agentVersion: last?.agentVersion ?? null, agentRefused: last?.agentRefused ?? false };
       if (running && wantProbe) {
         const [tags, health] = await Promise.all([probe(urlFor(id)), hasAgent() ? probe(agentFor(id), "/health") : null]);
         ready = Boolean(tags);
         imagesReady = Boolean(health?.ok);
-        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "", agentVersion: health ? Number(health.version) || 1 : null };
+        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "", agentVersion: health ? Number(health.version) || 1 : null, agentRefused };
       }
       last = summarize(pod, ready, imagesReady, counts);
       lastAt = now();

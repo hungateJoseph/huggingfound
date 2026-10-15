@@ -2944,7 +2944,7 @@ async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onD
 // The secret the machine was started with, sent with every call to it.
 function agentHeaders() {
   const token = state.rental?.agentToken;
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return token ? { Authorization: `Bearer ${token}`, "X-Agent-Token": token } : {};
 }
 
 async function resetAgent(agent, jobId, onLine) {

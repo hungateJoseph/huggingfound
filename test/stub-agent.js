@@ -33,7 +33,7 @@ export function startStubAgent() {
     req.on("end", async () => {
       if (req.headers.origin) {
         res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Agent-Token");
         res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
       }
       if (req.method === "OPTIONS") {
@@ -45,7 +45,7 @@ export function startStubAgent() {
       // force), the stand-in answers nobody without it, as the agent does.
       const wanted = typeof state.token === "function" ? state.token() : state.token;
       if (wanted) {
-        const given = /^Bearer\s+(.+)$/.exec(req.headers.authorization || "")?.[1] ?? "";
+        const given = state.bearerOnly ? (/^Bearer\s+(.+)$/.exec(req.headers.authorization || "")?.[1] ?? "") : (/^Bearer\s+(.+)$/.exec(req.headers.authorization || "")?.[1] ?? req.headers["x-agent-token"] ?? "");
         state.auths = (state.auths ?? 0) + 1;
         if (!(Array.isArray(wanted) ? wanted.includes(given) : given === wanted)) {
           state.refused = (state.refused ?? 0) + 1;

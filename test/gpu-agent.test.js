@@ -101,7 +101,8 @@ test("it answers health, and only the allowed origins may call it from a page", 
   assert.equal((await fetch(`${base}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: REPO, file: FILE, prompt: "a cat" }) })).status, 401);
   assert.equal((await fetch(`${base}/models`)).status, 401);
   assert.match((await (await fetch(`${base}/health`)).json()).error, /did not carry its secret/);
-  assert.match(pre.headers.get("access-control-allow-headers"), /Authorization/, "a page may send the secret");
+  assert.match(pre.headers.get("access-control-allow-headers"), /Authorization, X-Agent-Token/, "a page may send the secret either way");
+  assert.equal((await fetch(`${base}/health`, { headers: { "X-Agent-Token": SECRET } })).status, 200, "the secret in a header of its own, for a proxy that drops the standard one");
 });
 
 test("it downloads a model file from the Hub onto the disk with progress, and lists it", async () => {

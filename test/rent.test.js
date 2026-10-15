@@ -491,6 +491,21 @@ test("everything on the machine is listed in one place: chat models with the loa
   assert.deepEqual((await json("/api/rent/models")).images, []);
 });
 
+test("a machine whose agent refuses the site's secret is reported as refusing, not waited for", async () => {
+  const token = agent.state.token;
+  agent.state.token = "some-other-secret";
+  let r = await json("/api/rent");
+  assert.equal(r.status, "RUNNING");
+  assert.equal(r.imagesReady, false);
+  assert.equal(r.agentRefused, true, "the agent answered 401");
+  const plan = (await json("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).plan;
+  assert.match(JSON.stringify(plan), /refused the secret this site sends it/);
+  agent.state.token = token;
+  r = await json("/api/rent");
+  assert.equal(r.agentRefused, false);
+  assert.equal(r.imagesReady, true);
+});
+
 test("stopping ends the charge and frees the chat server; starting brings both back", async () => {
   // A stop from the page's still-there check says so.
   const stopped = await (await post("/api/rent/stop", { reason: "away", minutes: 10 })).json();
