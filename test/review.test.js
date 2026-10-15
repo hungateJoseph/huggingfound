@@ -114,6 +114,15 @@ test("expanding a description asks for prose a model follows, with the avoid lis
   assert.equal(req.max_tokens, 4000);
   assert.match(req.messages[0].content, /for a video model \(wan\):[\s\S]*<description>\nwaves at dusk\n<\/description>[\s\S]*avoid: blurry, text\. Leave those out/);
   assert.match(buildRequest({ kind: "prompt", mode: "expand", prompt: "a barn" }).messages[0].content, /for a picture model:/);
+  // With a starting picture, the words defer to it: the person, clothes and place are kept, not re-imagined.
+  const fromPicture = buildRequest({ kind: "prompt", mode: "expand", clip: true, prompt: "she does a 360 turn", image: { media_type: "image/png", data: PNG.toString("base64") } });
+  assert.match(fromPicture.system, /must be kept exactly: do not re-describe or change them/);
+  const [img, body] = fromPicture.messages[0].content;
+  assert.equal(img.type, "image");
+  assert.match(body.text, /starts from the picture shown: the person, clothes, place and light in it are to be kept/);
+  const next = buildRequest({ kind: "prompt", mode: "continue", clip: true, prompt: "a man dealing cards", request: "he stands up", image: { media_type: "image/png", data: PNG.toString("base64") } });
+  assert.match(next.system, /must be kept exactly/);
+  assert.equal(next.messages[0].content[0].type, "image");
   assert.throws(() => buildRequest({ kind: "prompt", mode: "expand", prompt: " " }), /should show/);
   assert.throws(() => buildRequest({ kind: "prompt", mode: "other", prompt: "x" }), /Unknown/);
 });

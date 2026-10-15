@@ -2507,7 +2507,7 @@ function renderImage(box, t) {
     if (!item.expand || item.expanded || !claudeAvailable() || !el) return [];
     el.hidden = false;
     el.innerHTML = `<p class="muted small">Claude is expanding the description for High quality; it shows here first, to change before it is sent.</p>`;
-    const got = await expandWords(item.prompt, video, t.repo, item.negative);
+    const got = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo));
     if (!got.text) {
       el.hidden = true;
       item.expand = false;
@@ -2667,7 +2667,7 @@ function renderImage(box, t) {
     item.notes = [];
     if (item.expand && !item.replyTo && !item.expanded && claudeAvailable()) {
       say("Claude is expanding the description");
-      const expanded = await expandWords(item.prompt, video, t.repo, item.negative);
+      const expanded = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo));
       if (expanded.text) {
         item.expanded = expanded.text;
         say(`Expanded: "${expanded.text}"`);
@@ -2688,6 +2688,14 @@ function renderImage(box, t) {
       extra.init = await lastFrameOf(src);
       extra.strength = 0.9;
     }
+    // Starting from a picture, the avoid list names what a model lets slip
+    // through a turn or a long motion: another person in the same clothes,
+    // another face, another place.
+    if (extra.init && video) {
+      const guard = "a different person, changed face, changed hair, changed clothes, changed background, studio backdrop";
+      const have = String(item.negative ?? "").toLowerCase();
+      extra.negative = [item.negative, ...guard.split(", ").filter((g) => !have.includes(g))].filter(Boolean).join(", ");
+    }
     // A reply paints over the picture it answers, kept in this browser.
     if (item.paintOver) {
       const src = (await keptResults(t.repo)).find((e) => e.id === item.replyTo?.id);
@@ -2706,7 +2714,7 @@ function renderImage(box, t) {
       target = base;
       extra = { addon: { kind: t.addonKind, repo: t.repo, file: variant.file, lora: variant.lora, scale: Number(box.querySelector("#addon-scale").value) }, ipImage, xl: base.xl };
     }
-    return { ...target, prompt: item.expanded ?? item.prompt, negative: item.negative, quality: item.q, video, seed: item.seed ?? null, ...extra };
+    return { ...target, prompt: item.expanded ?? item.prompt, negative: extra.negative ?? item.negative, quality: item.q, video, seed: item.seed ?? null, ...extra };
   }
 
   // A finished result: timed against the guess, kept in this browser,
@@ -4230,10 +4238,32 @@ async function claudeText(payload) {
   return { text: out, why: out ? "" : "Claude answered with nothing" };
 }
 
+// The starting picture of a request as Claude takes it: the file picked,
+// or the last frame of the kept clip it continues; nothing when there is
+// none, or it is too big for Claude.
+async function startingPictureFor(item, repo) {
+  try {
+    if (item.startFile) {
+      if (item.startFile.size > 5 * 1048576) return null;
+      return { media_type: item.startFile.type || "image/png", data: (await readAsDataUrl(item.startFile)).split(",")[1] };
+    }
+    if (item.startFrom) {
+      const src = (await keptResults(repo)).find((e) => e.id === item.startFrom);
+      if (!src) return null;
+      const url = await lastFrameOf(src);
+      const data = url.split(",")[1];
+      return data && data.length <= 7 * 1048576 ? { media_type: "image/png", data } : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 // Claude expands a short description into the detailed one these models do
 // best with; or says why not, and the words go as they are.
-async function expandWords(prompt, clip, model, negative) {
-  const got = await claudeText({ kind: "prompt", mode: "expand", clip, model, prompt, negative });
+async function expandWords(prompt, clip, model, negative, image = null) {
+  const got = await claudeText({ kind: "prompt", mode: "expand", clip, model, prompt, negative, ...(image ? { image } : {}) });
   if (got.text && got.text.length <= prompt.length) return { text: "", why: "Claude's description was no longer than yours" };
   return got;
 }
@@ -4326,7 +4356,8 @@ function frameFromClip(blob) {
 async function continueWords(entry, text, model) {
   const local = { prompt: nextWords(text), by: "words" };
   if (!claudeAvailable()) return local;
-  const got = await claudeText({ kind: "prompt", mode: "continue", clip: true, model, prompt: entry.prompt, request: text });
+  const image = await startingPictureFor({ startFrom: entry.id }, entry.model);
+  const got = await claudeText({ kind: "prompt", mode: "continue", clip: true, model, prompt: entry.prompt, request: text, ...(image ? { image } : {}) });
   return got.text ? { prompt: got.text, by: "Claude" } : { ...local, why: got.why };
 }
 function nextWords(text) {

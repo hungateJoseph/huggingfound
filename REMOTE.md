@@ -172,6 +172,16 @@ The machine takes two to four minutes to start. Meanwhile:
   shows the same way before anything is sent, editable, with Send this or
   Send my words as typed; what is in the box goes to the model as it
   stands, read by nobody again, and the caption says when it was edited.
+- Starting from a picture (a picked one, or the last frame of a clip being
+  continued), the words defer to it. The expansion and the next shot are
+  written with the picture in front of Claude and a brief that says the
+  person, clothes, place and light are decided by it and must be kept, not
+  re-described; and the avoid list gets "a different person, changed face,
+  changed hair, changed clothes, changed background, studio backdrop". Before
+  this, an expansion written blind invented a setting, and the model
+  followed the words over the picture: a different woman in a studio for a
+  360 turn. A full turn still asks the model to re-imagine the face when it
+  comes back; shorter turns and Medium or High hold identity better.
 - A clip is asked for by length in seconds and a quality (low, medium,
   high); the page says what the model will make (the nearest frame count
   its video VAE decodes) and guesses the time and cost. The levels differ

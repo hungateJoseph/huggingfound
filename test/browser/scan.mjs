@@ -1435,7 +1435,8 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   const next = rentedAgent.state.jobs.at(-1);
   assert.deepEqual([next.prompt, next.frames, next.init ? next.init.slice(0, 22) : null, next.strength], ["the ice melts and the river runs again, the scene going on", 65, "data:image/png;base64,", 0.9], "what happens next, written by Claude from the first description and the reply, from the joined clip's last frame, at the clip's own settings");
   assert.match(await visitor.locator("#image-log").innerText(), /Continuing the earlier clip: "ok, now the ice melts and the river runs again"\nClaude's next shot: "the ice melts and the river runs again, the scene going on"\. It starts from that clip's last frame\./);
-  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).prompt, reviewed.at(-1).request], ["continue", "a river in spring", "ok, now the ice melts and the river runs again"], "Claude was given the first description and what happens next");
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).prompt, reviewed.at(-1).request, reviewed.at(-1).image?.media_type ?? null], ["continue", "a river in spring", "ok, now the ice melts and the river runs again", "image/png"], "Claude was given the first description, what happens next, and the frame it starts from");
+  assert.match(next.negative, /a different person, changed face, changed hair, changed clothes, changed background, studio backdrop/, "starting from a picture, the avoid list guards the person and the place");
   const cont = visitor.locator("#image-out .image-card", { hasText: "Continues an earlier clip" });
   assert.equal(await cont.count(), 1);
   assert.match(await cont.locator(".caption").innerText(), /^Continues an earlier clip \("ok, now the ice melts and the river runs again"\) · the ice melts and the river runs again, the scene going on · 4\.1 s at low quality/);

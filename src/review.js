@@ -88,6 +88,25 @@ Why: one or two plain sentences on what you changed and why
 
 Plain text only; no markdown.`;
 
+// With a starting picture, the words must defer to it: the person, the
+// clothes, the place and the light are already decided, and a description
+// that re-imagines them has the model replace them. Added to the brief for
+// an expansion or a continuation that has the picture.
+const WITH_PICTURE = `
+
+A starting picture is shown. The clip begins from it, so the person, their face, hair, clothes and body, the place and the light are already decided by the picture and must be kept exactly: do not re-describe or change them, and add no setting of your own. Describe the motion and the camera, and say that the person, clothes and setting stay as they are in the picture; name the clothes and the place briefly as they are, so the model holds on to them through the motion.`;
+
+// The starting picture a request carries, checked, as an image block.
+function pictureOf(input) {
+  if (!input.image) return null;
+  const mediaType = String(input.image.media_type ?? "");
+  if (!Object.values(MEDIA_TYPES).includes(mediaType)) throw new ReviewError("The starting picture has to be a PNG, JPEG or WebP file.");
+  const data = String(input.image.data ?? "");
+  if (!data || !/^[A-Za-z0-9+/]+=*$/.test(data)) throw new ReviewError("The starting picture did not arrive intact.");
+  if (Buffer.from(data, "base64").length > MAX_IMAGE_BYTES) throw new ReviewError("That picture is larger than 5 MB, which is more than Claude accepts.");
+  return { type: "image", source: { type: "base64", media_type: mediaType, data } };
+}
+
 export class ReviewError extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -169,34 +188,31 @@ export function buildRequest(input, { outputDir } = {}) {
     const negative = String(input.negative ?? "").trim();
     const thing = input.clip ? "clip" : "picture";
     const parts = [`I want a ${thing} from ${input.model ? `${input.model}` : "an open-source model"}. I typed:`, `<description>\n${prompt}\n</description>`, negative ? `I asked it to avoid: ${negative}.` : "I gave it nothing to avoid."];
-    let picture = null;
-    if (input.image) {
-      const mediaType = String(input.image.media_type ?? "");
-      if (!Object.values(MEDIA_TYPES).includes(mediaType)) throw new ReviewError("The starting picture has to be a PNG, JPEG or WebP file.");
-      const data = String(input.image.data ?? "");
-      if (!data || !/^[A-Za-z0-9+/]+=*$/.test(data)) throw new ReviewError("The starting picture did not arrive intact.");
-      if (Buffer.from(data, "base64").length > MAX_IMAGE_BYTES) throw new ReviewError("That picture is larger than 5 MB, which is more than Claude accepts.");
-      picture = { type: "image", source: { type: "base64", media_type: mediaType, data } };
-      parts.push(`The ${thing} starts from the picture shown.`);
-    }
+    const picture = pictureOf(input);
+    if (picture) parts.push(`The ${thing} starts from the picture shown: the person, clothes, place and light are to stay as they are in it, and the avoid list should name a different person, a changed face, changed clothes and a changed background.`);
     parts.push("Write the Description, Avoid and Why lines.");
     const text = parts.join("\n\n");
-    return { ...base, max_tokens: 4000, system: SUGGEST_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
+    return { ...base, max_tokens: 4000, system: picture ? SUGGEST_SYSTEM + WITH_PICTURE : SUGGEST_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   if (input.kind === "prompt" && input.mode === "continue") {
     const prompt = String(input.prompt ?? "").trim();
     if (!request) throw new ReviewError("Say what happens next.");
-    const parts = [`The clip was made${input.model ? ` by ${input.model}` : ""} from this description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, `What happens next:`, `<next>\n${request}\n</next>`, "Reply with only the description of the next clip."];
-    return { ...base, max_tokens: 4000, system: CONTINUE_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
+    const picture = pictureOf(input);
+    const parts = [`The clip was made${input.model ? ` by ${input.model}` : ""} from this description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, `What happens next:`, `<next>\n${request}\n</next>`, ...(picture ? ["The next clip starts from the frame shown: the person, clothes, place and light in it are to be kept."] : []), "Reply with only the description of the next clip."];
+    const text = parts.join("\n\n");
+    return { ...base, max_tokens: 4000, system: picture ? CONTINUE_SYSTEM + WITH_PICTURE : CONTINUE_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   if (input.kind === "prompt" && input.mode === "expand") {
     const prompt = String(input.prompt ?? "").trim();
     if (!prompt) throw new ReviewError("Say what the picture or clip should show.");
     const negative = String(input.negative ?? "").trim();
+    const picture = pictureOf(input);
     const parts = [`Expand this description for a ${input.clip ? "video" : "picture"} model${input.model ? ` (${input.model})` : ""}:`, `<description>\n${prompt}\n</description>`];
     if (negative) parts.push(`It is asked to avoid: ${negative}. Leave those out of the description.`);
+    if (picture) parts.push(`The ${input.clip ? "clip" : "picture"} starts from the picture shown: the person, clothes, place and light in it are to be kept, and the description should say so.`);
     parts.push("Reply with only the expanded description.");
-    return { ...base, max_tokens: 4000, system: EXPAND_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
+    const text = parts.join("\n\n");
+    return { ...base, max_tokens: 4000, system: picture ? EXPAND_SYSTEM + WITH_PICTURE : EXPAND_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   throw new ReviewError("Unknown kind of check.");
 }
