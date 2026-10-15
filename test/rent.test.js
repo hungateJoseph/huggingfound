@@ -12,6 +12,9 @@ process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfo
 const { createServer } = await import("../src/server.js");
 const { createRental, GPU_IMAGE, TIERS, tierFor } = await import("../src/rent.js");
 const { readEnv, writeEnv } = await import("../src/envfile.js");
+// A call straight to the machine's agent, as the page or another tab makes
+// it, carries the secret of the machine in force.
+const agentAuth = () => ({ Authorization: `Bearer ${readEnv(envFile).RUNPOD_AGENT_TOKEN ?? ""}` });
 
 // Renting a GPU by the hour: HuggingFound asks RunPod for a machine with
 // Ollama on it, makes it the chat server, watches it start, stops it when
@@ -36,6 +39,9 @@ before(async () => {
   runpod = await startStubRunpod();
   ollama = await startStubOllama();
   agent = await startStubAgent();
+  // Each rented machine's agent takes only the secret it was started with:
+  // every call from the site has to carry the one for the machine in force.
+  agent.state.token = () => Object.values(runpod.state.pods).map((p) => p.env?.HF_AGENT_TOKEN).filter(Boolean);
   // The machine's disk, as its agent reports it: roomy, so only the tests about the disk run into it.
   agent.state.diskFreeGb = 400;
   agent.state.diskTotalGb = 500;
@@ -167,9 +173,12 @@ test("renting makes a machine with Ollama on it and points the chat server at it
   assert.equal(made.env.OLLAMA_HOST, "0.0.0.0");
   assert.match(made.env.OLLAMA_ORIGINS, /^http:\/\/127\.0\.0\.1:\d+,http:\/\/localhost:\d+$/, "the app's own page may call the machine");
   assert.equal(made.env.HF_ORIGINS, made.env.OLLAMA_ORIGINS);
+  assert.match(made.env.HF_AGENT_TOKEN, /^[a-f0-9]{48}$/, "a secret of the machine's own, made at rent");
   assert.deepEqual(made.mounts, { persistent: { size: 60, path: "/root/.ollama" } });
   const saved = readEnv(envFile);
   assert.equal(saved.RUNPOD_POD_ID, r.id);
+  assert.equal(saved.RUNPOD_AGENT_TOKEN, made.env.HF_AGENT_TOKEN, "kept with the rental");
+  assert.equal(r.agentToken, made.env.HF_AGENT_TOKEN, "and handed to the owner's page");
   assert.equal(saved.OLLAMA_SERVER, ollama.url);
   assert.equal(saved.OLLAMA_SERVER_GB, "48");
   assert.equal(saved.GPU_AGENT, agent.url);
@@ -306,17 +315,17 @@ test("a diffusers-family model is fetched as a folder on the rented GPU, and a v
   assert.equal(agent.state.downloads.at(-1).repo, QWEN_IMAGE);
   assert.equal((await json(`/api/model?id=${QWEN_IMAGE}`)).plan.steps[0].done, true);
   // The same machine answers a picture job for it, and a clip for a video family.
-  const job = await (await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: QWEN_IMAGE, file: "model_index.json", prompt: "a cat" }) })).json();
-  let state = await (await fetch(`${agent.url}/jobs/${job.id}`)).json();
+  const job = await (await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json", ...agentAuth() }, body: JSON.stringify({ repo: QWEN_IMAGE, file: "model_index.json", prompt: "a cat" }) })).json();
+  let state = await (await fetch(`${agent.url}/jobs/${job.id}`, { headers: agentAuth() })).json();
   assert.equal(state.kind, "image");
   const models = await json("/api/rent/models");
   assert.ok(models.images.some((m) => m.repo === QWEN_IMAGE && m.file === "model_index.json" && m.loaded), "listed on the machine, by its index file, as the loaded one");
   const WAN = "Wan-AI/Wan2.2-TI2V-5B-Diffusers";
   const wan = (await json(`/api/model?id=${WAN}`)).plan;
   assert.equal(wan.tryWith.kind, "video");
-  const clip = await (await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: WAN, file: "model_index.json", prompt: "waves" }) })).json();
-  state = await (await fetch(`${agent.url}/jobs/${clip.id}`)).json();
-  state = await (await fetch(`${agent.url}/jobs/${clip.id}`)).json();
+  const clip = await (await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json", ...agentAuth() }, body: JSON.stringify({ repo: WAN, file: "model_index.json", prompt: "waves" }) })).json();
+  state = await (await fetch(`${agent.url}/jobs/${clip.id}`, { headers: agentAuth() })).json();
+  state = await (await fetch(`${agent.url}/jobs/${clip.id}`, { headers: agentAuth() })).json();
   assert.equal(state.kind, "video");
   assert.ok(state.video);
   assert.equal((await post("/api/remove", { kind: "gpu-file", repo: QWEN_IMAGE, file: "model_index.json" })).status, 200);
@@ -352,7 +361,7 @@ test("a download the machine already has going is found by the model's window, a
   const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";
   agent.state.slowMs = 200;
   // Begun on the machine by someone this server does not remember (another tab, a restart).
-  const begun = await (await fetch(`${agent.url}/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: SD, file: FILE, detach: true }) })).json();
+  const begun = await (await fetch(`${agent.url}/download`, { method: "POST", headers: { "Content-Type": "application/json", ...agentAuth() }, body: JSON.stringify({ repo: SD, file: FILE, detach: true }) })).json();
   const plan = (await json(`/api/model?id=${SD}`)).plan;
   assert.ok(plan.steps[0].running, "the step is shown running, attached to the machine's task");
   const attached = (await json("/api/runs")).runs.find((r) => r.id === plan.steps[0].running);
@@ -463,7 +472,7 @@ test("everything on the machine is listed in one place: chat models with the loa
   const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf";
   await post("/api/run", { kind: "pull-image-model", args: { repo: SD, file: FILE }, where: "rented" }).then((r) => r.json()).then(({ id }) => get(`/api/runs/${id}`).then((r) => r.text()));
   // A picture job on the agent marks the file as loaded; a chat marks the chat model as running.
-  await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: SD, file: FILE, prompt: "a cat" }) });
+  await fetch(`${agent.url}/jobs`, { method: "POST", headers: { "Content-Type": "application/json", ...agentAuth() }, body: JSON.stringify({ repo: SD, file: FILE, prompt: "a cat" }) });
   await post("/api/chat", { model: PULLED, messages: [{ role: "user", content: "hi" }] });
   const models = await json("/api/rent/models");
   assert.equal(models.chatOk, true);

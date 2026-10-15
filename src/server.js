@@ -30,7 +30,7 @@ import { rankModels } from "./find.js";
 import { isAddon, qualityScore } from "./quality.js";
 import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
-import { RentError, TIERS, createRental, tierFor } from "./rent.js";
+import { RentError, TIERS, createRental, tierFor, agentFetch } from "./rent.js";
 import { AuthError, GUEST_HOURS, createAccounts } from "./accounts.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
@@ -58,6 +58,8 @@ const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
 export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 30, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
+  // Calls to a rented machine's agent carry the secret it was started with.
+  fetchImpl = agentFetch(fetchImpl);
   // A hosted copy does not know the visitor's computer; it describes a
   // typical laptop and leaves the running to HuggingFound on their machine.
   const machine = hosted ? hostedMachine() : describeMachine();

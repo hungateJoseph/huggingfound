@@ -4,6 +4,7 @@
 // it on request. The user pays RunPod while it runs; nothing is billed
 // through HuggingFound.
 
+import crypto from "node:crypto";
 import { AGENT_VERSION } from "./plans.js";
 //
 // Only RunPod is wired in. Its API (api.runpod.io/v2) creates a pod from a
@@ -116,6 +117,21 @@ export class RentError extends Error {
 // `env()` reads the saved settings and `save(updates)` writes them: the
 // RunPod key, the id of the pod HuggingFound made, and the chat server
 // address, which the rental owns while a pod exists.
+// The secret each rented machine's agent is started with, by the machine's
+// address, so every call to it from this server carries the secret: the
+// rental's own calls, and the ones runners.js makes on the site's behalf.
+const agentTokens = new Map();
+export function agentAuth(url) {
+  for (const [agent, token] of agentTokens) if (url === agent || String(url).startsWith(`${agent}/`)) return { Authorization: `Bearer ${token}` };
+  return {};
+}
+export function agentFetch(fetchImpl) {
+  return (url, init = {}) => {
+    const auth = agentAuth(String(url));
+    return Object.keys(auth).length ? fetchImpl(url, { ...init, headers: { ...(init.headers ?? {}), ...auth } }) : fetchImpl(url, init);
+  };
+}
+
 export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), statusTtl = 4000, now = Date.now, budget = BUDGET }) {
   let options = { at: 0, key: "", tiers: null };
   let last = null;
@@ -186,7 +202,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     const id = podId();
     if (!id || !hasAgent() || now() - lastLease < 60e3) return;
     lastLease = now();
-    fetchImpl(`${agentFor(id)}/lease`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes: idleMinutes() || 60 }), signal: AbortSignal.timeout(4000) }).catch(() => {});
+    agentCall(`${agentFor(id)}/lease`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes: idleMinutes() || 60 }), signal: AbortSignal.timeout(4000) }).catch(() => {});
   }
   // Whether the machine says it is working: a picture or clip the browser
   // asked it for directly, or a download of its own. Asked of the machine,
@@ -195,7 +211,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     const id = podId();
     if (!id || !hasAgent()) return false;
     try {
-      const res = await fetchImpl(`${agentFor(id)}/health`, { signal: AbortSignal.timeout(4000) });
+      const res = await agentCall(`${agentFor(id)}/health`, { signal: AbortSignal.timeout(4000) });
       if (!res.ok) return false;
       return Boolean((await res.json()).busy);
     } catch {
@@ -230,6 +246,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   };
   const urlFor = (id) => proxyUrl(id);
   const agentFor = (id) => agentUrl(id);
+  // The machine's secret, kept with the rental and known by address.
+  const agentToken = () => env().RUNPOD_AGENT_TOKEN || "";
+  const registerToken = () => {
+    const id = podId();
+    if (id && agentToken()) agentTokens.set(agentFor(id), agentToken());
+  };
+  registerToken();
+  const agentCall = (url, init = {}) => fetchImpl(url, { ...init, headers: { ...(init.headers ?? {}), ...agentAuth(url) } });
 
   // Whether another call to RunPod is allowed right now, within the budget.
   function withinBudget() {
@@ -355,6 +379,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       spentToday: spentToday(),
       url: urlFor(pod.id),
       agent: hasAgent() ? agentFor(pod.id) : null,
+      // The secret the page sends with every call to the agent; the owner's alone.
+      agentToken: hasAgent() ? agentToken() || null : null,
       images: hasAgent(),
       imagesReady: Boolean(imagesReady),
       // How many models the machine holds, so the page can say so at a glance.
@@ -390,7 +416,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   const hasAgent = () => env().RUNPOD_POD_AGENT === "1";
 
   function forget(id) {
-    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "" };
+    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "", RUNPOD_AGENT_TOKEN: "" };
+    if (id) agentTokens.delete(agentFor(id));
     if (id && env().OLLAMA_SERVER === urlFor(id)) {
       updates.OLLAMA_SERVER = "";
       updates.OLLAMA_SERVER_GB = "";
@@ -520,7 +547,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     tiers,
     // What was last learned from RunPod, with the settings that can change
     // without asking RunPod (the idle time) read live.
-    cached: () => (podId() ? { ...(last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null }), idleMinutes: idleMinutes(), idleSeconds: Math.round((now() - lastActivity) / 1000) } : { rented: false }),
+    cached: () => (podId() ? { ...(last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null, agentToken: hasAgent() ? agentToken() || null : null }), idleMinutes: idleMinutes(), idleSeconds: Math.round((now() - lastActivity) / 1000) } : { rented: false }),
     touch() {
       noteActivity();
     },
@@ -609,7 +636,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // unset setting depends on this machine's price.
       const raw = env().RUNPOD_IDLE_MINUTES;
       const machineIdle = raw === undefined || raw === "" || !(Number(raw) >= 0) ? idleDefault(offer.pricePerHour ?? 0) : Math.round(Number(raw));
-      const podEnv = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h", HF_IDLE_MINUTES: String(machineIdle) };
+      // A secret of this machine's own: its agent answers nobody without it.
+      const secret = crypto.randomBytes(24).toString("hex");
+      const podEnv = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h", HF_IDLE_MINUTES: String(machineIdle), HF_AGENT_TOKEN: secret };
       const allowed = origins.filter((o) => /^https?:\/\/[\w.-]+(?::\d+|:\*)?$/.test(String(o)));
       if (allowed.length) {
         podEnv.OLLAMA_ORIGINS = allowed.join(",");
@@ -655,7 +684,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
       const totalGb = (pick.memory || tier.gb / count) * count;
       lastActivity = now();
-      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(pick.pricePerHour ?? offer?.pricePerHour ?? pod.cost ?? ""), RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(pick.pricePerHour ?? offer?.pricePerHour ?? pod.cost ?? ""), RUNPOD_AGENT_TOKEN: secret, RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      registerToken();
       othersCache = { at: 0, key: "", list: null };
       point(pod.id, totalGb);
       lastActivity = now();

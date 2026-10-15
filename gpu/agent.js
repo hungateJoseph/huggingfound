@@ -10,6 +10,9 @@
 //   HF_AGENT_PORT   the port to listen on (7860)
 //   HF_ORIGINS      browser origins allowed to call it, comma-separated,
 //                   like OLLAMA_ORIGINS; falls back to OLLAMA_ORIGINS
+//   HF_AGENT_TOKEN  a secret the site makes when it rents the machine; set,
+//                   every request has to carry it (Authorization: Bearer),
+//                   so nobody who learns the machine's address can use it
 //   HF_MODELS_DIR   where model files live (/root/.ollama/huggingfound/models,
 //                   on the persistent disk next to Ollama's models)
 //   SD_SERVER       path to sd-server; SD_PORT the local port it listens on
@@ -79,6 +82,7 @@ function idleWatch() {
 // Add-ons (IP-Adapters, LoRAs) live apart from models; they are applied to one.
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
+const TOKEN = process.env.HF_AGENT_TOKEN || "";
 const VERSION = "9";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
@@ -865,9 +869,19 @@ function cors(req, res) {
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Max-Age", "43200");
   return true;
+}
+
+// The request carries the machine's secret. The origin check above stops
+// other sites' pages; this stops anyone else who has the address.
+function tokenOk(req) {
+  if (!TOKEN) return true;
+  const given = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || "")?.[1]?.trim() || "";
+  const a = Buffer.from(given);
+  const b = Buffer.from(TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 function send(res, status, body) {
@@ -909,6 +923,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(204);
       return res.end();
     }
+    if (!tokenOk(req)) return send(res, 401, { error: "This machine answers only its own site: the request did not carry its secret" });
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/health") {
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");

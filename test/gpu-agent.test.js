@@ -36,7 +36,7 @@ before(async () => {
   fs.writeFileSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part"), "half");
   agent = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], {
     // The Python side is played by a Node script that speaks the same protocol.
-    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog },
+    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let errors = "";
@@ -58,9 +58,12 @@ after(() => {
   stub.server.close();
 });
 
-const get = (p, headers = {}) => fetch(base + p, { headers });
-const post = (p, body, headers = {}) => fetch(base + p, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
-const del = (p, body) => fetch(base + p, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+// The secret the agent was started with goes with every request, as the site's and the page's do.
+const SECRET = "test-agent-secret-0123456789";
+const AUTH = { Authorization: `Bearer ${SECRET}` };
+const get = (p, headers = {}) => fetch(base + p, { headers: { ...AUTH, ...headers } });
+const post = (p, body, headers = {}) => fetch(base + p, { method: "POST", headers: { "Content-Type": "application/json", ...AUTH, ...headers }, body: JSON.stringify(body) });
+const del = (p, body) => fetch(base + p, { method: "DELETE", headers: { "Content-Type": "application/json", ...AUTH }, body: JSON.stringify(body) });
 const sdRequests = () => (fs.existsSync(sdLog) ? fs.readFileSync(sdLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
 
 async function finish(id) {
@@ -91,6 +94,14 @@ test("it answers health, and only the allowed origins may call it from a page", 
   assert.equal((await get("/health", { Origin: "http://localhost:4188" })).status, 200, "a pattern with a wildcard port");
   assert.equal((await get("/health", { Origin: "https://evil.example" })).status, 403);
   assert.equal((await get("/health", { Origin: "https://evil.example" })).headers.get("access-control-allow-origin"), null);
+  // Started with a secret, it answers nobody without it, whatever the
+  // route; the preflight passes, as a browser sends that before any header.
+  assert.equal((await fetch(`${base}/health`)).status, 401, "no secret");
+  assert.equal((await fetch(`${base}/health`, { headers: { Authorization: "Bearer wrong" } })).status, 401, "the wrong one");
+  assert.equal((await fetch(`${base}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: REPO, file: FILE, prompt: "a cat" }) })).status, 401);
+  assert.equal((await fetch(`${base}/models`)).status, 401);
+  assert.match((await (await fetch(`${base}/health`)).json()).error, /did not carry its secret/);
+  assert.match(pre.headers.get("access-control-allow-headers"), /Authorization/, "a page may send the secret");
 });
 
 test("it downloads a model file from the Hub onto the disk with progress, and lists it", async () => {

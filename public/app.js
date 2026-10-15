@@ -2771,8 +2771,14 @@ async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onD
 // Resets the machine's agent. A newer agent drops its model on request; an
 // older one is restarted in place by RunPod, which keeps its host, card and
 // disk, and is back when the failed job's record is gone from it.
+// The secret the machine was started with, sent with every call to it.
+function agentHeaders() {
+  const token = state.rental?.agentToken;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function resetAgent(agent, jobId, onLine) {
-  const reset = await fetch(`${agent}/unload`, { method: "POST" }).catch(() => null);
+  const reset = await fetch(`${agent}/unload`, { method: "POST", headers: agentHeaders() }).catch(() => null);
   if (reset?.ok) {
     onLine("The machine had lost track of its model after the last failure; loading it again.");
     return;
@@ -2787,7 +2793,7 @@ async function resetAgent(agent, jobId, onLine) {
   for (;;) {
     await new Promise((r) => setTimeout(r, 3000));
     if (Date.now() - started > 6 * 60e3) throw new Error("the machine has not come back within six minutes of restarting; try again in a moment");
-    const probe = await fetch(`${agent}/jobs/${jobId}`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
+    const probe = await fetch(`${agent}/jobs/${jobId}`, { headers: agentHeaders(), signal: AbortSignal.timeout(5000) }).catch(() => null);
     // A fresh agent has no record of the failed job; the old one still does.
     if (probe?.status === 404) break;
   }
@@ -2815,7 +2821,7 @@ async function submitJob(agent, { repo, file, prompt, negative, quality, init = 
     body.strength = strength ?? 0.55;
   }
   onLine(video ? `Asking the rented GPU for a ${q.frames}-frame clip at ${width} by ${height}, ${q.steps} steps` : `Asking the rented GPU for a ${width} by ${height} picture, ${q.steps} steps${init ? ", painting over the picture" : ""}`);
-  const res = await fetch(`${agent}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const res = await fetch(`${agent}/jobs`, { method: "POST", headers: { "Content-Type": "application/json", ...agentHeaders() }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `the machine answered HTTP ${res.status}`);
   return (await res.json()).id;
 }
@@ -2908,7 +2914,7 @@ function b64ToBlob(b64, type) {
 // tried once more with patience, since a machine from before sends a
 // finished clip, tens of megabytes, along with the status.
 async function pollJob(agent, id) {
-  const ask = (ms) => fetch(`${agent}/jobs/${id}?lean=1`, { signal: AbortSignal.timeout(ms) });
+  const ask = (ms) => fetch(`${agent}/jobs/${id}?lean=1`, { headers: agentHeaders(), signal: AbortSignal.timeout(ms) });
   let poll;
   try {
     poll = await ask(10000);
@@ -2928,7 +2934,7 @@ async function fetchResult(agent, id, what, bytes, onLine) {
   let last = null;
   for (let i = 0; i < 5; i++) {
     try {
-      const res = await fetch(`${agent}/jobs/${id}/result`, { signal: AbortSignal.timeout(10 * 60e3) });
+      const res = await fetch(`${agent}/jobs/${id}/result`, { headers: agentHeaders(), signal: AbortSignal.timeout(10 * 60e3) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.blob();
     } catch (err) {

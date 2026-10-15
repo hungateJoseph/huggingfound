@@ -174,6 +174,13 @@ The machine takes two to four minutes to start. Meanwhile:
   2 GB, oldest out first) until removed, whatever happens to the machine or
   the window, and each finished result is also saved to the computer as it
   comes, up to a size set in the try box.
+- Each rented machine's agent is started with a secret of its own
+  (HF_AGENT_TOKEN, made at rent and kept with the rental as
+  RUNPOD_AGENT_TOKEN), and answers no request without it: not the page's,
+  not the site's, not anyone's who has learned the machine's proxy address.
+  The page gets it with the rental status, the site adds it to every call
+  it makes to that address. Ollama on the machine's other port is still
+  open to anyone with the address; it holds no results, but it can be used.
 - The queue and the log live under the model, not in the window: leaving
   the model and coming back shows the queue as it was and the log as it
   stands, with the lines still coming, and a result made meanwhile lands in

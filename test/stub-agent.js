@@ -33,7 +33,7 @@ export function startStubAgent() {
     req.on("end", async () => {
       if (req.headers.origin) {
         res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
         res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
       }
       if (req.method === "OPTIONS") {
@@ -41,6 +41,18 @@ export function startStubAgent() {
         return res.end();
       }
       state.origins.push(req.headers.origin ?? null);
+      // Started with a secret (a string, or a function giving the ones in
+      // force), the stand-in answers nobody without it, as the agent does.
+      const wanted = typeof state.token === "function" ? state.token() : state.token;
+      if (wanted) {
+        const given = /^Bearer\s+(.+)$/.exec(req.headers.authorization || "")?.[1] ?? "";
+        state.auths = (state.auths ?? 0) + 1;
+        if (!(Array.isArray(wanted) ? wanted.includes(given) : given === wanted)) {
+          state.refused = (state.refused ?? 0) + 1;
+          res.statusCode = 401;
+          return res.end(JSON.stringify({ error: "no secret" }));
+        }
+      }
       if (state.down) {
         res.statusCode = 502;
         return res.end("not yet");

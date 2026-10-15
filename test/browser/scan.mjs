@@ -21,6 +21,9 @@ const stub = await startStubHub();
 const runpod = await startStubRunpod();
 const rentedOllama = await startStubOllama();
 const rentedAgent = await startStubAgent();
+// The agent on a rented machine answers only with the secret it was started
+// with: every call, from the page or the site, has to carry it.
+rentedAgent.state.token = () => Object.values(runpod.state.pods).map((p) => p.env?.HF_AGENT_TOKEN).filter(Boolean);
 const envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
 const scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
 const dead = "http://127.0.0.1:1";
