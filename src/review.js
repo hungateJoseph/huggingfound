@@ -60,6 +60,12 @@ Avoid: what the model must not show, comma-separated, or the word nothing
 
 Then one plain sentence on what this remake can and cannot achieve. Plain text only; no markdown.`;
 
+// A short description expanded into the detailed one an image or video
+// model does best with: the subject, the setting, the light, the camera.
+const EXPAND_SYSTEM = `You write descriptions for open-source image and video models that people run on rented GPUs. The person gives a short description. Expand it into the detailed description such a model does best with: the subject and what it does, the setting, the light, the colours and the mood, the camera (the framing, and for a clip its movement and pace), the style and the medium. Keep every element the person named and add nothing that changes what they asked for; where they left something open, choose what fits. Such models read plain descriptive prose, not instructions, "no" or "not".
+
+Reply with only the description: 60 to 120 words in one paragraph of plain text, no heading, no list, no quotation marks, no comment.`;
+
 export class ReviewError extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -134,6 +140,15 @@ export function buildRequest(input, { outputDir } = {}) {
       system: clip ? EDIT_CLIP_SYSTEM : editing ? EDIT_IMAGE_SYSTEM : IMAGE_SYSTEM,
       messages: [{ role: "user", content: bytes ? [{ type: "image", source: { type: "base64", media_type: mediaType, data: bytes.toString("base64") } }, { type: "text", text }] : text }],
     };
+  }
+  if (input.kind === "prompt" && input.mode === "expand") {
+    const prompt = String(input.prompt ?? "").trim();
+    if (!prompt) throw new ReviewError("Say what the picture or clip should show.");
+    const negative = String(input.negative ?? "").trim();
+    const parts = [`Expand this description for a ${input.clip ? "video" : "picture"} model${input.model ? ` (${input.model})` : ""}:`, `<description>\n${prompt}\n</description>`];
+    if (negative) parts.push(`It is asked to avoid: ${negative}. Leave those out of the description.`);
+    parts.push("Reply with only the expanded description.");
+    return { ...base, max_tokens: 4000, system: EXPAND_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   throw new ReviewError("Unknown kind of check.");
 }

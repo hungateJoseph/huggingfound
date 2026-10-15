@@ -87,6 +87,16 @@ test("a reply to a result is an edit written from the words: with the picture wh
   assert.throws(() => buildRequest({ kind: "image", mode: "reply", prompt: "a barn", request: " " }), /Say what should change/);
 });
 
+test("expanding a description asks for prose a model follows, with the avoid list kept out of it", () => {
+  const req = buildRequest({ kind: "prompt", mode: "expand", clip: true, model: "wan", prompt: "waves at dusk", negative: "blurry, text" });
+  assert.match(req.system, /60 to 120 words/);
+  assert.equal(req.max_tokens, 4000);
+  assert.match(req.messages[0].content, /for a video model \(wan\):[\s\S]*<description>\nwaves at dusk\n<\/description>[\s\S]*avoid: blurry, text\. Leave those out/);
+  assert.match(buildRequest({ kind: "prompt", mode: "expand", prompt: "a barn" }).messages[0].content, /for a picture model:/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "expand", prompt: " " }), /should show/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "other", prompt: "x" }), /Unknown/);
+});
+
 test("bad requests are refused before anything is sent", () => {
   assert.throws(() => buildRequest({ kind: "text", question: "q", answer: "  " }), ReviewError);
   assert.throws(() => buildRequest({ kind: "image", file: "notes.txt" }, { outputDir }), /not a picture/);

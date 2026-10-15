@@ -417,9 +417,16 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   // What a clip can be, for the page to pick a length and a quality from
   // and guess the time: frames a second, the lengths the model makes, the
   // frame counts its video VAE decodes, and three levels of steps and size.
+  // The three levels differ in kind, not only in passes. Low is a draft on
+  // a small canvas. Medium is the full canvas the model was trained for,
+  // with the family's standard avoid list, which these models were tuned
+  // with. High adds passes, and has the description expanded first into
+  // the detailed shot these models do best with (by Claude, with a key).
+  // A model draws no better above its trained canvas, so none goes higher.
+  const levelText = { low: "a draft: a small canvas, 20 passes", medium: "the model's full canvas, 30 passes, its standard avoid list", high: "the full canvas, 50 passes, the avoid list, and your words expanded first into a detailed shot description" };
   const videoSpec = video ? (minimax
-    ? { fps: 24, minSeconds: 5, maxSeconds: 15, defaultSeconds: 5, frameStep: 17, frameAdd: 5, sound: true, cfg, heavy: heavyFactor(repo.gb), levels: { low: { steps: 20, width: 960, height: 544, text: "960 by 544, 20 steps" }, medium: { steps: 30, width: 1344, height: 768, text: "768p, 30 steps" }, high: { steps: 40, width: 1344, height: 768, text: "768p, 40 steps, the most detail" } } }
-    : { fps: 16, minSeconds: 1, maxSeconds: 5, defaultSeconds: 3, frameStep: 4, frameAdd: 1, sound: false, cfg, heavy: heavyFactor(repo.gb), levels: { low: { steps: 20, width: 832, height: 480, text: "480p, 20 steps" }, medium: { steps: 30, width: 832, height: 480, text: "480p, 30 steps" }, high: { steps: 40, width: 1280, height: 704, text: "720p, 40 steps, the most detail" } } }) : null;
+    ? { fps: 24, minSeconds: 5, maxSeconds: 15, defaultSeconds: 5, frameStep: 17, frameAdd: 5, sound: true, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 20, width: 960, height: 544, text: levelText.low }, medium: { steps: 30, width: 1344, height: 768, text: levelText.medium }, high: { steps: 50, width: 1344, height: 768, expand: true, text: levelText.high } } }
+    : { fps: 16, minSeconds: 1, maxSeconds: 5, defaultSeconds: 3, frameStep: 4, frameAdd: 1, sound: false, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 20, width: 832, height: 480, text: levelText.low }, medium: { steps: 30, width: 1280, height: 704, text: levelText.medium }, high: { steps: 50, width: 1280, height: 704, expand: true, text: levelText.high } } }) : null;
   const qualities = withGpuSeconds(video
     ? minimax
       ? {
@@ -435,7 +442,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
     : {
         fast: { steps: fast ? 4 : 12, size: 768, width: 768, height: 768, cfg, text: "768 by 768, fewer steps" },
         default: { steps: fast ? 4 : 28, size: 1024, width: 1024, height: 1024, cfg, text: "1024 by 1024" },
-        max: { steps: fast ? 8 : 40, size: 1024, width: 1024, height: 1024, cfg, text: "1024 by 1024, more steps" },
+        max: { steps: fast ? 8 : 40, size: 1024, width: 1024, height: 1024, cfg, expand: true, text: "1024 by 1024, more steps, your words expanded first into a detailed description" },
       }, repo.gb);
   const steps = [{
     kind: "pull-image-repo",
@@ -583,6 +590,10 @@ export function heavyFactor(gb) {
 }
 // The machine makes at most this many frames in one clip.
 export const MAX_FRAMES = 361;
+
+// What the video families were tuned to steer away from: Wan's published
+// list, in short. Used when nothing is given to avoid, at Medium and High.
+export const VIDEO_AVOID = "blurry, low quality, overexposed, washed out, static, still image, flicker, jitter, distorted faces, deformed hands, extra fingers, fused limbs, subtitles, text, watermark, logo, cluttered background";
 // The frame count nearest a length in seconds that the model's video VAE
 // decodes (its step and offset), within what the machine makes.
 export function framesFor(seconds, spec) {

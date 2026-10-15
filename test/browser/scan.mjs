@@ -53,6 +53,11 @@ const reviewed = [];
 const reviewer = {
   async review(input, onText) {
     reviewed.push(input);
+    // An expansion comes back as the words with more in them.
+    if (input.mode === "expand") {
+      onText(`${input.prompt}, in golden light, a slow pan`);
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
     onText("This has one problem.\n");
     await new Promise((r) => setTimeout(r, 150));
     onText("word7 is not a word.");
@@ -669,6 +674,11 @@ await step("every chat model asks where to run it; picking a GPU without a key a
 await step("renting from the model window preselects its size, and the bar shows the running cost", async () => {
   await page.waitForFunction(() => /Rent a GPU for this[\s\S]*wants a 48 GB card/.test(document.querySelector(".rent-ask")?.textContent ?? "") && document.querySelector(".rent-offer #ask-size"), null, { timeout: 10000 });
   assert.match(await page.locator(".rent-offer #ask-size option:checked").innerText(), /48 GB, A40, \$0\.40 an hour \(recommended\)/, "with a key saved, the question is an offer with the right size chosen");
+  // Another size: the button's price follows it.
+  await page.selectOption(".rent-offer #ask-size", "80");
+  assert.match(await page.locator(".rent-offer #ask-rent").innerText(), /Rent it, \$1\.64 an hour/, "the price on the button is the chosen size's");
+  await page.selectOption(".rent-offer #ask-size", "48");
+  assert.match(await page.locator(".rent-offer #ask-rent").innerText(), /Rent it, \$0\.40 an hour/);
   rentedOllama.state.down = true;
   acceptDialogs = true;
   await page.click("#ask-rent");
@@ -1234,10 +1244,12 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.waitForSelector("#video-seconds");
   assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["3", "1", "5"]);
   assert.deepEqual(await visitor.$$eval("#video-level input", (els) => els.map((e) => [e.value, e.checked])), [["low", false], ["medium", true], ["high", false]]);
-  assert.match(await visitor.locator("#estimate").innerText(), /^About .* for a 3\.1-second clip at 832 by 480, 49 frames, 30 steps \(a guess until the first clip is timed\)\./);
+  assert.match(await visitor.locator("#estimate").innerText(), /^About .* for a 3\.1-second clip at 1280 by 704, 49 frames, 30 steps \(a guess until the first clip is timed\)\./, "medium draws on the full canvas");
+  assert.match(await visitor.locator("#video-level").innerText(), /Low\s+a draft: a small canvas, 20 passes[\s\S]*Medium\s+the model's full canvas, 30 passes, its standard avoid list[\s\S]*High\s+the full canvas, 50 passes, the avoid list, and your words expanded first/);
+  assert.match(await visitor.locator(".levels-note").innerText(), /A pass is one round of refinement[\s\S]*Claude turns your words into the detailed shot description/);
   await visitor.fill("#video-seconds", "5");
   await visitor.click("#video-level input[value=high]");
-  assert.match(await visitor.locator("#estimate").innerText(), /5\.1-second clip at 1280 by 704, 81 frames, 40 steps/);
+  assert.match(await visitor.locator("#estimate").innerText(), /5\.1-second clip at 1280 by 704, 81 frames, 50 steps/);
   // Two clips queued with different settings, saved to the computer as
   // they come, and the machine stopped once the last is made.
   const downloads = [];
@@ -1256,10 +1268,13 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.waitForFunction(() => /Stopped the rented GPU, as asked/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
   const log = await visitor.locator("#image-log").innerText();
   assert.match(log, /1 of 2: waves at dusk[\s\S]*2 of 2: a long walk[\s\S]*All done: 2 made\./);
+  assert.match(log, /Claude is expanding the description\nExpanded: "waves at dusk, in golden light, a slow pan"/, "at High the words are expanded first, and the log shows it");
   assert.match(log, /the guess was .* and the next guess is adjusted/);
   assert.match(log, /Saved clip-[\w-]+\.mp4 to this computer/);
   const sent = rentedAgent.state.jobs.slice(-2);
-  assert.deepEqual(sent.map((j) => [j.prompt, j.frames, j.fps, j.width, j.height, j.steps]), [["waves at dusk", 81, 16, 1280, 704, 40], ["a long walk", 33, 16, 832, 480, 20]]);
+  assert.deepEqual(sent.map((j) => [j.prompt, j.frames, j.fps, j.width, j.height, j.steps]), [["waves at dusk, in golden light, a slow pan", 81, 16, 1280, 704, 50], ["a long walk", 33, 16, 832, 480, 20]], "the high clip goes with the expanded words and 50 passes; the low one as typed");
+  assert.match(sent[0].negative, /^blurry, low quality/, "nothing typed to avoid: the family's standard list at High");
+  assert.equal(sent[1].negative, "", "and none at Low");
   assert.equal(await visitor.locator("#image-out .image-card video").count(), 2);
   for (let i = 0; i < 40 && downloads.length < 2; i++) await new Promise((r) => setTimeout(r, 250));
   assert.equal(downloads.length, 2, "both clips were saved to the computer as they came");
@@ -1276,8 +1291,13 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await firstCard.locator(".reply-run").click();
   await visitor.waitForFunction(() => document.querySelectorAll("#image-out .image-card").length === 3, null, { timeout: 20000 });
   const remade = rentedAgent.state.jobs.at(-1);
-  assert.deepEqual([remade.prompt, remade.seed, remade.init ?? null, remade.frames, remade.width, remade.steps], ["waves at dusk, slower camera pan", firstClip.seed, null, 81, 1280, 40]);
+  assert.deepEqual([remade.prompt, remade.seed, remade.init ?? null, remade.frames, remade.width, remade.steps], ["waves at dusk, slower camera pan", firstClip.seed, null, 81, 1280, 50], "revised from the words asked, not the expansion, with the clip's own settings and seed");
   assert.match(await visitor.locator("#image-log").innerText(), /made again whole from the revised words with the same seed/);
+  // The remake sits right under the clip it answers, and says so.
+  const cards = visitor.locator("#image-out .image-card");
+  assert.match(await cards.nth(0).locator(".caption").innerText(), /^waves at dusk · expanded by Claude: waves at dusk, in golden light, a slow pan · 5\.1 s at high quality/);
+  assert.match(await cards.nth(1).locator(".caption").innerText(), /^In reply to an earlier clip \("slower camera pan"\) · waves at dusk, slower camera pan/);
+  assert.match(await cards.nth(2).locator(".caption").innerText(), /^a long walk · 2\.1 s at low quality/);
   // Leaving the window loses nothing: the clips are kept under the model.
   await visitor.keyboard.press("Escape");
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();

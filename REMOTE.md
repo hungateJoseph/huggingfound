@@ -164,7 +164,14 @@ The machine takes two to four minutes to start. Meanwhile:
   itself) is reported within seconds, with the reason, not waited on.
 - A clip is asked for by length in seconds and a quality (low, medium,
   high); the page says what the model will make (the nearest frame count
-  its video VAE decodes) and guesses the time and cost. The guess is
+  its video VAE decodes) and guesses the time and cost. The levels differ
+  in kind: Low is a draft on a small canvas with 20 passes; Medium is the
+  model's full trained canvas, 30 passes and the family's standard avoid
+  list (used when nothing is typed to avoid); High is 50 passes and the
+  words expanded first by Claude, with a key, into the detailed shot
+  description these models follow best (shown in the log and the caption).
+  A picture's Max preset expands the words the same way. Replies are never
+  expanded: they revise the words that were asked. The guess is
   adjusted from the clips made here: each one's time is measured against
   the guess made for it, and the next guess leans on that.
 - Several requests can be queued and made one after another by one click;
@@ -186,6 +193,10 @@ The machine takes two to four minutes to start. Meanwhile:
   stands, with the lines still coming, and a result made meanwhile lands in
   the window that is open then. A page reloaded while jobs ran finds them
   on the machine and follows them again.
+- A reply's result lands right under the result it answers, with a caption
+  saying so; every live card carries a caption (what was asked, the
+  expansion, the settings). A result kept before its settings were kept
+  with it has them read back from its caption for a reply.
 - A result can be replied to, as to a person ("good, but I asked for two
   jump ropes and there is one"). The description is revised with the change
   in it, by Claude when a key is saved and from the words of the reply

@@ -128,6 +128,8 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.match(plan.steps[0].title, /5 files on the rented GPU \(19\.3 GB\)/);
   assert.deepEqual(plan.tryWith, { kind: "image", repo: "someone/Open-Flux", file: "model_index.json", agent: "http://agent", engine: "diffusers" });
   assert.deepEqual([plan.qualities.default.steps, plan.qualities.default.width, plan.qualities.default.cfg], [28, 1024, 3.5], "FLUX presets");
+  assert.equal(plan.qualities.max.expand, true, "a picture's Max preset has the words expanded first");
+  assert.equal(plan.qualities.default.expand, undefined);
   assert.deepEqual(plan.remove, [{ kind: "gpu-file", repo: "someone/Open-Flux", file: "model_index.json" }]);
   const done = buildPlan({ model, files, machine, detected: { ...gpu, gpu: { ...gpu.gpu, files: ["someone/Open-Flux/model_index.json"] } }, hasToken: false });
   assert.equal(done.steps[0].done, true);
@@ -153,9 +155,13 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   // A clip is asked for by length and quality: the page gets what the model makes and picks the frames.
   assert.deepEqual([h3.video.fps, h3.video.minSeconds, h3.video.maxSeconds, h3.video.defaultSeconds, h3.video.frameStep, h3.video.frameAdd, h3.video.sound, h3.video.heavy], [24, 5, 15, 5, 17, 5, true, 1.6]);
   assert.deepEqual(Object.keys(h3.video.levels), ["low", "medium", "high"]);
-  assert.deepEqual([h3.video.levels.low.width, h3.video.levels.low.steps, h3.video.levels.high.width, h3.video.levels.high.steps], [960, 20, 1344, 40]);
+  assert.deepEqual([h3.video.levels.low.width, h3.video.levels.low.steps, h3.video.levels.medium.width, h3.video.levels.medium.steps, h3.video.levels.high.width, h3.video.levels.high.steps, h3.video.levels.high.expand], [960, 20, 1344, 30, 1344, 50, true], "a draft, the full canvas, and the full canvas with more passes and the words expanded");
+  assert.equal(h3.video.levels.medium.expand, undefined);
+  assert.match(h3.video.avoid, /blurry, low quality/, "the family's standard avoid list");
+  assert.match(h3.video.levels.high.text, /expanded first/);
   assert.deepEqual([framesFor(5, h3.video), framesFor(10, h3.video), framesFor(15, h3.video), framesFor(0, h3.video)], [124, 243, 345, 124], "the nearest counts the VAE decodes, within the machine's limit, the default for nonsense");
   assert.deepEqual([clip.video.fps, clip.video.sound, framesFor(3, clip.video), framesFor(99, clip.video), framesFor(1, clip.video)], [16, false, 49, 81, 17]);
+  assert.deepEqual([clip.video.levels.low.width, clip.video.levels.medium.width, clip.video.levels.medium.steps, clip.video.levels.high.width, clip.video.levels.high.steps, clip.video.levels.high.expand], [832, 1280, 30, 1280, 50, true], "medium already draws on the full canvas; high adds passes and the expansion");
   // Loose pieces without the folder cannot be assembled by the machine.
   const gguf = { ...summarize({ id: "city96/FLUX.1-dev-gguf", pipeline_tag: "text-to-image", tags: ["gguf"] }), files: [{ name: "flux1-dev-Q8_0.gguf", gb: 12 }] };
   const pieces = buildPlan({ model: gguf, files: gguf.files, machine, detected: gpu, hasToken: false });

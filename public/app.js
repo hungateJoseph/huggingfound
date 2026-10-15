@@ -864,6 +864,9 @@ function wireRentAsk(body, model, choice) {
     const gb = Number(body.querySelector("#ask-size")?.value);
     const offer = (state.rentOptions ?? []).find((t) => t.gb === gb);
     if (note && offer) note.textContent = perQueryText(offer.pricePerHour).trim();
+    // The button's price is the chosen size's, not the first one's.
+    const btn = body.querySelector("#ask-rent");
+    if (btn && offer && !btn.disabled) btn.textContent = `Rent it, ${money(offer.pricePerHour)} an hour`;
   };
   sayPerQuery();
   body.querySelector("#ask-size")?.addEventListener("change", sayPerQuery);
@@ -2221,6 +2224,7 @@ function renderImage(box, t) {
       <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${spec.defaultSeconds}"><small class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.</small></label>
       <div class="effort-title">Quality</div>
       <div class="quality" id="video-level">${["low", "medium", "high"].map((l) => `<label><input type="radio" name="level" value="${l}" ${l === level ? "checked" : ""}> <b>${l[0].toUpperCase() + l.slice(1)}</b> <span class="muted">${esc(spec.levels[l].text)}</span></label>`).join("")}</div>
+      <p class="muted small levels-note">A pass is one round of refinement over the whole clip; past about 30, each adds little. The canvas is the size the model draws at, and none draws better above the one it was trained for. The expansion at High is where the effort of understanding goes: ${claudeAvailable() ? "Claude turns your words into the detailed shot description these models follow best, and the log shows it" : "with an Anthropic key saved, Claude turns your words into the detailed shot description these models follow best; without one, High is the passes and the avoid list"}.</p>
       <p class="muted small estimate" id="estimate"></p>
     </div>` : `<div class="effort-title">Effort</div>
     <div class="quality" id="quality">${options}</div>`;
@@ -2237,7 +2241,7 @@ function renderImage(box, t) {
     <label class="field avoid">
       <span>Avoid</span>
       <input type="text" id="image-negative" placeholder="anime, cartoon, drawing, blurry, extra fingers">
-      <small class="muted">Models cannot read "not" or "no" in the description; whatever you do not want goes here instead.</small>
+      <small class="muted">Models cannot read "not" or "no" in the description; whatever you do not want goes here instead.${spec?.avoid ? " Left empty at Medium or High, the model's standard avoid list is used." : ""}</small>
     </label>
     ${t.agent ? `<div class="queue" id="queue" hidden>
       <p class="muted small"><b>Queue.</b> These run one after another on the rented GPU; each is kept here and saved to this computer as it finishes, so nothing waits on you. Tick the box below and the machine stops when the last one is made.</p>
@@ -2272,7 +2276,7 @@ function renderImage(box, t) {
     const lvl = box.querySelector("input[name=level]:checked")?.value ?? "medium";
     const seconds = Number(box.querySelector("#video-seconds")?.value) || spec.defaultSeconds;
     const est = clipEstimate(spec, lvl, seconds, t.repo);
-    const q = { steps: est.level.steps, width: est.level.width, height: est.level.height, frames: est.frames, fps: spec.fps, cfg: spec.cfg };
+    const q = { steps: est.level.steps, width: est.level.width, height: est.level.height, frames: est.frames, fps: spec.fps, cfg: spec.cfg, ...(est.level.expand ? { expand: true } : {}) };
     return { level: lvl, seconds, q, text: `${(est.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${est.level.width} by ${est.level.height}, ${est.frames} frames, ${est.level.steps} steps`, estimate: est };
   };
   const refreshEstimate = () => {
@@ -2317,7 +2321,8 @@ function renderImage(box, t) {
   // is sent.
   const makeItem = (prompt) => {
     const c = chosen();
-    return { prompt, negative: $("#image-negative").value.trim(), quality: c.quality ?? null, q: c.q, settings: c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null };
+    const typed = $("#image-negative").value.trim();
+    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null };
   };
   // The queue: several requests, run one after another by one click. It is
   // kept in this browser under the model, so leaving the window or the page
@@ -2405,8 +2410,11 @@ function renderImage(box, t) {
     foot.textContent = claudeAvailable() ? "Claude is writing the revised description" : "Revising the words";
     const revised = await reviseFor(entry, text, t.repo);
     const c = chosen();
-    const q = entry.q ?? c.q;
-    const item = { prompt: revised.prompt, negative: revised.negative, quality: entry.quality ?? c.quality ?? null, q, settings: entry.settings ?? c.text, seed: entry.seed ?? randomSeed(), replyTo: { id: entry.id, text }, startFile: null, estimate: null };
+    // The settings the result was made with: kept with it, or read from its
+    // caption for one kept before they were, so a reply never takes the
+    // settings chosen for something else.
+    const q = entry.q ?? qFromSettings(entry.settings, spec, qualities) ?? c.q;
+    const item = { prompt: revised.prompt, negative: revised.negative, quality: entry.quality ?? (!spec && entry.settings ? entry.settings.split(",")[0].trim() : null) ?? c.quality ?? null, q, settings: entry.settings ?? c.text, seed: entry.seed ?? randomSeed(), replyTo: { id: entry.id, text }, startFile: null, estimate: null };
     const lines = [`Reply to the earlier ${picture ? "picture" : "clip"}: "${text}"`, `${revised.by === "Claude" ? "Claude's revised description" : "From your words"}: "${item.prompt}"${item.negative ? `, avoiding "${item.negative}"` : ""}.`];
     if (picture) {
       item.paintOver = true;
@@ -2437,10 +2445,19 @@ function renderImage(box, t) {
     run([item], { intro: lines });
   }
 
-  // A request's arguments for the machine: the files it needs are read now.
-  async function requestArgs(item) {
+  // A request's arguments for the machine: the files it needs are read now,
+  // and at High the words are expanded first, once, by Claude.
+  async function requestArgs(item, say = () => {}) {
     let target = { repo: t.repo, file: t.file };
     let extra = {};
+    if (item.expand && !item.replyTo && !item.expanded && claudeAvailable()) {
+      say("Claude is expanding the description");
+      const expanded = await expandWords(item.prompt, video, t.repo, item.negative);
+      if (expanded) {
+        item.expanded = expanded;
+        say(`Expanded: "${expanded}"`);
+      } else say("Claude gave no expansion; the words go as they are.");
+    }
     if (video && t.startPicture) {
       if (t.startPicture === "required" && !item.startFile) throw new Error("this model needs a starting picture");
       if (item.startFile) {
@@ -2466,7 +2483,7 @@ function renderImage(box, t) {
       target = base;
       extra = { addon: { kind: t.addonKind, repo: t.repo, file: variant.file, lora: variant.lora, scale: Number(box.querySelector("#addon-scale").value) }, ipImage, xl: base.xl };
     }
-    return { ...target, prompt: item.prompt, negative: item.negative, quality: item.q, video, seed: item.seed ?? null, ...extra };
+    return { ...target, prompt: item.expanded ?? item.prompt, negative: item.negative, quality: item.q, video, seed: item.seed ?? null, ...extra };
   }
 
   // A finished result: timed against the guess, kept in this browser,
@@ -2494,7 +2511,7 @@ function renderImage(box, t) {
     const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
     // The seed the machine used, so a reply can keep to it; a machine from
     // before seeds were passed along says nothing, and that is remembered.
-    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, replyTo: item.replyTo ?? null };
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, replyTo: item.replyTo ?? null };
     await keepResult(entry);
     rec.shown.add(entry.id);
     const name = `${kind === "video" ? "clip" : "image"}-${entry.id}.${kind === "video" ? "mp4" : "png"}`;
@@ -2519,7 +2536,16 @@ function renderImage(box, t) {
     }
     const out = b.querySelector("#image-out");
     show(out);
-    addReply(out.lastElementChild, entry, reply);
+    const card = out.lastElementChild;
+    card.dataset.entry = entry.id;
+    const cap = document.createElement("p");
+    cap.className = "muted small caption";
+    cap.textContent = captionText(entry);
+    card.querySelector(".tools-row")?.before(cap);
+    // A reply lands right under what it answers, not at the end of the row.
+    const answered = item.replyTo ? out.querySelector(`[data-entry="${CSS.escape(item.replyTo.id)}"]`) : null;
+    if (answered) answered.after(card);
+    addReply(card, entry, reply);
     renderKept(b, t.repo, rec.shown, reply);
   }
 
@@ -2571,7 +2597,7 @@ function renderImage(box, t) {
       const stopAfter = Boolean(liveBox()?.querySelector("#image-stop-after")?.checked);
       if (resumed) say(`${items.length} request${items.length === 1 ? "" : "s"} from before ${items.length === 1 ? "is" : "are"} still on the machine; following ${items.length === 1 ? "it" : "them"} again.`);
       const requests = [];
-      for (const item of items) requests.push(resumed ? item : { item, args: await requestArgs(item) });
+      for (const item of items) requests.push(resumed ? item : { item, args: await requestArgs(item, say) });
       let made = 0;
       const failedItems = [];
       try {
@@ -2648,7 +2674,7 @@ async function renderKept(box, repo, shownIds = new Set(), onReply = null) {
     const card = document.createElement("div");
     card.className = "image-card kept";
     card.innerHTML = `${e.kind === "video" ? `<video class="result-image" src="${url}" controls loop muted playsinline title="${esc(e.prompt)}"></video>` : `<img class="result-image" src="${url}" alt="${esc(e.prompt)}">`}
-      <p class="muted small caption">${e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${esc(e.replyTo.text)}") · ` : ""}${esc(e.prompt)}${e.settings ? ` · ${esc(e.settings)}` : ""} · ${new Date(e.madeAt).toLocaleString()}${e.took ? ` · ${shortDuration(e.took)} of machine time` : ""} · ${mbText(e.bytes || 0)}</p>
+      <p class="muted small caption">${esc(captionText(e))} · ${new Date(e.madeAt).toLocaleString()}${e.took ? ` · ${shortDuration(e.took)} of machine time` : ""} · ${mbText(e.bytes || 0)}</p>
       <p class="tools-row"><a class="button" href="${url}" download="${name}">Download</a><button class="ghost kept-remove">Remove</button></p>`;
     card.querySelector(".kept-remove").addEventListener("click", async () => {
       await forgetResult(e.id);
@@ -3789,6 +3815,50 @@ function rememberQueue(repo, items) {
     localStorage.setItem(`queue:${repo}`, JSON.stringify(items.map(({ startFile, ...rest }) => ({ ...rest, startName: startFile?.name ?? rest.startName ?? null }))));
   } catch {
     // no storage
+  }
+}
+
+// What a result is, in a line: what it answers, the words asked, what
+// Claude expanded them into, and the settings.
+function captionText(e) {
+  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.prompt, e.expanded ? `expanded by Claude: ${e.expanded}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
+}
+
+// The settings of a result kept before they were kept with it, read back
+// from its caption: "5.1 s at high quality, 1280 by 704, 81 frames, 50
+// steps", or a picture preset's name.
+function qFromSettings(settings, spec, qualities) {
+  const s = String(settings ?? "");
+  if (spec) {
+    const size = /(\d+) by (\d+)/.exec(s);
+    const frames = /(\d+) frames/.exec(s);
+    const steps = /(\d+) steps/.exec(s);
+    if (!(size && frames && steps)) return null;
+    const level = /at (low|medium|high) quality/.exec(s)?.[1];
+    return { width: Number(size[1]), height: Number(size[2]), frames: Number(frames[1]), steps: Number(steps[1]), fps: spec.fps, cfg: spec.cfg, ...(spec.levels?.[level]?.expand ? { expand: true } : {}) };
+  }
+  const name = s.split(",")[0].trim();
+  return qualities?.[name] ?? null;
+}
+
+// Claude expands a short description into the detailed one these models do
+// best with; nothing, when it cannot, and the words go as they are.
+async function expandWords(prompt, clip, model, negative) {
+  try {
+    const creds = state.hosted ? hostedCredentials() ?? {} : {};
+    const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify({ kind: "prompt", mode: "expand", clip, model, prompt, negative }) });
+    if (!res.ok) return null;
+    let out = "";
+    let end = null;
+    await readLines(res, (j) => {
+      if (j.error) throw new Error(j.error);
+      if (j.text) out += j.text;
+      if (j.done) end = j;
+    });
+    out = out.trim().replace(/^["“]|["”]$/g, "");
+    return !end?.declined && out.length > prompt.length ? out : null;
+  } catch {
+    return null;
   }
 }
 
