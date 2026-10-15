@@ -58,6 +58,11 @@ const reviewer = {
       onText(`${input.prompt}, in golden light, a slow pan`);
       return { declined: false, model: "claude-opus-5", note: "" };
     }
+    // The next shot: what happens next, as the scene goes on.
+    if (input.mode === "continue") {
+      onText(`${input.request.replace(/^ok, now /, "")}, the scene going on`);
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
     onText("This has one problem.\n");
     await new Promise((r) => setTimeout(r, 150));
     onText("word7 is not a word.");
@@ -1242,7 +1247,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.waitForSelector("#found .model");
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   await visitor.waitForSelector("#video-seconds");
-  assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["3", "1", "5"]);
+  assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["3", "1", "30"], "one shot is 1 to 5 seconds; longer is made as pieces");
   assert.deepEqual(await visitor.$$eval("#video-level input", (els) => els.map((e) => [e.value, e.checked])), [["low", false], ["medium", true], ["high", false]]);
   assert.match(await visitor.locator("#estimate").innerText(), /^About .* for a 3\.1-second clip at 1280 by 704, 49 frames, 30 steps \(a guess until the first clip is timed\)\./, "medium draws on the full canvas");
   assert.match(await visitor.locator("#video-level").innerText(), /Low\s+a draft: a small canvas, 20 passes[\s\S]*Medium\s+the model's full canvas, 30 passes, its standard avoid list[\s\S]*High\s+the full canvas, 50 passes, the avoid list, and your words expanded first/);
@@ -1315,16 +1320,53 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.equal(await visitor.$eval("#video-seconds", (e) => e.value), "4.8");
   await visitor.fill("#video-seconds", "2");
   assert.doesNotMatch(await visitor.locator("#estimate").innerText(), /ran out of memory/, "under the limit, no warning");
+  // Longer than one shot: the clip is made as pieces, each from the last
+  // frame of the one before, then joined on the machine into one.
+  assert.equal(await visitor.$eval("#video-seconds", (e) => e.max), "30", "up to six shots' worth on a model that starts from a picture");
+  await visitor.fill("#video-seconds", "12");
+  await visitor.click("#video-level input[value=low]");
+  assert.match(await visitor.locator("#estimate").innerText(), /in all for a 12\.2-second clip made as 3 pieces of 4\.1 s at 832 by 480, 65 frames each, 20 steps, each starting where the last ended, then joined \(a soft seam at each join\)/);
+  const before = rentedAgent.state.jobs.length;
+  await visitor.fill("#image-prompt", "a river in spring");
+  await visitor.click("#image-go");
+  await visitor.waitForFunction(() => /Joining the 3 pieces/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
+  await visitor.waitForFunction(() => /12\.2 s in 3 pieces/.test(document.querySelector("#image-out")?.textContent ?? ""), null, { timeout: 30000 });
+  const pieces = rentedAgent.state.jobs.slice(before, before + 3);
+  assert.deepEqual(pieces.map((j) => [j.prompt, j.frames, j.init ? j.init.slice(0, 22) : null, j.strength ?? null]), [["a river in spring", 65, null, null], ["a river in spring", 65, "data:image/png;base64,", 0.9], ["a river in spring", 65, "data:image/png;base64,", 0.9]], "the first from the words, the next two from the last frame before");
+  assert.deepEqual(rentedAgent.state.joins.at(-1), pieces.map((j) => j.id), "joined in order");
+  const pieceLog = await visitor.locator("#image-log").innerText();
+  assert.match(pieceLog, /A 12\.2-second clip, made as 3 pieces of 4\.1 s[\s\S]*Piece 1 of 3\n[\s\S]*Piece 2 of 3, from the last frame of the one before[\s\S]*Piece 3 of 3[\s\S]*Joining the 3 pieces into one clip on the machine/);
+  const joinedCard = visitor.locator("#image-out .image-card", { hasText: "12.2 s in 3 pieces" });
+  assert.equal(await joinedCard.count(), 1);
+  assert.match(await visitor.locator("#image-out .image-card", { hasText: "piece 2 of 3" }).locator(".caption").innerText(), /a river in spring · piece 2 of 3, 4\.1 s at low quality/);
+  // A reply can continue the clip instead of changing it: the next clip
+  // starts from the last frame, with the words for what happens next.
+  await joinedCard.locator(".reply-go").click();
+  assert.equal(await joinedCard.locator(".reply-go").innerText(), "Reply: change or continue it");
+  await joinedCard.locator(".reply-mode input[value=continue]").check();
+  assert.equal(await joinedCard.locator(".reply-run").innerText(), "Continue it");
+  assert.match(await joinedCard.locator(".reply-text").getAttribute("placeholder"), /Say what happens next/);
+  await joinedCard.locator(".reply-text").fill("ok, now the ice melts and the river runs again");
+  await joinedCard.locator(".reply-run").click();
+  await visitor.waitForFunction((n) => document.querySelectorAll("#image-out .image-card").length === n + 1, await visitor.locator("#image-out .image-card").count(), { timeout: 30000 });
+  const next = rentedAgent.state.jobs.at(-1);
+  assert.deepEqual([next.prompt, next.frames, next.init ? next.init.slice(0, 22) : null, next.strength], ["the ice melts and the river runs again, the scene going on", 65, "data:image/png;base64,", 0.9], "what happens next, written by Claude from the first description and the reply, from the joined clip's last frame, at the clip's own settings");
+  assert.match(await visitor.locator("#image-log").innerText(), /Continuing the earlier clip: "ok, now the ice melts and the river runs again"\nClaude's next shot: "the ice melts and the river runs again, the scene going on"\. It starts from that clip's last frame\./);
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).prompt, reviewed.at(-1).request], ["continue", "a river in spring", "ok, now the ice melts and the river runs again"], "Claude was given the first description and what happens next");
+  const cont = visitor.locator("#image-out .image-card", { hasText: "Continues an earlier clip" });
+  assert.equal(await cont.count(), 1);
+  assert.match(await cont.locator(".caption").innerText(), /^Continues an earlier clip \("ok, now the ice melts and the river runs again"\) · the ice melts and the river runs again, the scene going on · 4\.1 s at low quality/);
+  await visitor.fill("#video-seconds", "3");
   await visitor.fill("#image-prompt", "");
   // Leaving the window loses nothing: the clips are kept under the model.
   await visitor.keyboard.press("Escape");
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   // The machine is stopped, so the window offers to start it; the clips show all the same.
   await visitor.waitForSelector("#kept .image-card");
-  assert.equal(await visitor.locator("#kept .image-card").count(), 3);
-  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*3 results made with this model[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
+  assert.equal(await visitor.locator("#kept .image-card").count(), 8, "the two clips, the reply, the three pieces, the joined clip and the continuation");
+  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*8 results made with this model[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
   await visitor.locator("#kept .kept-remove").first().click();
-  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 2);
+  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 7);
   await visitor.keyboard.press("Escape");
   // The machine stopped as asked; started again, and the clip model taken
   // off the stand-in machine, for what follows.

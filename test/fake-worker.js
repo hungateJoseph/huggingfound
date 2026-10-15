@@ -47,7 +47,7 @@ rl.on("line", (line) => {
       return say({ ok: false, error: "the GPU ran out of memory for this model at this size; try a smaller picture, fewer frames, or a bigger card", unloaded: !/quietly/.test(req.prompt) });
     }
     say({ progress: 0.5 });
-    if (loaded.kind === "video") return say({ ok: true, video: MP4, frames: req.frames ?? 33, fps: 16 });
+    if (loaded.kind === "video") return say({ ok: true, video: MP4, frames: req.frames ?? 33, fps: 16, last: PNG });
     return say({ ok: true, image: PNG, width: req.width ?? 1024, height: req.height ?? 1024 });
   }
   if (req.op === "unload") {

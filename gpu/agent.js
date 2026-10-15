@@ -30,10 +30,11 @@
 // folder layouts), which also make video. A folder model is handled by
 // its model_index.json, so the rest of the app can treat it as a file.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -422,6 +423,7 @@ function startJob(input) {
         }
         if (answer.video) {
           job.video = answer.video;
+          job.last = answer.last || null;
           job.kind = "video";
         } else if (answer.image) {
           job.image = answer.image;
@@ -474,6 +476,59 @@ function startJob(input) {
     } catch (err) {
       job.status = "failed";
       job.error = err.message;
+    }
+  })();
+  return job;
+}
+
+// Several clips joined into one, in order: the pieces of a long clip, each
+// made from the last frame of the one before. ffmpeg copies the streams
+// when they match (one model, one setting) and encodes afresh otherwise.
+let ffmpegPath = process.env.HF_FFMPEG || "";
+function ffmpeg() {
+  if (ffmpegPath) return ffmpegPath;
+  const probe = spawnSync(PYTHON, ["-c", "import imageio_ffmpeg,sys;sys.stdout.write(imageio_ffmpeg.get_ffmpeg_exe())"], { encoding: "utf8", timeout: 30000 });
+  ffmpegPath = probe.status === 0 ? probe.stdout.trim() : "";
+  if (!ffmpegPath) throw new Error("ffmpeg is not on this machine, so clips cannot be joined here");
+  return ffmpegPath;
+}
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpeg(), ["-y", "-loglevel", "error", ...args], { stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    proc.stderr.on("data", (c) => (err += c.toString()));
+    proc.on("error", reject);
+    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.trim() || `ffmpeg exited ${code}`))));
+  });
+}
+function startJoin(pieces) {
+  const id = crypto.randomBytes(8).toString("hex");
+  const job = { id, status: "generating", createdAt: Date.now(), image: null, video: null, kind: "video", progress: null, error: null, note: "", seed: null, joined: pieces.map((p) => p.id) };
+  jobs.set(id, job);
+  (async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hf-join-"));
+    try {
+      const files = pieces.map((p, i) => {
+        const file = path.join(dir, `piece-${i + 1}.mp4`);
+        fs.writeFileSync(file, Buffer.from(p.video, "base64"));
+        return file;
+      });
+      const list = path.join(dir, "list.txt");
+      fs.writeFileSync(list, files.map((f) => `file '${f}'`).join("\n") + "\n");
+      const out = path.join(dir, "joined.mp4");
+      try {
+        await runFfmpeg(["-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-movflags", "+faststart", out]);
+      } catch {
+        await runFfmpeg(["-f", "concat", "-safe", "0", "-i", list, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", out]);
+      }
+      job.video = fs.readFileSync(out).toString("base64");
+      job.last = pieces.at(-1).last || null;
+      job.status = "completed";
+    } catch (err) {
+      job.status = "failed";
+      job.error = `the pieces could not be joined: ${err.message}`;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   })();
   return job;
@@ -1039,6 +1094,17 @@ const server = http.createServer(async (req, res) => {
       }
       return send(res, 200, { ok: true });
     }
+    if (req.method === "POST" && url.pathname === "/jobs/join") {
+      touchActivity();
+      const body = await readJson(req);
+      const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+      if (ids.length < 2 || ids.length > 24 || !ids.every((id) => /^[a-f0-9]{16}$/.test(id))) return send(res, 400, { error: "Name two to twenty-four clips to join, in order" });
+      const pieces = ids.map((id) => jobs.get(id));
+      if (pieces.some((p) => !p)) return send(res, 404, { error: "One of those clips is no longer on this machine" });
+      if (pieces.some((p) => p.status !== "completed" || !p.video)) return send(res, 409, { error: "Every piece has to be a finished clip" });
+      const job = startJoin(pieces);
+      return send(res, 202, { id: job.id, status: job.status });
+    }
     if (req.method === "POST" && url.pathname === "/jobs") {
       touchActivity();
       const body = await readJson(req);
@@ -1085,12 +1151,19 @@ const server = http.createServer(async (req, res) => {
       const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed });
       return send(res, 202, { id: job.id, status: job.status });
     }
-    const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})(\/result)?$/);
+    const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})(\/result|\/last)?$/);
     if (req.method === "GET" && m) {
       const job = jobs.get(m[1]);
       if (!job) return send(res, 404, { error: "No such job" });
       const done = job.status === "completed";
       const b64 = done ? job.video || job.image : null;
+      // A clip's last frame, as a picture, for whatever starts from it.
+      if (m[2] === "/last") {
+        if (!job.last) return send(res, done || job.status === "failed" ? 404 : 409, { error: job.status === "failed" ? "this job made nothing" : done ? "this clip has no last frame kept" : "not finished yet" });
+        const bytes = Buffer.from(job.last, "base64");
+        res.writeHead(200, { "Content-Type": "image/png", "Content-Length": bytes.length, "Cache-Control": "no-store" });
+        return res.end(bytes);
+      }
       // The result as bytes, apart from the status: a clip is tens of
       // megabytes, which a poll every second or two should not carry.
       if (m[2]) {
@@ -1102,7 +1175,7 @@ const server = http.createServer(async (req, res) => {
       // A lean poll leaves the result out and says it is there to fetch;
       // the plain one carries it, for pages from before.
       const lean = url.searchParams.get("lean") === "1";
-      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, note: job.note || "", error: job.error, seed: job.seed, image: done && !lean ? job.image : null, video: done && !lean ? job.video : null, result: Boolean(b64), bytes: b64 ? Buffer.byteLength(b64, "base64") : 0 });
+      return send(res, 200, { id: job.id, status: job.status, kind: job.kind, progress: job.progress, note: job.note || "", error: job.error, seed: job.seed, image: done && !lean ? job.image : null, video: done && !lean ? job.video : null, result: Boolean(b64), bytes: b64 ? Buffer.byteLength(b64, "base64") : 0, last: Boolean(job.last) });
     }
     send(res, 404, { error: "Not found" });
   } catch (err) {

@@ -36,7 +36,7 @@ before(async () => {
   fs.writeFileSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part"), "half");
   agent = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], {
     // The Python side is played by a Node script that speaks the same protocol.
-    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog },
+    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let errors = "";
@@ -258,6 +258,25 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   assert.equal(raw.headers.get("content-type"), "video/mp4");
   assert.equal(Buffer.from(await raw.arrayBuffer()).toString(), "fake mp4 bytes");
   assert.equal((await get(`/jobs/${bad.id}/result`)).status, 409, "a job that made nothing has no result");
+  // The clip's last frame is kept apart, for whatever starts from it.
+  assert.equal(lean.last, true);
+  const lastFrame = await get(`/jobs/${clip.id}/last`);
+  assert.equal(lastFrame.headers.get("content-type"), "image/png");
+  assert.match(Buffer.from(await lastFrame.arrayBuffer()).toString("base64"), /^iVBOR/);
+  assert.equal((await get(`/jobs/${bad.id}/last`)).status, 404, "a failed job has none");
+  // Pieces of a long clip are joined into one on the machine, in order.
+  const second = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "waves, later", frames: 33 })).json();
+  assert.equal((await finish(second.id)).status, "completed");
+  assert.equal((await post("/jobs/join", { ids: [clip.id] })).status, 400, "one clip is nothing to join");
+  assert.equal((await post("/jobs/join", { ids: [clip.id, "0000000000000000"] })).status, 404);
+  assert.equal((await post("/jobs/join", { ids: [clip.id, bad.id] })).status, 409, "every piece has to be a finished clip");
+  const joinRes = await post("/jobs/join", { ids: [clip.id, second.id] });
+  assert.equal(joinRes.status, 202);
+  const joined = await finish((await joinRes.json()).id);
+  assert.equal(joined.status, "completed", joined.error);
+  assert.equal(joined.kind, "video");
+  assert.equal(joined.last, true, "the joined clip's last frame is the last piece's");
+  assert.equal(Buffer.from(await (await get(`/jobs/${joined.id}/result`)).arrayBuffer()).toString(), "fake mp4 bytesfake mp4 bytes", "the pieces, in order, as one file");
   // A ten-second clip at 24 fps, as MiniMax-H3 makes, is within the frame limit.
   const long = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "a long walk", frames: 243, fps: 24, width: 1344, height: 768, steps: 30 })).json();
   assert.equal((await finish(long.id)).status, "completed");

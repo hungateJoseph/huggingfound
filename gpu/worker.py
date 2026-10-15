@@ -633,7 +633,16 @@ def generate(req):
     if getattr(result, "frames", None) is not None:
         frames = result.frames[0]
         data, sound = write_clip(frames, fps, audio, rate)
-        return {"ok": True, "video": base64.b64encode(data).decode("ascii"), "frames": len(frames), "fps": fps, "sound": sound}
+        # The last frame apart, as a picture: the next piece of a longer
+        # clip, or a continuation, starts from it.
+        last = None
+        try:
+            buf = io.BytesIO()
+            frame_to_pil(frames[-1]).convert("RGB").save(buf, format="PNG")
+            last = base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:  # noqa: BLE001
+            last = None
+        return {"ok": True, "video": base64.b64encode(data).decode("ascii"), "frames": len(frames), "fps": fps, "sound": sound, "last": last}
     image = result.images[0]
     buf = io.BytesIO()
     image.save(buf, format="PNG")

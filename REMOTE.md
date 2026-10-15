@@ -193,6 +193,20 @@ The machine takes two to four minutes to start. Meanwhile:
   stands, with the lines still coming, and a result made meanwhile lands in
   the window that is open then. A page reloaded while jobs ran finds them
   on the machine and follows them again.
+- A clip longer than the model makes in one shot (on a model that starts
+  from a picture) is made as equal pieces of at most that length, each
+  from the last frame of the one before (the worker returns the last frame
+  as a picture, GET /jobs/:id/last), kept and shown as they come, then
+  joined on the machine (POST /jobs/join, ffmpeg concat, stream copy with
+  an encode as fallback) into one clip kept as "N s in K pieces". The
+  length box allows up to six shots' worth, a minute at most, and the
+  estimate line says how it will be made. A machine from before joining
+  leaves the pieces one by one.
+- A reply to a clip can continue it instead of changing it: the next clip
+  starts from this one's last frame (the kept frame, or one read from the
+  clip in the browser for older results) with the words for what happens
+  next, written by Claude with a key and read from the reply otherwise, at
+  the clip's own settings; it lands under the clip it continues.
 - A reply's result lands right under the result it answers, with a caption
   saying so; every live card carries a caption (what was asked, the
   expansion, the settings). A result kept before its settings were kept

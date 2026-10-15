@@ -66,6 +66,12 @@ const EXPAND_SYSTEM = `You write descriptions for open-source image and video mo
 
 Reply with only the description: 60 to 120 words in one paragraph of plain text, no heading, no list, no quotation marks, no comment.`;
 
+// A clip continued: the next shot starts from the last frame of the one
+// before, so its description is what happens next, with the scene kept.
+const CONTINUE_SYSTEM = `You write descriptions for open-source video models that people run on rented GPUs. A clip was made from a description; the person says what happens next. The next clip will be made by the same model starting from the last frame of the first, so the scene, the people and the light are already there in the picture; the new description has to say what moves and what happens from that frame on, with the same subjects, setting and style, and nothing that contradicts the frame. Such models read plain descriptive prose, not instructions, "no" or "not".
+
+Reply with only the description of the next clip: 40 to 90 words in one paragraph of plain text, no heading, no list, no quotation marks, no comment.`;
+
 export class ReviewError extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -140,6 +146,12 @@ export function buildRequest(input, { outputDir } = {}) {
       system: clip ? EDIT_CLIP_SYSTEM : editing ? EDIT_IMAGE_SYSTEM : IMAGE_SYSTEM,
       messages: [{ role: "user", content: bytes ? [{ type: "image", source: { type: "base64", media_type: mediaType, data: bytes.toString("base64") } }, { type: "text", text }] : text }],
     };
+  }
+  if (input.kind === "prompt" && input.mode === "continue") {
+    const prompt = String(input.prompt ?? "").trim();
+    if (!request) throw new ReviewError("Say what happens next.");
+    const parts = [`The clip was made${input.model ? ` by ${input.model}` : ""} from this description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, `What happens next:`, `<next>\n${request}\n</next>`, "Reply with only the description of the next clip."];
+    return { ...base, max_tokens: 4000, system: CONTINUE_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "prompt" && input.mode === "expand") {
     const prompt = String(input.prompt ?? "").trim();

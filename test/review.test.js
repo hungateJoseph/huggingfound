@@ -87,6 +87,13 @@ test("a reply to a result is an edit written from the words: with the picture wh
   assert.throws(() => buildRequest({ kind: "image", mode: "reply", prompt: "a barn", request: " " }), /Say what should change/);
 });
 
+test("continuing a clip asks for the next shot from the first description and what happens next", () => {
+  const req = buildRequest({ kind: "prompt", mode: "continue", clip: true, model: "wan", prompt: "a man dealing a deck of cards", request: "now he stands up and leaves the cards on the table" });
+  assert.match(req.system, /starting from the last frame of the first/);
+  assert.match(req.messages[0].content, /made by wan from this description:[\s\S]*<description>\na man dealing a deck of cards\n<\/description>[\s\S]*<next>\nnow he stands up and leaves the cards on the table\n<\/next>/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "continue", prompt: "a man", request: " " }), /what happens next/);
+});
+
 test("expanding a description asks for prose a model follows, with the avoid list kept out of it", () => {
   const req = buildRequest({ kind: "prompt", mode: "expand", clip: true, model: "wan", prompt: "waves at dusk", negative: "blurry, text" });
   assert.match(req.system, /60 to 120 words/);

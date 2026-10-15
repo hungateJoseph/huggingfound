@@ -2204,6 +2204,10 @@ function renderImage(box, t) {
   const video = t.kind === "video";
   // A clip is asked for by length and quality; a picture by preset.
   const spec = video && plan?.video ? plan.video : null;
+  // Beyond what the model makes in one shot, a clip is made as pieces,
+  // each from the last frame of the one before, when the model can start
+  // from a picture; up to a minute.
+  const longMax = spec ? (t.startPicture ? Math.min(60, spec.maxSeconds * 6) : spec.maxSeconds) : 0;
   const qualities = plan?.qualities ?? {};
   const options = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === saved ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
   const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
@@ -2221,7 +2225,7 @@ function renderImage(box, t) {
   const save = autosaveSettings();
   const what = video ? "clip" : "picture";
   const settingsHtml = spec ? `<div class="clip-settings">
-      <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${spec.defaultSeconds}"><small class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.</small></label>
+      <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${spec.minSeconds}" max="${longMax}" step="1" value="${spec.defaultSeconds}"><small class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.${longMax > spec.maxSeconds ? ` Up to ${longMax} seconds is made as pieces of at most ${spec.maxSeconds}, each starting where the last ended, then joined into one clip.` : ""}</small></label>
       <div class="effort-title">Quality</div>
       <div class="quality" id="video-level">${["low", "medium", "high"].map((l) => `<label><input type="radio" name="level" value="${l}" ${l === level ? "checked" : ""}> <b>${l[0].toUpperCase() + l.slice(1)}</b> <span class="muted">${esc(spec.levels[l].text)}</span></label>`).join("")}</div>
       <p class="muted small levels-note">A pass is one round of refinement over the whole clip; past about 30, each adds little. The canvas is the size the model draws at, and none draws better above the one it was trained for. The expansion at High is where the effort of understanding goes: ${claudeAvailable() ? "Claude turns your words into the detailed shot description these models follow best, and the log shows it" : "with an Anthropic key saved, Claude turns your words into the detailed shot description these models follow best; without one, High is the passes and the avoid list"}.</p>
@@ -2274,10 +2278,15 @@ function renderImage(box, t) {
       return { quality, q, text: q?.text ? `${quality}, ${q.text}` : quality, estimate: null };
     }
     const lvl = box.querySelector("input[name=level]:checked")?.value ?? "medium";
-    const seconds = Number(box.querySelector("#video-seconds")?.value) || spec.defaultSeconds;
-    const est = clipEstimate(spec, lvl, seconds, t.repo);
-    const q = { steps: est.level.steps, width: est.level.width, height: est.level.height, frames: est.frames, fps: spec.fps, cfg: spec.cfg, ...(est.level.expand ? { expand: true } : {}) };
-    return { level: lvl, seconds, q, text: `${(est.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${est.level.width} by ${est.level.height}, ${est.frames} frames, ${est.level.steps} steps`, estimate: est };
+    const asked = Math.min(longMax || spec.maxSeconds, Number(box.querySelector("#video-seconds")?.value) || spec.defaultSeconds);
+    // Longer than one shot: equal pieces, each within the model's length.
+    const pieces = asked > spec.maxSeconds ? Math.ceil(asked / spec.maxSeconds) : 1;
+    const seconds = asked / pieces;
+    const each = clipEstimate(spec, lvl, seconds, t.repo);
+    const q = { steps: each.level.steps, width: each.level.width, height: each.level.height, frames: each.frames, fps: spec.fps, cfg: spec.cfg, ...(each.level.expand ? { expand: true } : {}) };
+    const eachText = `${(each.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${each.level.steps} steps`;
+    const estimate = pieces > 1 ? { ...each, seconds: each.seconds * pieces } : each;
+    return { level: lvl, seconds, pieces, q, eachText, text: pieces > 1 ? `${((each.frames * pieces) / spec.fps).toFixed(1)} s as ${pieces} pieces of ${eachText}` : eachText, estimate, each };
   };
   const refreshEstimate = () => {
     const el = box.querySelector("#estimate");
@@ -2285,10 +2294,12 @@ function renderImage(box, t) {
     const c = chosen();
     const est = c.estimate;
     const load = loadSeconds(t.repo);
-    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""} for a ${(est.frames / spec.fps).toFixed(1)}-second clip at ${est.level.width} by ${est.level.height}, ${est.frames} frames, ${est.level.steps} steps${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}`;
+    const each = c.each ?? est;
+    const shape = c.pieces > 1 ? `a ${((each.frames * c.pieces) / spec.fps).toFixed(1)}-second clip made as ${c.pieces} pieces of ${(each.frames / spec.fps).toFixed(1)} s at ${each.level.width} by ${each.level.height}, ${each.frames} frames each, ${each.level.steps} steps, each starting where the last ended, then joined (a soft seam at each join)` : `a ${(each.frames / spec.fps).toFixed(1)}-second clip at ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${each.level.steps} steps`;
+    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""}${c.pieces > 1 ? " in all" : ""} for ${shape}${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}`;
     // Above what this machine has run out of memory at: said before asking.
     const limit = memoryLimit(t.repo);
-    const over = limit && est.frames * est.level.width * est.level.height >= limit.load;
+    const over = limit && each.frames * each.level.width * each.level.height >= limit.load;
     el.classList.toggle("warn", Boolean(over));
     if (over) el.textContent += ` ${tooBigText(limit, c.level, c.seconds)}`;
   };
@@ -2335,6 +2346,7 @@ function renderImage(box, t) {
     const qGo = b.querySelector("#queue-go");
     if (qGo) qGo.disabled = on;
   };
+  reply.canContinue = Boolean(video && t.startPicture);
   renderKept(box, t.repo, rec.shown, t.agent ? reply : null);
   // A request as it will be sent: the words, what to avoid, the settings as
   // chosen right now, a seed of its own, and the files picked, read when it
@@ -2342,7 +2354,7 @@ function renderImage(box, t) {
   const makeItem = (prompt) => {
     const c = chosen();
     const typed = $("#image-negative").value.trim();
-    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null };
+    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, pieces: c.pieces ?? 1, each: c.eachText ?? c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null };
   };
   // The queue: several requests, run one after another by one click. It is
   // kept in this browser under the model, so leaving the window or the page
@@ -2431,7 +2443,8 @@ function renderImage(box, t) {
   // fits the size of the change, which costs that fraction of a fresh one;
   // a clip cannot be changed in place by these models, so it is made again
   // whole, and the seed keeps the scene close.
-  async function reply(entry, text, foot) {
+  async function reply(entry, text, foot, mode = "change") {
+    if (mode === "continue" && entry.kind === "video") return continueClip(entry, text, foot);
     const picture = entry.kind !== "video";
     foot.textContent = claudeAvailable() ? "Claude is writing the revised description" : "Revising the words";
     const revised = await reviseFor(entry, text, t.repo);
@@ -2471,6 +2484,32 @@ function renderImage(box, t) {
     run([item], { intro: lines });
   }
 
+  // A clip continued: what happens next, said as to a person. The next clip
+  // starts from this one's last frame, with the words for what follows,
+  // written by Claude when a key is there and read from the reply otherwise.
+  async function continueClip(entry, text, foot) {
+    foot.textContent = claudeAvailable() ? "Claude is writing the next shot" : "Reading what happens next";
+    const words = await continueWords(entry, text, t.repo);
+    const c = chosen();
+    const q = entry.q ?? qFromSettings(entry.settings, spec, qualities) ?? c.q;
+    const level = entry.level ?? c.level ?? "medium";
+    const item = { prompt: words.prompt, negative: entry.negative ?? "", quality: null, level, q, settings: entry.q ? `${(q.frames / spec.fps).toFixed(1)} s at ${level} quality, ${q.width} by ${q.height}, ${q.frames} frames, ${q.steps} steps` : c.text, seed: randomSeed(), continues: { id: entry.id, text }, startFrom: entry.id, after: entry.id, startFile: null, pieces: 1, estimate: null };
+    if (spec && q?.frames) {
+      const base = 0.5 * ((q.width * q.height) / 1e6) * q.frames * q.steps * (spec.heavy ?? 1);
+      item.estimate = { base, seconds: Math.max(1, Math.round(base * (calibration(t.repo)?.factor ?? 1))) };
+    }
+    const lines = [`Continuing the earlier clip: "${text}"`, `${words.by === "Claude" ? "Claude's next shot" : "From your words"}: "${item.prompt}". It starts from that clip's last frame${entry.last ? "" : ", read from the clip in this browser"}.${item.estimate ? ` About ${shortDuration(item.estimate.seconds)}.` : ""}`];
+    if (rec.active) {
+      queue.push(item);
+      renderQueue();
+      for (const line of lines) rec.lines.push(line);
+      foot.textContent = "Added to the queue; it goes after what is running.";
+      return;
+    }
+    foot.textContent = "Asked; the log above follows it.";
+    run([item], { intro: lines });
+  }
+
   // A request's arguments for the machine: the files it needs are read now,
   // and at High the words are expanded first, once, by Claude.
   async function requestArgs(item, say = () => {}) {
@@ -2490,6 +2529,14 @@ function renderImage(box, t) {
         extra.init = await readAsDataUrl(item.startFile);
         extra.strength = 0.9;
       }
+    }
+    // A continuation, or the next piece of a long clip: it starts from the
+    // last frame of the clip before, kept in this browser.
+    if (item.startFrom) {
+      const src = (await keptResults(t.repo)).find((e) => e.id === item.startFrom);
+      if (!src?.blob) throw new Error("the clip this starts from is no longer kept here");
+      extra.init = await lastFrameOf(src);
+      extra.strength = 0.9;
     }
     // A reply paints over the picture it answers, kept in this browser.
     if (item.paintOver) {
@@ -2537,7 +2584,7 @@ function renderImage(box, t) {
     const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
     // The seed the machine used, so a reply can keep to it; a machine from
     // before seeds were passed along says nothing, and that is remembered.
-    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, replyTo: item.replyTo ?? null };
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null };
     await keepResult(entry);
     rec.shown.add(entry.id);
     const name = `${kind === "video" ? "clip" : "image"}-${entry.id}.${kind === "video" ? "mp4" : "png"}`;
@@ -2558,7 +2605,7 @@ function renderImage(box, t) {
     const b = liveBox();
     if (!b) {
       pictureReady(openedFor, kind);
-      return;
+      return entry;
     }
     const out = b.querySelector("#image-out");
     show(out);
@@ -2568,11 +2615,58 @@ function renderImage(box, t) {
     cap.className = "muted small caption";
     cap.textContent = captionText(entry);
     card.querySelector(".tools-row")?.before(cap);
-    // A reply lands right under what it answers, not at the end of the row.
-    const answered = item.replyTo ? out.querySelector(`[data-entry="${CSS.escape(item.replyTo.id)}"]`) : null;
-    if (answered) answered.after(card);
+    // A reply, a continuation or the next piece lands right under what it
+    // follows, not at the end of the row.
+    const ref = item.replyTo?.id ?? item.continues?.id ?? item.after ?? null;
+    const followed = ref ? out.querySelector(`[data-entry="${CSS.escape(ref)}"]`) : null;
+    if (followed) followed.after(card);
     addReply(card, entry, reply);
     renderKept(b, t.repo, rec.shown, reply);
+    return entry;
+  }
+
+  // A long clip: pieces made one after another, each from the last frame of
+  // the one before, kept and shown as they come, then joined on the machine
+  // into one clip. A machine from before joining leaves the pieces as they are.
+  async function runPieces(item, openedFor, say) {
+    const group = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    say(`A ${((item.q.frames * item.pieces) / spec.fps).toFixed(1)}-second clip, made as ${item.pieces} pieces of ${(item.q.frames / spec.fps).toFixed(1)} s, each starting where the last ended, then joined.`);
+    const entries = [];
+    let prev = null;
+    for (let k = 1; k <= item.pieces; k++) {
+      const piece = { ...item, pieces: 1, piece: { group, index: k, of: item.pieces }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: k === 1 ? item.expand : false, expanded: item.expanded ?? null, estimate: item.estimate ? { base: item.estimate.base, seconds: Math.round(item.estimate.seconds / item.pieces) } : null, settings: `piece ${k} of ${item.pieces}, ${item.each ?? item.settings}` };
+      say(`Piece ${k} of ${item.pieces}${prev ? ", from the last frame of the one before" : ""}`);
+      const req = { item: piece, args: await requestArgs(piece, say) };
+      if (piece.expanded) item.expanded = piece.expanded;
+      await agentBatch(t.agent, [req], say, {
+        repo: t.repo,
+        onDone: async (r, job, err) => {
+          if (err) throw err;
+          prev = await finishResult(r, job, openedFor, say);
+          entries.push(prev);
+        },
+      });
+    }
+    const ids = entries.map((e) => e.jobId).filter(Boolean);
+    if (ids.length !== entries.length) {
+      say("The pieces are kept and saved one by one, in order.");
+      return;
+    }
+    say(`Joining the ${entries.length} pieces into one clip on the machine`);
+    const res = await fetch(`${t.agent}/jobs/join`, { method: "POST", headers: { "Content-Type": "application/json", ...agentHeaders() }, body: JSON.stringify({ ids }) }).catch(() => null);
+    if (!res || res.status === 404) {
+      say("This machine's image is from before clips could be joined on it; the pieces are kept and saved one by one, in order. A machine on the current image joins them.");
+      return;
+    }
+    if (!res.ok) {
+      say(`The machine could not join them (${(await res.json().catch(() => ({}))).error || `HTTP ${res.status}`}); the pieces are kept one by one.`);
+      return;
+    }
+    const { id } = await res.json();
+    const job = await followJob(t.agent, id, say);
+    job.took = null;
+    const total = entries.reduce((a, e) => a + (e.q?.frames ?? 0), 0) / spec.fps;
+    await finishResult({ item: { ...item, settings: `${total.toFixed(1)} s in ${entries.length} pieces, ${item.each ?? ""}`.replace(/, $/, ""), piece: { group, joined: entries.length }, estimate: null, after: entries.at(-1).id, replyTo: null, continues: null, expanded: item.expanded ?? null }, args: null }, job, openedFor, say);
   }
 
   // Runs requests: one from the Generate button, several from the queue,
@@ -2622,12 +2716,13 @@ function renderImage(box, t) {
       backgroundNote(liveBox(), state.model ?? { id: t.repo }, items.length > 1 ? `The ${what}s are made` : `The ${what} is made`);
       const stopAfter = Boolean(liveBox()?.querySelector("#image-stop-after")?.checked);
       if (resumed) say(`${items.length} request${items.length === 1 ? "" : "s"} from before ${items.length === 1 ? "is" : "are"} still on the machine; following ${items.length === 1 ? "it" : "them"} again.`);
+      const long = resumed ? [] : items.filter((it) => it.pieces > 1);
       const requests = [];
-      for (const item of items) requests.push(resumed ? item : { item, args: await requestArgs(item, say) });
+      for (const item of items) if (!long.includes(item)) requests.push(resumed ? item : { item, args: await requestArgs(item, say) });
       let made = 0;
       const failedItems = [];
       try {
-        await agentBatch(t.agent, requests, say, {
+        if (requests.length) await agentBatch(t.agent, requests, say, {
           repo: t.repo,
           onDone: async (req, job, err, i) => {
             if (err) {
@@ -2653,12 +2748,21 @@ function renderImage(box, t) {
             await finishResult(req, job, openedFor, say);
           },
         });
+        for (const item of long) {
+          try {
+            await runPieces(item, openedFor, say);
+            made++;
+          } catch (err) {
+            failedItems.push(item);
+            say(`Could not make the long clip: ${err.message}`);
+          }
+        }
       } finally {
         // Made or failed, the machine stops now if that was asked: the
         // bill ends with the work, not after an idle wait.
         if (stopAfter) stopAfterJob(say);
       }
-      if (requests.length > 1) say(`All done: ${made} made${failedItems.length ? `, ${failedItems.length} failed` : ""}.`);
+      if (items.length > 1) say(`All done: ${made} made${failedItems.length ? `, ${failedItems.length} failed` : ""}.`);
       if (failedItems.length) {
         rec.failed = failedItems;
         retryRow(failedItems);
@@ -2946,6 +3050,8 @@ async function followJob(agent, id, onLine = () => {}, started = Date.now()) {
         job.blob = await fetchResult(agent, id, job.kind === "video" ? "clip" : "picture", job.bytes, onLine);
         if (job.kind !== "video") job.image = await blobToBase64(job.blob);
       } else if (job.video || job.image) job.blob = b64ToBlob(job.video || job.image, job.video ? "video/mp4" : "image/png");
+      // A clip's last frame, kept apart by a newer machine, for whatever starts from it.
+      if (job.last) job.lastFrame = await fetch(`${agent}/jobs/${id}/last`, { headers: agentHeaders(), signal: AbortSignal.timeout(60e3) }).then((r) => (r.ok ? r.blob() : null)).catch(() => null);
       return job;
     }
     if (job.status === "failed") throw Object.assign(new Error(job.error || "the machine could not make the picture"), { jobId: id });
@@ -3861,7 +3967,7 @@ function rememberQueue(repo, items) {
 // What a result is, in a line: what it answers, the words asked, what
 // Claude expanded them into, and the settings.
 function captionText(e) {
-  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.prompt, e.expanded ? `expanded by Claude: ${e.expanded}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
+  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.prompt, e.expanded ? `expanded by Claude: ${e.expanded}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
 }
 
 // The settings of a result kept before they were kept with it, read back
@@ -3941,6 +4047,76 @@ function rememberFit(repo, q, text) {
   } catch {
     // no storage
   }
+}
+
+// A clip's last frame as a picture: the one the machine kept with it, or,
+// for a clip from before that, read from the clip in this browser.
+async function lastFrameOf(entry) {
+  if (entry.last) return readAsDataUrl(entry.last);
+  if (!entry.blob) throw new Error("the clip is no longer kept here");
+  return frameFromClip(entry.blob);
+}
+function frameFromClip(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const v = document.createElement("video");
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = "auto";
+    let settled = false;
+    const done = (fn) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      fn();
+    };
+    v.addEventListener("error", () => done(() => reject(new Error("the clip's last frame could not be read in this browser"))));
+    v.addEventListener("loadedmetadata", () => {
+      v.currentTime = Math.max(0, (Number.isFinite(v.duration) ? v.duration : 0) - 0.05);
+    });
+    v.addEventListener("seeked", () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = v.videoWidth;
+        c.height = v.videoHeight;
+        c.getContext("2d").drawImage(v, 0, 0);
+        done(() => resolve(c.toDataURL("image/png")));
+      } catch (err) {
+        done(() => reject(new Error(`the clip's last frame could not be read (${err.message})`)));
+      }
+    });
+    setTimeout(() => done(() => reject(new Error("the clip's last frame could not be read in time"))), 20000);
+    v.src = url;
+  });
+}
+
+// The words for the next clip: Claude writes the next shot from the first
+// clip's description and what happens next, with a key; otherwise the
+// reply itself, less the "ok, now" that leads into it.
+async function continueWords(entry, text, model) {
+  const local = { prompt: nextWords(text), by: "words" };
+  if (!claudeAvailable()) return local;
+  try {
+    const creds = state.hosted ? hostedCredentials() ?? {} : {};
+    const res = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json", ...creds }, body: JSON.stringify({ kind: "prompt", mode: "continue", clip: true, model, prompt: entry.prompt, request: text }) });
+    if (!res.ok) return local;
+    let out = "";
+    let end = null;
+    await readLines(res, (j) => {
+      if (j.error) throw new Error(j.error);
+      if (j.text) out += j.text;
+      if (j.done) end = j;
+    });
+    out = out.trim().replace(/^["“]|["”]$/g, "");
+    return !end?.declined && out ? { prompt: out, by: "Claude" } : local;
+  } catch {
+    return local;
+  }
+}
+function nextWords(text) {
+  let s = String(text).trim();
+  for (let i = 0; i < 4; i++) s = s.replace(/^(ok|okay|alright|right|good|great|nice|fine|perfect|love it|now|then|next|and|so|after that|afterwards|from there|please|,|\.|:)\s*/i, "");
+  return s.replace(/\s+/g, " ").trim() || String(text).trim();
 }
 
 // A seed for one request: the same seed with the same words gives the same
@@ -4035,18 +4211,30 @@ function keepFromWords(s) {
 function addReply(card, entry, onReply) {
   if (!card || !onReply || !entry || card.querySelector(".reply-wrap")) return;
   const clip = entry.kind === "video";
+  const canContinue = clip && Boolean(onReply.canContinue);
+  const words = {
+    change: { hint: clip ? "Say what to change, as to a person: good, but the camera should move slower" : "Say what to change, as to a person: good, but I asked for two jump ropes and there is one", note: clip ? "The clip is made again from the revised words with the same seed, so the scene stays close." : "The same model paints over this picture with the change: a fraction of the time of a fresh one.", go: "Ask again" },
+    continue: { hint: "Say what happens next, as to a person: now he stands up and leaves the cards on the table", note: "The next clip starts from this one's last frame, so the scene carries on; the two play one after another here.", go: "Continue it" },
+  };
   const wrap = document.createElement("div");
   wrap.className = "reply-wrap";
-  wrap.innerHTML = `<button class="ghost reply-go">Reply with a change</button>
+  wrap.innerHTML = `<button class="ghost reply-go">${canContinue ? "Reply: change or continue it" : "Reply with a change"}</button>
     <div class="reply" hidden>
-      <textarea class="reply-text" rows="2" placeholder="${clip ? "Say what to change, as to a person: good, but the camera should move slower" : "Say what to change, as to a person: good, but I asked for two jump ropes and there is one"}"></textarea>
-      <div class="row"><button class="primary reply-run">Ask again</button><span class="muted small">${clip ? "The clip is made again from the revised words with the same seed, so the scene stays close." : "The same model paints over this picture with the change: a fraction of the time of a fresh one."}</span></div>
+      ${canContinue ? `<div class="row reply-mode"><label><input type="radio" name="reply-mode-${esc(entry.id)}" value="change" checked> Change it</label><label><input type="radio" name="reply-mode-${esc(entry.id)}" value="continue"> Continue it</label></div>` : ""}
+      <textarea class="reply-text" rows="2" placeholder="${words.change.hint}"></textarea>
+      <div class="row"><button class="primary reply-run">${words.change.go}</button><span class="muted small reply-note">${words.change.note}</span></div>
       <div class="muted small reply-foot"></div>
     </div>`;
   card.appendChild(wrap);
   const form = wrap.querySelector(".reply");
   const text = wrap.querySelector(".reply-text");
   const foot = wrap.querySelector(".reply-foot");
+  const mode = () => wrap.querySelector(".reply-mode input:checked")?.value ?? "change";
+  for (const r of wrap.querySelectorAll(".reply-mode input")) r.addEventListener("change", () => {
+    text.placeholder = words[mode()].hint;
+    wrap.querySelector(".reply-note").textContent = words[mode()].note;
+    wrap.querySelector(".reply-run").textContent = words[mode()].go;
+  });
   wrap.querySelector(".reply-go").addEventListener("click", () => {
     form.hidden = !form.hidden;
     if (!form.hidden) text.focus();
@@ -4060,7 +4248,7 @@ function addReply(card, entry, onReply) {
     const run = wrap.querySelector(".reply-run");
     run.disabled = true;
     try {
-      await onReply(entry, ask, foot);
+      await onReply(entry, ask, foot, mode());
       text.value = "";
     } catch (err) {
       foot.textContent = `Could not ask: ${err.message}`;

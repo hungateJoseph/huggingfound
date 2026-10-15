@@ -130,6 +130,19 @@ export function startStubAgent() {
         state.loaded = null;
         return res.end(JSON.stringify({ ok: true }));
       }
+      // Pieces joined into one clip, as a newer agent does with ffmpeg.
+      if (req.url === "/jobs/join" && req.method === "POST") {
+        if (state.joinRoute === false) {
+          res.statusCode = 404;
+          return res.end("{}");
+        }
+        const id = `${state.jobs.length + 1}`.padStart(16, "0");
+        polls.delete(id);
+        (state.joins ??= []).push(data.ids);
+        state.jobs.push({ id, repo: "join/video", file: "model_index.json", prompt: `joined ${data.ids.length}`, joined: data.ids });
+        res.statusCode = 202;
+        return res.end(JSON.stringify({ id, status: "generating" }));
+      }
       if (req.url === "/jobs" && req.method === "POST") {
         const id = `${state.jobs.length + 1}`.padStart(16, "0");
         // A test that empties the job list reuses ids: a new job starts unpolled.
@@ -139,7 +152,7 @@ export function startStubAgent() {
         res.statusCode = 202;
         return res.end(JSON.stringify({ id, status: "loading" }));
       }
-      const m = req.url.match(/^\/jobs\/(\w+)(\/result)?(?:\?(.*))?$/);
+      const m = req.url.match(/^\/jobs\/(\w+)(\/result|\/last)?(?:\?(.*))?$/);
       if (m) {
         const job = state.jobs.find((j) => j.id === m[1]);
         if (!job) {
@@ -147,6 +160,12 @@ export function startStubAgent() {
           return res.end("{}");
         }
         const video = job.file === "model_index.json" && /wan|video/i.test(job.repo);
+        // A clip's last frame, as a newer agent keeps it.
+        if (m[2] === "/last") {
+          state.lasts = (state.lasts ?? 0) + 1;
+          res.setHeader("Content-Type", "image/png");
+          return res.end(Buffer.from(PNG, "base64"));
+        }
         // The result as bytes, as a newer agent serves it.
         if (m[2]) {
           state.results = (state.results ?? 0) + 1;
@@ -171,7 +190,7 @@ export function startStubAgent() {
         }
         // A folder model of a video family answers with a clip.
         if (n < 2) return res.end(JSON.stringify({ id: m[1], status: "generating", kind: video ? "video" : "image", progress: 0.5, error: null, image: null, video: null }));
-        if (lean) return res.end(JSON.stringify({ id: m[1], status: "completed", kind: video ? "video" : "image", error: null, image: null, video: null, result: true, bytes: video ? 8 : Buffer.from(PNG, "base64").length, ...seed }));
+        if (lean) return res.end(JSON.stringify({ id: m[1], status: "completed", kind: video ? "video" : "image", error: null, image: null, video: null, result: true, bytes: video ? 8 : Buffer.from(PNG, "base64").length, last: video && state.lastFrames !== false, ...seed }));
         return res.end(JSON.stringify(video ? { id: m[1], status: "completed", kind: "video", error: null, image: null, video: Buffer.from("fake mp4").toString("base64"), ...seed } : { id: m[1], status: "completed", kind: "image", error: null, image: PNG, video: null, ...seed }));
       }
       res.statusCode = 404;
