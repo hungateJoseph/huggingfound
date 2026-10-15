@@ -211,6 +211,13 @@ The machine takes two to four minutes to start. Meanwhile:
   status the page polls for; a machine on an older image sends it with the
   status, tens of megabytes at once, and the page waits for that patiently
   rather than taking a slow answer for a lost machine.
+- A size that ran out of memory on the machine is remembered in the browser
+  by model (the smallest load of frames by canvas that failed, and the
+  largest that was made): the estimate line warns above it before asking,
+  the failure says the longest clip at that quality that should fit, and Try
+  again asks for that length. The worker runs with PyTorch's growing
+  allocator segments, which avoids some of the fragmentation that fails a
+  clip near the card's limit.
 - A clip or picture that runs out of memory on the card fails with a plain
   message (fewer frames, a smaller picture, or a bigger card), and the
   machine's worker drops the model. The next job loads it again. A machine

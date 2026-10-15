@@ -1298,6 +1298,24 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.match(await cards.nth(0).locator(".caption").innerText(), /^waves at dusk · expanded by Claude: waves at dusk, in golden light, a slow pan · 5\.1 s at high quality/);
   assert.match(await cards.nth(1).locator(".caption").innerText(), /^In reply to an earlier clip \("slower camera pan"\) · waves at dusk, slower camera pan/);
   assert.match(await cards.nth(2).locator(".caption").innerText(), /^a long walk · 2\.1 s at low quality/);
+  // A clip too big for the card: the size is remembered, the estimate warns
+  // above it from then on, and Try again asks for the longest that fits.
+  await visitor.fill("#video-seconds", "5");
+  await visitor.click("#video-level input[value=high]");
+  await visitor.fill("#image-prompt", "out of memory");
+  await visitor.click("#image-go");
+  await visitor.waitForSelector("#image-retry", { timeout: 20000 });
+  assert.match(await visitor.locator("#image-log").innerText(), /ran out of memory[\s\S]*A 4\.8-second clip at high quality should fit this machine; Try again below asks for that\. Low quality is a surer fit\./);
+  assert.equal(await visitor.locator("#image-retry").innerText(), "Try again at 4.8 s");
+  assert.match(await visitor.locator("#estimate").innerText(), /This machine ran out of memory at 5\.1 seconds at high quality \(81 frames at 1280 by 704\), so this is likely too big for it\. About 4\.8 seconds at high quality should fit; the same size was made here once, so it is on the edge\./, "the clip made earlier at this size is remembered, and the warning says so");
+  assert.equal(await visitor.$eval("#estimate", (e) => e.classList.contains("warn")), true);
+  await visitor.click("#image-retry");
+  await visitor.waitForSelector("#image-retry", { timeout: 20000 });
+  assert.equal(rentedAgent.state.jobs.at(-1).frames, 77, "asked again at the length that fits");
+  assert.equal(await visitor.$eval("#video-seconds", (e) => e.value), "4.8");
+  await visitor.fill("#video-seconds", "2");
+  assert.doesNotMatch(await visitor.locator("#estimate").innerText(), /ran out of memory/, "under the limit, no warning");
+  await visitor.fill("#image-prompt", "");
   // Leaving the window loses nothing: the clips are kept under the model.
   await visitor.keyboard.press("Escape");
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();

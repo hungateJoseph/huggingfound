@@ -159,6 +159,7 @@ export function startStubAgent() {
         const n = (polls.get(m[1]) ?? 0) + 1;
         polls.set(m[1], n);
         if (/fail please/.test(job.prompt)) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the model choked", image: null }));
+        if (/out of memory/.test(job.prompt)) return res.end(JSON.stringify({ id: m[1], status: "failed", error: "the GPU ran out of memory for this model at this size; try a smaller picture, fewer frames, or a bigger card", image: null }));
         // A newer agent says which seed it used; this stand-in does when asked to.
         const seed = state.seeds === false ? {} : { seed: job.seed ?? null };
         // A long clip: generating until the test releases it.

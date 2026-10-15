@@ -2286,6 +2286,26 @@ function renderImage(box, t) {
     const est = c.estimate;
     const load = loadSeconds(t.repo);
     el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""} for a ${(est.frames / spec.fps).toFixed(1)}-second clip at ${est.level.width} by ${est.level.height}, ${est.frames} frames, ${est.level.steps} steps${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}`;
+    // Above what this machine has run out of memory at: said before asking.
+    const limit = memoryLimit(t.repo);
+    const over = limit && est.frames * est.level.width * est.level.height >= limit.load;
+    el.classList.toggle("warn", Boolean(over));
+    if (over) el.textContent += ` ${tooBigText(limit, c.level, c.seconds)}`;
+  };
+  // The longest clip at a level that stays under the machine's known limit.
+  const fitsUnder = (limit, level, seconds) => {
+    const lv = spec.levels[level] ?? spec.levels.medium;
+    const least = framesFor(spec.minSeconds, spec);
+    for (let f = framesFor(seconds, spec) - spec.frameStep; f >= least; f -= spec.frameStep) {
+      if (f * lv.width * lv.height < limit.load) return Math.round((f / spec.fps) * 10) / 10;
+    }
+    return null;
+  };
+  const tooBigText = (limit, level, seconds) => {
+    const shorter = fitsUnder(limit, level, seconds);
+    const fit = fitLoad(t.repo);
+    const known = !fit ? "." : fit.load >= limit.load ? "; the same size was made here once, so it is on the edge." : `; ${fit.text} is known to.`;
+    return `This machine ran out of memory at ${limit.text}, so this is likely too big for it. ${shorter ? `About ${shorter} seconds at ${level} quality should fit` : "A lower quality should fit"}${known}`;
   };
   box.querySelector("#video-seconds")?.addEventListener("input", refreshEstimate);
   for (const r of box.querySelectorAll("input[name=level]")) r.addEventListener("change", () => {
@@ -2389,11 +2409,17 @@ function renderImage(box, t) {
     if (!items.length || !b || b.querySelector("#image-retry")) return;
     const row = document.createElement("p");
     row.className = "tools-row";
-    row.innerHTML = `<button class="primary" id="image-retry">Try again</button>`;
+    const at = items.length === 1 && items[0].retryAt ? items[0].retryAt : null;
+    row.innerHTML = `<button class="primary" id="image-retry">${at ? `Try again at ${at} s` : "Try again"}</button>`;
     b.querySelector("#image-log").after(row);
     row.querySelector("#image-retry").addEventListener("click", () => {
       row.remove();
       const fresh = items.length === 1 && !items[0].replyTo;
+      if (at) {
+        const sec = liveBox()?.querySelector("#video-seconds");
+        if (sec) sec.value = String(at);
+        refreshEstimate();
+      }
       run(fresh ? [makeItem($("#image-prompt").value.trim() || items[0].prompt)] : items);
     });
   }
@@ -2607,9 +2633,23 @@ function renderImage(box, t) {
             if (err) {
               if (req.item) failedItems.push(req.item);
               say(`Could not make ${requests.length > 1 ? `request ${i + 1}` : "it"}: ${err.message}`);
+              // Out of memory: the size is remembered as too big for this
+              // machine, the estimate warns above it from now on, and the
+              // way to go again is at a length that stays under it.
+              if (/ran out of memory/i.test(err.message) && req.item?.q) {
+                const q = req.item.q;
+                const limit = rememberMemoryLimit(t.repo, q, spec ? `${(q.frames / spec.fps).toFixed(1)} seconds at ${req.item.level ?? "this"} quality (${q.frames} frames at ${q.width} by ${q.height})` : `${q.width} by ${q.height}`);
+                if (spec) {
+                  const shorter = fitsUnder(limit, req.item.level ?? "medium", q.frames / spec.fps);
+                  req.item.retryAt = shorter;
+                  refreshEstimate();
+                  say(shorter ? `A ${shorter}-second clip at ${req.item.level ?? "this"} quality should fit this machine; Try again below asks for that. Low quality is a surer fit.` : "Try a lower quality, or a bigger card.");
+                } else say("Try a smaller preset, or a bigger card.");
+              }
               return;
             }
             made++;
+            if (req.item?.q) rememberFit(t.repo, req.item.q, spec ? `${(req.item.q.frames / spec.fps).toFixed(1)} seconds at ${req.item.level ?? "this"} quality` : `${req.item.q.width} by ${req.item.q.height}`);
             await finishResult(req, job, openedFor, say);
           },
         });
@@ -3859,6 +3899,47 @@ async function expandWords(prompt, clip, model, negative) {
     return !end?.declined && out.length > prompt.length ? out : null;
   } catch {
     return null;
+  }
+}
+
+// What a machine could and could not hold for a model, learned from its
+// clips: the smallest load (frames by canvas) that ran out of memory, and
+// the largest that was made. Kept in this browser by model.
+function memoryLimit(repo) {
+  try {
+    const o = JSON.parse(localStorage.getItem(`oom:${repo}`) || "null");
+    return o && o.load > 0 ? o : null;
+  } catch {
+    return null;
+  }
+}
+function rememberMemoryLimit(repo, q, text) {
+  const load = (q.frames || 1) * q.width * q.height;
+  const known = memoryLimit(repo);
+  const next = known && known.load <= load ? known : { load, text };
+  try {
+    localStorage.setItem(`oom:${repo}`, JSON.stringify(next));
+  } catch {
+    // no storage
+  }
+  return next;
+}
+function fitLoad(repo) {
+  try {
+    const f = JSON.parse(localStorage.getItem(`fit:${repo}`) || "null");
+    return f && f.load > 0 ? f : null;
+  } catch {
+    return null;
+  }
+}
+function rememberFit(repo, q, text) {
+  const load = (q.frames || 1) * q.width * q.height;
+  const known = fitLoad(repo);
+  if (known && known.load >= load) return;
+  try {
+    localStorage.setItem(`fit:${repo}`, JSON.stringify({ load, text }));
+  } catch {
+    // no storage
   }
 }
 

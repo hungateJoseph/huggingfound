@@ -468,6 +468,7 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .clip-settings { margin: 8px 0 10px; }
 .clip-settings .seconds input { max-width: 120px; }
 .estimate { margin: 2px 0 0; }
+.estimate.warn { color: var(--warn, #b45309); }
 .go-buttons { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
 .queue { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
 .queue p { margin: 0 0 4px; }

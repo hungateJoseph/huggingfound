@@ -192,7 +192,10 @@ function stopWorker() {
 
 function startWorker() {
   if (py.proc) return;
-  const proc = spawn(PYTHON, [WORKER], { stdio: ["pipe", "pipe", "pipe"] });
+  // The allocator grows its segments instead of leaving gaps between them,
+  // which is the difference between fitting and not for a clip near the
+  // card's limit.
+  const proc = spawn(PYTHON, [WORKER], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PYTORCH_CUDA_ALLOC_CONF: process.env.PYTORCH_CUDA_ALLOC_CONF || "expandable_segments:True" } });
   py.proc = proc;
   py.tail = "";
   proc.stderr.on("data", (c) => (py.tail = (py.tail + c.toString()).slice(-4000)));
