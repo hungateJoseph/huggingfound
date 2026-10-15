@@ -2459,10 +2459,18 @@ function renderImage(box, t) {
     wrap.querySelector("#queue-estimate").textContent = queue.length ? `${queue.length} request${queue.length === 1 ? "" : "s"}${total ? `, about ${shortDuration(total)}${price ? ` and ${money((price * total) / 3600)} of machine time` : ""} in all` : ""}.` : "";
     wrap.querySelector("#queue-go").textContent = `Generate all ${queue.length}`;
   };
-  box.querySelector("#queue-add")?.addEventListener("click", () => {
+  box.querySelector("#queue-add")?.addEventListener("click", async () => {
     const prompt = $("#image-prompt").value.trim();
     if (!prompt) return;
-    queue.push(makeItem(prompt));
+    const item = makeItem(prompt);
+    const btn = box.querySelector("#queue-add");
+    btn.disabled = true;
+    try {
+      item.notes = await withExpansion(item);
+    } finally {
+      btn.disabled = false;
+    }
+    queue.push(item);
     $("#image-prompt").value = "";
     renderQueue();
   });
@@ -2476,11 +2484,54 @@ function renderImage(box, t) {
     renderQueue();
   });
   renderQueue();
-  $("#image-go").addEventListener("click", () => {
+  $("#image-go").addEventListener("click", async () => {
     const prompt = $("#image-prompt").value.trim();
     if (!prompt) return;
-    run([makeItem(prompt)]);
+    const item = makeItem(prompt);
+    const go = $("#image-go");
+    go.disabled = true;
+    let intro;
+    try {
+      intro = await withExpansion(item);
+    } finally {
+      if (!rec.active) go.disabled = false;
+    }
+    run([item], { intro });
   });
+
+  // At High, the expanded description is shown before anything is sent, to
+  // change or to set aside. What is sent is what is in the box, as it
+  // stands, with nobody reading it again.
+  async function withExpansion(item) {
+    const el = box.querySelector("#suggest");
+    if (!item.expand || item.expanded || !claudeAvailable() || !el) return [];
+    el.hidden = false;
+    el.innerHTML = `<p class="muted small">Claude is expanding the description for High quality; it shows here first, to change before it is sent.</p>`;
+    const got = await expandWords(item.prompt, video, t.repo, item.negative);
+    if (!got.text) {
+      el.hidden = true;
+      item.expand = false;
+      return [`Claude gave no expansion (${got.why}); the words go as they are.`];
+    }
+    return new Promise((resolve) => {
+      el.innerHTML = `<p class="muted small"><b>Expanded for High quality.</b> Change it as you like; it goes to the model as it stands here, unreviewed.</p>
+        <textarea class="suggest-text" id="expand-text" rows="5">${esc(got.text)}</textarea>
+        <p class="tools-row"><button class="primary" id="expand-send">Send this</button><button class="ghost" id="expand-mine">Send my words as typed</button></p>`;
+      el.querySelector("#expand-text").focus();
+      el.querySelector("#expand-send").addEventListener("click", () => {
+        const text = el.querySelector("#expand-text").value.trim() || got.text;
+        item.expanded = text;
+        item.expandedEdited = text !== got.text;
+        el.hidden = true;
+        resolve([]);
+      });
+      el.querySelector("#expand-mine").addEventListener("click", () => {
+        item.expand = false;
+        el.hidden = true;
+        resolve(["Sending your words as typed."]);
+      });
+    });
+  }
   // Work still going from before this window was drawn: its log is back
   // on show and the lines keep coming; the buttons wait for it.
   if (rec.lines.length) {
@@ -2513,7 +2564,7 @@ function renderImage(box, t) {
     const at = items.length === 1 && items[0].retryAt ? items[0].retryAt : null;
     row.innerHTML = `<button class="primary" id="image-retry">${at ? `Try again at ${at} s` : "Try again"}</button>`;
     b.querySelector("#image-log").after(row);
-    row.querySelector("#image-retry").addEventListener("click", () => {
+    row.querySelector("#image-retry").addEventListener("click", async () => {
       row.remove();
       const fresh = items.length === 1 && !items[0].replyTo;
       if (at) {
@@ -2521,7 +2572,11 @@ function renderImage(box, t) {
         if (sec) sec.value = String(at);
         refreshEstimate();
       }
-      run(fresh ? [makeItem($("#image-prompt").value.trim() || items[0].prompt)] : items);
+      if (!fresh) return run(items);
+      // Asked afresh: at High the expansion shows first, as from the button.
+      const item = makeItem($("#image-prompt").value.trim() || items[0].prompt);
+      const intro = await withExpansion(item);
+      run([item], { intro });
     });
   }
 
@@ -2604,6 +2659,12 @@ function renderImage(box, t) {
   async function requestArgs(item, say = () => {}) {
     let target = { repo: t.repo, file: t.file };
     let extra = {};
+    if (item.expanded && !item.expandSaid) {
+      item.expandSaid = true;
+      say(`Expanded description for "${item.prompt}"${item.expandedEdited ? ", with your changes" : ""}: "${item.expanded}"`);
+    }
+    for (const note of item.notes ?? []) say(note);
+    item.notes = [];
     if (item.expand && !item.replyTo && !item.expanded && claudeAvailable()) {
       say("Claude is expanding the description");
       const expanded = await expandWords(item.prompt, video, t.repo, item.negative);
@@ -2673,7 +2734,7 @@ function renderImage(box, t) {
     const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
     // The seed the machine used, so a reply can keep to it; a machine from
     // before seeds were passed along says nothing, and that is remembered.
-    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null };
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null };
     await keepResult(entry);
     rec.shown.add(entry.id);
     const name = `${kind === "video" ? "clip" : "image"}-${entry.id}.${kind === "video" ? "mp4" : "png"}`;
@@ -2724,7 +2785,7 @@ function renderImage(box, t) {
     const entries = [];
     let prev = null;
     for (let k = 1; k <= item.pieces; k++) {
-      const piece = { ...item, pieces: 1, piece: { group, index: k, of: item.pieces }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: k === 1 ? item.expand : false, expanded: item.expanded ?? null, estimate: item.estimate ? { base: item.estimate.base, seconds: Math.round(item.estimate.seconds / item.pieces) } : null, settings: `piece ${k} of ${item.pieces}, ${item.each ?? item.settings}` };
+      const piece = { ...item, pieces: 1, piece: { group, index: k, of: item.pieces }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: k === 1 ? item.expand : false, expanded: item.expanded ?? null, expandSaid: k > 1 ? true : item.expandSaid, estimate: item.estimate ? { base: item.estimate.base, seconds: Math.round(item.estimate.seconds / item.pieces) } : null, settings: `piece ${k} of ${item.pieces}, ${item.each ?? item.settings}` };
       say(`Piece ${k} of ${item.pieces}${prev ? ", from the last frame of the one before" : ""}`);
       const req = { item: piece, args: await requestArgs(piece, say) };
       if (piece.expanded) item.expanded = piece.expanded;
@@ -4121,7 +4182,7 @@ function rememberQueue(repo, items) {
 // What a result is, in a line: what it answers, the words asked, what
 // Claude expanded them into, and the settings.
 function captionText(e) {
-  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.prompt, e.expanded ? `expanded by Claude: ${e.expanded}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
+  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
 }
 
 // The settings of a result kept before they were kept with it, read back

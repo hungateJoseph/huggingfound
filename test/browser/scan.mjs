@@ -1321,7 +1321,15 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   const downloads = [];
   visitor.on("download", (d) => downloads.push(d.suggestedFilename()));
   await visitor.fill("#image-prompt", "waves at dusk");
+  // At High the expansion shows first, to change; what is in the box goes, unreviewed.
   await visitor.click("#queue-add");
+  await visitor.waitForSelector("#expand-text");
+  assert.equal(await visitor.locator("#expand-text").inputValue(), "waves at dusk, in golden light, a slow pan");
+  const reviewsBefore = reviewed.length;
+  await visitor.fill("#expand-text", "waves at dusk, in golden light, a slow pan, and gulls");
+  await visitor.click("#expand-send");
+  assert.equal(await visitor.locator("#suggest").isHidden(), true);
+  assert.equal(reviewed.length, reviewsBefore, "the edited text is not sent back to Claude");
   await visitor.fill("#video-seconds", "2");
   await visitor.click("#video-level input[value=low]");
   await visitor.fill("#image-prompt", "a long walk");
@@ -1334,11 +1342,11 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.waitForFunction(() => /Stopped the rented GPU, as asked/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
   const log = await visitor.locator("#image-log").innerText();
   assert.match(log, /1 of 2: waves at dusk[\s\S]*2 of 2: a long walk[\s\S]*All done: 2 made\./);
-  assert.match(log, /Claude is expanding the description\nExpanded: "waves at dusk, in golden light, a slow pan"/, "at High the words are expanded first, and the log shows it");
+  assert.match(log, /Expanded description for "waves at dusk", with your changes: "waves at dusk, in golden light, a slow pan, and gulls"/, "the log shows what went, edits and all");
   assert.match(log, /the guess was .* and the next guess is adjusted/);
   assert.match(log, /Saved clip-[\w-]+\.mp4 to this computer/);
   const sent = rentedAgent.state.jobs.slice(-2);
-  assert.deepEqual(sent.map((j) => [j.prompt, j.frames, j.fps, j.width, j.height, j.steps]), [["waves at dusk, in golden light, a slow pan", 81, 16, 1280, 704, 50], ["a long walk", 33, 16, 832, 480, 20]], "the high clip goes with the expanded words and 50 passes; the low one as typed");
+  assert.deepEqual(sent.map((j) => [j.prompt, j.frames, j.fps, j.width, j.height, j.steps]), [["waves at dusk, in golden light, a slow pan, and gulls", 81, 16, 1280, 704, 50], ["a long walk", 33, 16, 832, 480, 20]], "the high clip goes with the expanded words as edited and 50 passes; the low one as typed");
   assert.match(sent[0].negative, /^blurry, low quality/, "nothing typed to avoid: the family's standard list at High");
   assert.equal(sent[1].negative, "", "and none at Low");
   assert.equal(await visitor.locator("#image-out .image-card video").count(), 2);
@@ -1361,7 +1369,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.match(await visitor.locator("#image-log").innerText(), /made again whole from the revised words with the same seed/);
   // The remake sits right under the clip it answers, and says so.
   const cards = visitor.locator("#image-out .image-card");
-  assert.match(await cards.nth(0).locator(".caption").innerText(), /^waves at dusk · expanded by Claude: waves at dusk, in golden light, a slow pan · 5\.1 s at high quality/);
+  assert.match(await cards.nth(0).locator(".caption").innerText(), /^waves at dusk · expanded by Claude and edited: waves at dusk, in golden light, a slow pan, and gulls · 5\.1 s at high quality/);
   assert.match(await cards.nth(1).locator(".caption").innerText(), /^In reply to an earlier clip \("slower camera pan"\) · waves at dusk, slower camera pan/);
   assert.match(await cards.nth(2).locator(".caption").innerText(), /^a long walk · 2\.1 s at low quality/);
   // A clip too big for the card: the size is remembered, the estimate warns
@@ -1370,14 +1378,20 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.click("#video-level input[value=high]");
   await visitor.fill("#image-prompt", "out of memory");
   await visitor.click("#image-go");
+  // At High the expansion shows first; the words as typed are sent instead.
+  await visitor.waitForSelector("#expand-mine");
+  await visitor.click("#expand-mine");
   await visitor.waitForSelector("#image-retry", { timeout: 20000 });
   assert.match(await visitor.locator("#image-log").innerText(), /ran out of memory[\s\S]*A 4\.8-second clip at high quality should fit this machine; Try again below asks for that\. Low quality is a surer fit\./);
   assert.equal(await visitor.locator("#image-retry").innerText(), "Try again at 4.8 s");
   assert.match(await visitor.locator("#estimate").innerText(), /This machine ran out of memory at 5\.1 seconds at high quality \(81 frames at 1280 by 704\), so this is likely too big for it\. About 4\.8 seconds at high quality should fit; the same size was made here once, so it is on the edge\./, "the clip made earlier at this size is remembered, and the warning says so");
   assert.equal(await visitor.$eval("#estimate", (e) => e.classList.contains("warn")), true);
   await visitor.click("#image-retry");
+  await visitor.waitForSelector("#expand-mine");
+  await visitor.click("#expand-mine");
   await visitor.waitForSelector("#image-retry", { timeout: 20000 });
   assert.equal(rentedAgent.state.jobs.at(-1).frames, 77, "asked again at the length that fits");
+  assert.match(await visitor.locator("#image-log").innerText(), /Sending your words as typed\./);
   assert.equal(await visitor.$eval("#video-seconds", (e) => e.value), "4.8");
   await visitor.fill("#video-seconds", "2");
   assert.doesNotMatch(await visitor.locator("#estimate").innerText(), /ran out of memory/, "under the limit, no warning");

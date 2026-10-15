@@ -168,8 +168,10 @@ The machine takes two to four minutes to start. Meanwhile:
   concrete, the motion spelt out, the camera stated, anything unwanted
   moved to the avoid list since the models cannot read "no" or "do not".
   It shows the suggestion, the avoid list and why, with Use it or Keep
-  mine; nothing is sent until the button is clicked. At High the words are
-  still expanded on their own at request time.
+  mine; nothing is sent until the button is clicked. At High the expansion
+  shows the same way before anything is sent, editable, with Send this or
+  Send my words as typed; what is in the box goes to the model as it
+  stands, read by nobody again, and the caption says when it was edited.
 - A clip is asked for by length in seconds and a quality (low, medium,
   high); the page says what the model will make (the nearest frame count
   its video VAE decodes) and guesses the time and cost. The levels differ
