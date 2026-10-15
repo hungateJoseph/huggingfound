@@ -471,6 +471,30 @@ await step("a reload keeps the scan and reports when it was made", async () => {
   assert.match(await page.locator("#scan-status").innerText(), /Last scan (just now|\d+ minutes ago)/);
 });
 
+await step("a download of many files says which file is on, out of how many, in front of the percentage, and the bar runs over the whole set", async () => {
+  const seen = await page.evaluate(() => {
+    const li = document.createElement("li");
+    const log = document.createElement("pre");
+    li.appendChild(log);
+    document.body.appendChild(li);
+    const p = stepProgress(li, log);
+    const out = [];
+    for (const line of ["Downloading 64 files of MiniMaxAI/MiniMax-H3 on the rented GPU", "file 1 of 64: model_index.json", "100% of 0.00 GB (model_index.json)", "file 12 of 64: transformer/diffusion_pytorch_model-00003-of-00030.safetensors", "45% of 4.60 GB (transformer/diffusion_pytorch_model-00003-of-00030.safetensors)"]) {
+      p.line(line);
+      out.push([li.querySelector(".progress-text").innerText, li.querySelector(".progress-files")?.innerText ?? null, `${Math.round(parseFloat(li.querySelector(".fill").style.width) * 10) / 10}%`]);
+    }
+    li.remove();
+    return out;
+  });
+  assert.deepEqual(seen, [
+    ["Starting", null, "0%"],
+    ["File 1 of 64 model_index.json", "File 1 of 64", "0%"],
+    ["File 1 of 64 100% of 0.00 GB, model_index.json", "File 1 of 64", "1.6%"],
+    ["File 12 of 64 transformer/diffusion_pytorch_model-00003-of-00030.safetensors", "File 12 of 64", "17.2%"],
+    ["File 12 of 64 45% of 4.60 GB, transformer/diffusion_pytorch_model-00003-of-00030.safetensors", "File 12 of 64", "17.9%"],
+  ]);
+});
+
 await step("a conversation survives re-renders, an outside click and closing the window, and scrolling up is not undone while a reply streams", async () => {
   const id = "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF";
   // The plan says every step is done and the model answers through Ollama, as if it had been pulled.

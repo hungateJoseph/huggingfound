@@ -181,6 +181,14 @@ The machine takes two to four minutes to start. Meanwhile:
   2 GB, oldest out first) until removed, whatever happens to the machine or
   the window, and each finished result is also saved to the computer as it
   comes, up to a size set in the try box.
+- The page sends the machine's secret only as the standard Authorization
+  header: a browser asks the machine first whether a header may be sent,
+  and a machine on an earlier image allows that one alone. The agent now
+  allows whatever headers a page asks about, so a page newer than the image
+  is never refused at that step; the secret check decides. The site's own
+  calls carry a second header too, for a proxy that drops the first.
+- A step that downloads many files shows "File N of M" in front of the
+  percentage, with the bar running over the whole set.
 - Each rented machine's agent is started with a secret of its own
   (HF_AGENT_TOKEN, made at rent and kept with the rental as
   RUNPOD_AGENT_TOKEN), and answers no request without it: not the page's,

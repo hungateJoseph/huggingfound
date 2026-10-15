@@ -1115,17 +1115,29 @@ function stepProgress(li, log) {
     timer = setInterval(tick, 1000);
   };
   set(0, "Starting");
+  // A download of many files: which one is on, out of how many, stays in
+  // front of the percentage, and the bar runs over the whole set.
+  let files = null;
+  const lead = () => (files ? `File ${files.n} of ${files.of}` : "");
   return {
     line(line) {
+      const file = /\bfile (\d+) of (\d+)(?::\s*(.*))?/i.exec(line);
       const pct = /(\d{1,3})% of ([\d.]+ GB)(?: \(([^)]+)\))?/.exec(line);
-      if (pct) {
+      if (file) {
         stopGuess();
-        set(Number(pct[1]), `${pct[1]}% of ${pct[2]}${pct[3] ? `, ${pct[3]}` : ""}`);
+        files = { n: Number(file[1]), of: Number(file[2]) };
+        set(((files.n - 1) / files.of) * 100, `${lead()}${file[3] ? `: ${file[3]}` : ""}`, "busy");
+        text.innerHTML = `<b class="progress-files">${esc(lead())}</b>${file[3] ? ` ${esc(file[3])}` : ""}`;
+      } else if (pct) {
+        stopGuess();
+        const within = Number(pct[1]);
+        set(files ? ((files.n - 1 + within / 100) / files.of) * 100 : within, `${pct[1]}% of ${pct[2]}${pct[3] ? `, ${pct[3]}` : ""}`);
+        if (files) text.innerHTML = `<b class="progress-files">${esc(lead())}</b> ${esc(`${pct[1]}% of ${pct[2]}${pct[3] ? `, ${pct[3]}` : ""}`)}`;
       } else if (/Waiting for (the machine|Ollama on the machine) to start/.test(line)) startGuess();
       else if (/The machine is up\./.test(line)) {
         stopGuess();
         set(100, "Machine up; the download starts");
-      } else if (/merging|Merging|Copying|Registering|already here|file \d+ of \d+/i.test(line)) {
+      } else if (/merging|Merging|Copying|Registering|already here/i.test(line)) {
         stopGuess();
         set(100, line, "busy");
       }
@@ -2943,8 +2955,10 @@ async function agentBatch(agent, requests, onLine = () => {}, { repo = null, onD
 // disk, and is back when the failed job's record is gone from it.
 // The secret the machine was started with, sent with every call to it.
 function agentHeaders() {
+  // Only the standard header: a browser asks the machine first whether a
+  // header may be sent, and a machine on an earlier image allows this one.
   const token = state.rental?.agentToken;
-  return token ? { Authorization: `Bearer ${token}`, "X-Agent-Token": token } : {};
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 async function resetAgent(agent, jobId, onLine) {

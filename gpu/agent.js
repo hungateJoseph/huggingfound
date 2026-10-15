@@ -927,7 +927,10 @@ function cors(req, res) {
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Agent-Token");
+  // Whatever headers the page asks about: a page newer than this image
+  // may send one this image does not know, and the secret check below
+  // decides what counts, not the header list.
+  res.setHeader("Access-Control-Allow-Headers", req.headers["access-control-request-headers"] || "Content-Type, Authorization, X-Agent-Token");
   res.setHeader("Access-Control-Max-Age", "43200");
   return true;
 }

@@ -33,7 +33,8 @@ export function startStubAgent() {
     req.on("end", async () => {
       if (req.headers.origin) {
         res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Agent-Token");
+        // As a machine on an earlier image allows: the standard header only, so a page sending more is found out here.
+        res.setHeader("Access-Control-Allow-Headers", state.allowHeaders ?? "Content-Type, Authorization");
         res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
       }
       if (req.method === "OPTIONS") {

@@ -426,6 +426,7 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .progress.failed .fill { background: #c0392b; }
 .progress.small { height: 5px; margin-top: 6px; max-width: 280px; }
 .progress-text { margin-top: 4px; }
+.progress-files { color: var(--ink); font-size: 15px; margin-right: 6px; }
 @keyframes progress-stripes { from { background-position: 0 0; } to { background-position: 28px 0; } }
 .rent-offer select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
 .browse-invite { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; align-items: center; margin: 10px 0 6px; }
