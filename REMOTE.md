@@ -194,10 +194,14 @@ The machine takes two to four minutes to start. Meanwhile:
   expanded: they revise the words that were asked. The guess is
   adjusted from the clips made here: each one's time is measured against
   the guess made for it, and the next guess leans on that.
-- Several requests can be queued and made one after another by one click;
-  they are handed to the machine all at once, so it goes on with them even
-  if the page is left, and the machine can be told to stop when the last is
-  made. Everything made is kept in this browser under its model (up to
+- Several requests can be queued; the queue runs itself, each request
+  starting as soon as the machine is free of the one under way, with no
+  click, so a list left under a model keeps the rented GPU working. A
+  request added while one runs waits and goes next. "Hold the queue"
+  collects requests to start by hand with Start all. Those that start
+  together are handed to the machine all at once, so it goes on with them
+  even if the page is left, and the machine can be told to stop when the
+  last is made (the stop waits for whatever is still queued). Everything made is kept in this browser under its model (up to
   2 GB, oldest out first) until removed, whatever happens to the machine or
   the window, and each finished result is also saved to the computer as it
   comes, up to a size set in the try box.
@@ -227,8 +231,10 @@ The machine takes two to four minutes to start. Meanwhile:
   as a picture, GET /jobs/:id/last), kept and shown as they come, then
   joined on the machine (POST /jobs/join, ffmpeg concat, stream copy with
   an encode as fallback) into one clip kept as "N s in K pieces". The
-  length box allows up to six shots' worth, a minute at most, and the
-  estimate line says how it will be made. A machine from before joining
+  form offers the two apart: Short clip (one shot, the model's own range)
+  and Long clip (from one second past that up to six shots' worth, a
+  minute at most), each with its own length box range and remembered
+  length, and the estimate line says how it will be made. A machine from before joining
   leaves the pieces one by one.
 - A reply to a clip can continue it instead of changing it: the next clip
   starts from this one's last frame (the kept frame, or one read from the

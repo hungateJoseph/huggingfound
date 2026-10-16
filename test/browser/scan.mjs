@@ -1127,18 +1127,27 @@ await step("hosted: the queue and a running log survive leaving the window, and 
     await visitor.waitForSelector("#image-go");
   };
   await openSd();
-  // The queue is kept under the model.
+  // The queue is kept under the model. Held, it waits for Start all
+  // instead of starting by itself.
+  assert.equal(await visitor.locator("#queue").isHidden(), true);
+  await visitor.check("#queue-hold");
   await visitor.fill("#image-prompt", "a red barn");
   await visitor.click("#queue-add");
   await visitor.fill("#image-prompt", "a blue barn");
   await visitor.click("#queue-add");
   assert.equal(await visitor.locator("#queue-list li").count(), 2);
+  assert.equal(await visitor.locator("#image-go").isDisabled(), false, "held: nothing started");
   await visitor.keyboard.press("Escape");
   await openSd();
   await visitor.waitForSelector("#queue-list li");
   assert.equal(await visitor.locator("#queue-list li").count(), 2, "the queue is back after leaving the window");
   assert.match(await visitor.locator("#queue-list").innerText(), /a red barn[\s\S]*a blue barn/);
+  assert.equal(await visitor.isChecked("#queue-hold"), true, "and so is the hold");
+  assert.equal(await visitor.locator("#queue-go").innerText(), "Start all 2");
+  assert.match(await visitor.locator("#queue-estimate").innerText(), /2 requests, about .* in all\. Held: they start with Start all\./);
   await visitor.click("#queue-clear");
+  await visitor.uncheck("#queue-hold");
+  assert.equal(await visitor.locator("#queue").isHidden(), true);
   // A picture under way when the window is left: opened again, the log is
   // back as it stood, the lines keep coming, and the picture lands there.
   rentedAgent.state.release = false;
@@ -1256,8 +1265,18 @@ await step("hosted: a machine busy on a clip is left alone: the still-there chec
   rentedAgent.state.unloadRoute = false;
   await visitor.click("#image-retry");
   await visitor.waitForFunction(() => /Generating, 27%/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  // Added to the queue while the machine works: it waits, then starts by
+  // itself when the request under way is done, with no click.
+  await visitor.fill("#image-prompt", "a red barn");
+  await visitor.click("#queue-add");
+  assert.match(await visitor.locator("#queue-estimate").innerText(), /^1 request, about .* in all\. They start by themselves when the request under way finishes\./);
+  assert.equal(await visitor.locator("#queue-go").isHidden(), true, "no Start all unless the queue is held");
   rentedAgent.state.release = true;
   await visitor.waitForSelector("#image-out .image-card", { timeout: 20000 });
+  await visitor.waitForFunction(() => /Next from the queue\./.test(document.querySelector("#image-log")?.textContent ?? "") && document.querySelectorAll("#image-out .image-card").length === 2, null, { timeout: 20000 });
+  assert.equal(rentedAgent.state.jobs.at(-1).prompt, "a red barn", "the queued request went by itself");
+  assert.equal(await visitor.locator("#queue").isHidden(), true, "and left the queue");
+  await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled);
   // Once the clip is made, the check comes as before.
   await visitor.waitForSelector("#presence:not([hidden])", { timeout: 20000 });
   await visitor.click("#presence-yes");
@@ -1295,7 +1314,18 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.waitForSelector("#found .model");
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   await visitor.waitForSelector("#video-seconds");
-  assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["3", "1", "30"], "one shot is 1 to 5 seconds; longer is made as pieces");
+  // A short clip is one shot; a long one, on a model that starts from a
+  // picture, is pieces joined: chosen apart, each with its own lengths.
+  assert.deepEqual(await visitor.$$eval("#clip-kind input", (els) => els.map((e) => [e.value, e.checked])), [["short", true], ["long", false]]);
+  assert.match(await visitor.locator("#clip-kind").innerText(), /Short clip\s+1 to 5 seconds in one shot: one continuous motion[\s\S]*Long clip\s+6 to 30 seconds, made as pieces of at most 5 s that each start where the last ended, then joined into one; a soft seam at each join/);
+  assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["3", "1", "5"], "a short clip is 1 to 5 seconds");
+  assert.match(await visitor.locator("#seconds-help").innerText(), /^1 to 5 seconds in one shot at 16 frames a second; the clip comes out/);
+  await visitor.click("#clip-kind input[value=long]");
+  assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["30", "6", "30"], "a long clip is 6 to 30 seconds, 30 to begin with");
+  assert.match(await visitor.locator("#seconds-help").innerText(), /^6 to 30 seconds, made as pieces of at most 5 s, each starting where the last ended, then joined on the machine into one clip/);
+  assert.match(await visitor.locator("#estimate").innerText(), /in all for a 30\.4-second clip made as 6 pieces of 5\.1 s/);
+  await visitor.click("#clip-kind input[value=short]");
+  assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["3", "1", "5"], "back to the short clip's length");
   assert.deepEqual(await visitor.$$eval("#video-level input", (els) => els.map((e) => [e.value, e.checked])), [["low", false], ["medium", true], ["high", false]]);
   assert.match(await visitor.locator("#estimate").innerText(), /^About .* for a 3\.1-second clip at 1280 by 704, 49 frames, 30 steps \(a guess until the first clip is timed\)\./, "medium draws on the full canvas");
   assert.match(await visitor.locator("#video-level").innerText(), /Low\s+a draft: a small canvas, 20 passes[\s\S]*Medium\s+the model's full canvas, 30 passes, its standard avoid list[\s\S]*High\s+the full canvas, 50 passes, the avoid list, and your words expanded first/);
@@ -1321,6 +1351,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   const downloads = [];
   visitor.on("download", (d) => downloads.push(d.suggestedFilename()));
   await visitor.fill("#image-prompt", "waves at dusk");
+  await visitor.check("#queue-hold");
   // At High the expansion shows first, to change; what is in the box goes, unreviewed.
   await visitor.click("#queue-add");
   await visitor.waitForSelector("#expand-text");
@@ -1335,10 +1366,11 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.fill("#image-prompt", "a long walk");
   await visitor.click("#queue-add");
   assert.equal(await visitor.locator("#queue-list li").count(), 2);
-  assert.match(await visitor.locator("#queue-estimate").innerText(), /2 requests, about .* in all\./);
-  assert.equal(await visitor.locator("#queue-go").innerText(), "Generate all 2");
+  assert.match(await visitor.locator("#queue-estimate").innerText(), /2 requests, about .* in all\. Held: they start with Start all\./);
+  assert.equal(await visitor.locator("#queue-go").innerText(), "Start all 2");
   await visitor.check("#image-stop-after");
-  await visitor.click("#queue-go");
+  // Letting the queue go starts it; the stop waits for the last.
+  await visitor.uncheck("#queue-hold");
   await visitor.waitForFunction(() => /Stopped the rented GPU, as asked/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
   const log = await visitor.locator("#image-log").innerText();
   assert.match(log, /1 of 2: waves at dusk[\s\S]*2 of 2: a long walk[\s\S]*All done: 2 made\./);
@@ -1405,6 +1437,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.equal(rentedAgent.state.jobs.at(-1).prompt, "declined please", "sent as typed");
   // Longer than one shot: the clip is made as pieces, each from the last
   // frame of the one before, then joined on the machine into one.
+  await visitor.click("#clip-kind input[value=long]");
   assert.equal(await visitor.$eval("#video-seconds", (e) => e.max), "30", "up to six shots' worth on a model that starts from a picture");
   await visitor.fill("#video-seconds", "12");
   await visitor.click("#video-level input[value=low]");
@@ -1440,6 +1473,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   const cont = visitor.locator("#image-out .image-card", { hasText: "Continues an earlier clip" });
   assert.equal(await cont.count(), 1);
   assert.match(await cont.locator(".caption").innerText(), /^Continues an earlier clip \("ok, now the ice melts and the river runs again"\) · the ice melts and the river runs again, the scene going on · 4\.1 s at low quality/);
+  await visitor.click("#clip-kind input[value=short]");
   await visitor.fill("#video-seconds", "3");
   await visitor.fill("#image-prompt", "");
   // Leaving the window loses nothing: the clips are kept under the model.

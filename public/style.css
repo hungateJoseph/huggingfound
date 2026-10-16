@@ -474,6 +474,8 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .queue { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
 .queue p { margin: 0 0 4px; }
 .queue ol { margin: 6px 0; padding-left: 20px; }
+.queue-hold { display: block; margin: 6px 0; }
+.clip-kind { flex-direction: column; align-items: flex-start; gap: 6px; }
 .queue li { margin: 3px 0; }
 .queue li button { font-size: 12px; padding: 1px 8px; margin-left: 6px; }
 .reply-wrap { margin-top: 6px; display: grid; gap: 6px; justify-items: start; }

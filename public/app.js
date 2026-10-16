@@ -2220,6 +2220,22 @@ function renderImage(box, t) {
   // each from the last frame of the one before, when the model can start
   // from a picture; up to a minute.
   const longMax = spec ? (t.startPicture ? Math.min(60, spec.maxSeconds * 6) : spec.maxSeconds) : 0;
+  // Two kinds of clip, chosen apart: a short one, which is one shot, and a
+  // long one, which is pieces joined. The kind and the length asked for
+  // each are kept.
+  const canLong = Boolean(spec) && longMax > spec.maxSeconds;
+  let clipKind = "short";
+  let longSeconds = 30;
+  try {
+    if (canLong && localStorage.getItem("clipKind") === "long") clipKind = "long";
+    longSeconds = Number(localStorage.getItem(`longSeconds:${t.repo}`)) || 30;
+  } catch {
+    // no storage
+  }
+  if (spec) longSeconds = Math.min(longMax, Math.max(spec.maxSeconds + 1, Math.round(longSeconds)));
+  let shortSeconds = spec?.defaultSeconds ?? 0;
+  const lengthRange = (kind) => (kind === "long" ? { min: spec.maxSeconds + 1, max: longMax, value: longSeconds } : { min: spec.minSeconds, max: spec.maxSeconds, value: shortSeconds });
+  const lengthHelp = (kind) => (kind === "long" ? `${spec.maxSeconds + 1} to ${longMax} seconds, made as pieces of at most ${spec.maxSeconds} s, each starting where the last ended, then joined on the machine into one clip; each piece comes out at the nearest length the model's frames allow.` : `${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.`);
   const qualities = plan?.qualities ?? {};
   const options = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === saved ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
   const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
@@ -2237,7 +2253,12 @@ function renderImage(box, t) {
   const save = autosaveSettings();
   const what = video ? "clip" : "picture";
   const settingsHtml = spec ? `<div class="clip-settings">
-      <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${spec.minSeconds}" max="${longMax}" step="1" value="${spec.defaultSeconds}"><small class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.${longMax > spec.maxSeconds ? ` Up to ${longMax} seconds is made as pieces of at most ${spec.maxSeconds}, each starting where the last ended, then joined into one clip.` : ""}</small></label>
+      ${canLong ? `<div class="effort-title">Clip</div>
+      <div class="quality clip-kind" id="clip-kind">
+        <label><input type="radio" name="clipKind" value="short" ${clipKind === "short" ? "checked" : ""}> <b>Short clip</b> <span class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot: one continuous motion, as the model makes it</span></label>
+        <label><input type="radio" name="clipKind" value="long" ${clipKind === "long" ? "checked" : ""}> <b>Long clip</b> <span class="muted">${spec.maxSeconds + 1} to ${longMax} seconds, made as pieces of at most ${spec.maxSeconds} s that each start where the last ended, then joined into one; a soft seam at each join</span></label>
+      </div>` : ""}
+      <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${lengthRange(clipKind).min}" max="${lengthRange(clipKind).max}" step="1" value="${lengthRange(clipKind).value}"><small class="muted" id="seconds-help">${lengthHelp(clipKind)}</small></label>
       <div class="effort-title">Quality</div>
       <div class="quality" id="video-level">${["low", "medium", "high"].map((l) => `<label><input type="radio" name="level" value="${l}" ${l === level ? "checked" : ""}> <b>${l[0].toUpperCase() + l.slice(1)}</b> <span class="muted">${esc(spec.levels[l].text)}</span></label>`).join("")}</div>
       <p class="muted small levels-note">A pass is one round of refinement over the whole clip; past about 30, each adds little. The canvas is the size the model draws at, and none draws better above the one it was trained for. The expansion at High is where the effort of understanding goes: ${claudeAvailable() ? "Claude turns your words into the detailed shot description these models follow best, and the log shows it" : "with an Anthropic key saved, Claude turns your words into the detailed shot description these models follow best; without one, High is the passes and the avoid list"}.</p>
@@ -2252,7 +2273,7 @@ function renderImage(box, t) {
     ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">${t.startPicture === "required" ? "This model animates a picture: the clip begins from it." : "With a picture the clip begins from it; without one it comes from the words alone."}</small></label>` : ""}
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
-      <span class="go-buttons"><button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>${t.agent ? `<button class="ghost" id="queue-add" title="Several requests run one after another on the machine; each is kept here and saved as it finishes">Add to queue</button>` : ""}</span>
+      <span class="go-buttons"><button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>${t.agent ? `<button class="ghost" id="queue-add" title="Starts as soon as the machine is free of the request under way, then the next after it; each is kept here and saved as it finishes">Add to queue</button>` : ""}</span>
     </div>
     ${t.agent && claudeAvailable() ? `<p class="tools-row suggest-row"><button class="ghost" id="suggest-go" title="Claude reads what you typed, and the starting picture if there is one, and writes the description these models follow best; you choose whether to use it">Suggest a better description</button></p>
     <div class="suggest" id="suggest" hidden></div>` : ""}
@@ -2262,11 +2283,12 @@ function renderImage(box, t) {
       <small class="muted">Models cannot read "not" or "no" in the description; whatever you do not want goes here instead.${spec?.avoid ? " Left empty at Medium or High, the model's standard avoid list is used." : ""}</small>
     </label>
     ${t.agent ? `<div class="queue" id="queue" hidden>
-      <p class="muted small"><b>Queue.</b> These run one after another on the rented GPU; each is kept here and saved to this computer as it finishes, so nothing waits on you. Tick the box below and the machine stops when the last one is made.</p>
+      <p class="muted small"><b>Queue.</b> These start by themselves, one after another on the rented GPU, as soon as it is free of the request under way: no click, so a list left here keeps the machine working. Each is kept here and saved to this computer as it finishes. Tick the box below and the machine stops when the last one is made.</p>
       <ol id="queue-list"></ol>
-      <p class="tools-row"><button class="primary" id="queue-go">Generate all</button><button class="ghost" id="queue-clear">Clear the queue</button></p>
+      <p class="tools-row"><button class="primary" id="queue-go" hidden>Start all</button><button class="ghost" id="queue-clear">Clear the queue</button></p>
       <p class="muted small" id="queue-estimate"></p>
-    </div>` : ""}
+    </div>
+    <label class="check queue-hold" title="Held, requests added to the queue wait there until Start all; otherwise each starts as soon as the machine is free"><input type="checkbox" id="queue-hold" ${queueHeld() ? "checked" : ""}> Hold the queue: collect requests and start them by hand</label>` : ""}
     ${loaded}
     ${t.agent ? `<label class="check autosave" title="Finished results are kept in this browser whatever happens; this also saves each one to your computer as it comes, so a finished clip is never lost to a stopped machine or a closed page"><input type="checkbox" id="autosave" ${save.on ? "checked" : ""}> Save each finished ${what} to this computer as it comes, up to <input type="number" id="autosave-mb" min="1" max="5000" step="1" value="${save.maxMb}"> MB <small class="muted">(the browser may ask once to allow several downloads)</small></label>` : ""}
     ${t.agent ? `<label class="check stop-after" title="The machine stops once everything asked for here is made or has failed; its models stay on its disk and Start brings it back"><input type="checkbox" id="image-stop-after"> Stop the rented GPU when everything asked for here is made${state.rental?.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}</label>` : ""}
@@ -2341,7 +2363,9 @@ function renderImage(box, t) {
       return { quality, q, text: q?.text ? `${quality}, ${q.text}` : quality, estimate: null };
     }
     const lvl = box.querySelector("input[name=level]:checked")?.value ?? "medium";
-    const asked = Math.min(longMax || spec.maxSeconds, Number(box.querySelector("#video-seconds")?.value) || spec.defaultSeconds);
+    const kind = canLong ? box.querySelector("input[name=clipKind]:checked")?.value ?? "short" : "short";
+    const range = lengthRange(kind);
+    const asked = Math.min(range.max, Math.max(range.min, Number(box.querySelector("#video-seconds")?.value) || range.value));
     // Longer than one shot: equal pieces, each within the model's length.
     const pieces = asked > spec.maxSeconds ? Math.ceil(asked / spec.maxSeconds) : 1;
     const seconds = asked / pieces;
@@ -2381,7 +2405,37 @@ function renderImage(box, t) {
     const known = !fit ? "." : fit.load >= limit.load ? "; the same size was made here once, so it is on the edge." : `; ${fit.text} is known to.`;
     return `This machine ran out of memory at ${limit.text}, so this is likely too big for it. ${shorter ? `About ${shorter} seconds at ${level} quality should fit` : "A lower quality should fit"}${known}`;
   };
-  box.querySelector("#video-seconds")?.addEventListener("input", refreshEstimate);
+  box.querySelector("#video-seconds")?.addEventListener("input", () => {
+    const kind = canLong ? box.querySelector("input[name=clipKind]:checked")?.value ?? "short" : "short";
+    const n = Number(box.querySelector("#video-seconds").value);
+    if (n) {
+      if (kind === "long") {
+        longSeconds = n;
+        try {
+          localStorage.setItem(`longSeconds:${t.repo}`, String(n));
+        } catch {
+          // no storage
+        }
+      } else shortSeconds = n;
+    }
+    refreshEstimate();
+  });
+  // Switching kinds moves the length box to that kind's range and the
+  // length last asked for in it.
+  for (const r of box.querySelectorAll("input[name=clipKind]")) r.addEventListener("change", () => {
+    try {
+      localStorage.setItem("clipKind", r.value);
+    } catch {
+      // no storage
+    }
+    const range = lengthRange(r.value);
+    const sec = box.querySelector("#video-seconds");
+    sec.min = String(range.min);
+    sec.max = String(range.max);
+    sec.value = String(range.value);
+    box.querySelector("#seconds-help").textContent = lengthHelp(r.value);
+    refreshEstimate();
+  });
   for (const r of box.querySelectorAll("input[name=level]")) r.addEventListener("change", () => {
     try {
       localStorage.setItem("videoLevel", r.value);
@@ -2444,10 +2498,28 @@ function renderImage(box, t) {
   // loses none of it; a starting picture picked from the disk cannot be
   // kept, and is picked again.
   const queue = t.agent ? (rec.queue ??= queueItems(t.repo)) : [];
+  // What can start now: a request whose starting picture was lost with the
+  // page has to be picked again first.
+  const ready = () => queue.filter((it) => !(it.startName && !it.startFile));
+  // The queue runs itself: what is in it starts as soon as the machine is
+  // free of this model's work, with no click, so a list left here keeps a
+  // rented GPU busy for as long as it lasts. Held, it waits for Start all.
+  const drain = (intro = []) => {
+    if (!t.agent || rec.active || queueHeld()) return false;
+    const items = ready();
+    if (!items.length) return false;
+    for (const it of items) queue.splice(queue.indexOf(it), 1);
+    renderQueue();
+    run(items, { intro, append: rec.lines.length > 0 });
+    return true;
+  };
   const renderQueue = () => {
-    const wrap = box.querySelector("#queue");
+    // Drawn into the window as it stands now: a run that began in an
+    // earlier one empties the queue on show, not a box since replaced.
+    const wrap = (liveBox() ?? box).querySelector("#queue");
     if (!wrap) return;
     rememberQueue(t.repo, queue);
+    const held = queueHeld();
     wrap.hidden = !queue.length;
     const list = wrap.querySelector("#queue-list");
     list.innerHTML = queue.map((item, i) => `<li>${esc(item.prompt)} <span class="muted small">${esc(item.settings)}${item.estimate ? `, about ${esc(shortDuration(item.estimate.seconds))}` : ""}${item.replyTo ? ` · a reply to an earlier ${item.paintOver ? "picture" : "clip"}` : ""}${item.startName && !item.startFile ? ` · the starting picture ${esc(item.startName)} has to be picked again` : ""}</span><button class="ghost queue-remove" data-i="${i}">Remove</button></li>`).join("");
@@ -2456,8 +2528,11 @@ function renderImage(box, t) {
       renderQueue();
     });
     const total = queue.reduce((a, item) => a + (item.estimate?.seconds ?? (item.quality ? tookSeconds(t.repo, item.quality) ?? qualities[item.quality]?.seconds ?? 0 : 0)), 0);
-    wrap.querySelector("#queue-estimate").textContent = queue.length ? `${queue.length} request${queue.length === 1 ? "" : "s"}${total ? `, about ${shortDuration(total)}${price ? ` and ${money((price * total) / 3600)} of machine time` : ""} in all` : ""}.` : "";
-    wrap.querySelector("#queue-go").textContent = `Generate all ${queue.length}`;
+    const waiting = held ? "Held: they start with Start all." : rec.active ? "They start by themselves when the request under way finishes." : ready().length ? "" : "They start once the starting picture is picked again.";
+    wrap.querySelector("#queue-estimate").textContent = queue.length ? `${queue.length} request${queue.length === 1 ? "" : "s"}${total ? `, about ${shortDuration(total)}${price ? ` and ${money((price * total) / 3600)} of machine time` : ""} in all` : ""}. ${waiting}`.trim() : "";
+    const go = wrap.querySelector("#queue-go");
+    go.hidden = !held;
+    go.textContent = `Start all ${queue.length}`;
   };
   box.querySelector("#queue-add")?.addEventListener("click", async () => {
     const prompt = $("#image-prompt").value.trim();
@@ -2473,6 +2548,7 @@ function renderImage(box, t) {
     queue.push(item);
     $("#image-prompt").value = "";
     renderQueue();
+    drain();
   });
   box.querySelector("#queue-clear")?.addEventListener("click", () => {
     queue.length = 0;
@@ -2480,8 +2556,18 @@ function renderImage(box, t) {
   });
   box.querySelector("#queue-go")?.addEventListener("click", () => {
     if (!queue.length) return;
-    run(queue.splice(0));
+    const items = queue.splice(0);
     renderQueue();
+    run(items, { append: rec.lines.length > 0 });
+  });
+  box.querySelector("#queue-hold")?.addEventListener("change", (e) => {
+    try {
+      localStorage.setItem("queueHold", e.target.checked ? "1" : "0");
+    } catch {
+      // no storage
+    }
+    renderQueue();
+    if (!e.target.checked) drain();
   });
   renderQueue();
   $("#image-go").addEventListener("click", async () => {
@@ -2552,6 +2638,7 @@ function renderImage(box, t) {
   // reloaded while they ran): followed again, unless they are being followed.
   const pending = t.agent && !rec.active ? pendingJobs(t.repo) : [];
   if (pending.length) run(pending.map((pj) => ({ item: pj.item, id: pj.id, started: pj.at, args: null })), { resumed: true });
+  else drain(["The queue from before goes on."]);
 
   // The way to go again, right under the failure: the failed requests
   // once more. A single one is read afresh from the box, so changed words
@@ -2831,15 +2918,16 @@ function renderImage(box, t) {
 
   // Runs requests: one from the Generate button, several from the queue,
   // or ones from before found still on the machine.
-  async function run(items, { resumed = false, intro = [] } = {}) {
+  async function run(items, { resumed = false, intro = [], append = false } = {}) {
     rec.active = true;
     rec.failed = [];
-    if (!resumed) rec.lines = [];
+    const keepLog = resumed || append;
+    if (!keepLog) rec.lines = [];
     const first = liveBox();
     if (first) {
       const log = first.querySelector("#image-log");
       log.hidden = false;
-      if (!resumed) log.textContent = "";
+      if (!keepLog) log.textContent = "";
       first.querySelector("#image-retry")?.closest("p")?.remove();
       setBusy(first, true);
     }
@@ -2929,8 +3017,9 @@ function renderImage(box, t) {
         }
       } finally {
         // Made or failed, the machine stops now if that was asked: the
-        // bill ends with the work, not after an idle wait.
-        if (stopAfter) stopAfterJob(say);
+        // bill ends with the work, not after an idle wait. With more in
+        // the queue, the stop waits for the last of it.
+        if (stopAfter && !(ready().length && !queueHeld())) stopAfterJob(say);
       }
       if (items.length > 1) say(`All done: ${made} made${failedItems.length ? `, ${failedItems.length} failed` : ""}.`);
       if (failedItems.length) {
@@ -2946,7 +3035,20 @@ function renderImage(box, t) {
       onStatus("");
       const b = liveBox();
       if (b) setBusy(b, false);
+      // Whatever was added to the queue meanwhile goes next, by itself.
+      const n = ready().length;
+      if (n && !queueHeld()) drain([`Next from the queue${n > 1 ? `: ${n} requests` : ""}.`]);
+      else if (b) renderQueue();
     }
+  }
+}
+
+// Whether the queue waits for a click instead of starting by itself.
+function queueHeld() {
+  try {
+    return localStorage.getItem("queueHold") === "1";
+  } catch {
+    return false;
   }
 }
 
