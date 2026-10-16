@@ -544,6 +544,7 @@ function diskRoom(gpu, model, needGb) {
 function serverDownNote(rented) {
   if (rented?.rented) {
     if (["PROVISIONING", "STARTING", "UNKNOWN"].includes(rented.status)) return "The rented GPU is still starting; it usually answers within a few minutes of being rented.";
+    if (rented.status === "RUNNING" && rented.containerUp === false) return `RunPod lists the rented GPU as running, but its container has not started yet${rented.podNote ? ` (RunPod: ${rented.podNote})` : ""}: a fresh host fetches the machine image first, a few minutes; past ten, the host is not delivering, and Replace the machine from the GPU bar rents one on another host.`;
     if (rented.status === "RUNNING" && rented.agentRefused) return "The rented GPU is up and answers, but it refused the secret this site sends it, so the site cannot use it. Stop it and start it again from the bar; if it still refuses, replace it, and say so.";
     if (rented.status === "RUNNING") return "The rented GPU is up but has not answered yet; try again in a moment.";
     return "The rented GPU is stopped. Run this step starts it again, and a download goes on from the files already on its disk.";

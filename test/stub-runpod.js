@@ -83,8 +83,10 @@ export function startStubRunpod() {
         else if (pod.status === "STARTING") {
           pod.status = "RUNNING";
           pod.startedAt = new Date().toISOString();
-          pod.runtime = { uptime: 0 };
-        } else if (pod.status === "RUNNING") pod.runtime = { uptime: (pod.runtime?.uptime ?? 0) + 900 };
+          // A host that never starts the container: listed as running, no runtime.
+          pod.runtime = state.noContainer ? null : { uptime: 0 };
+          if (state.noContainer) pod.lastStatusChange = "Pulling image: 23%";
+        } else if (pod.status === "RUNNING" && !state.noContainer) pod.runtime = { uptime: (pod.runtime?.uptime ?? 0) + 900 };
         return reply(200, view(pod));
       }
       if (req.method === "POST" && m[2] === "action") {

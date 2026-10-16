@@ -13,6 +13,10 @@ import { convertDiffusersFolder } from "./convert.js";
 
 // HUGGINGFOUND_HOME moves everything (models, downloads, settings) elsewhere.
 export const DATA_DIR = process.env.HUGGINGFOUND_HOME || path.join(os.homedir(), "HuggingFound");
+// How long a download waits for a rented machine to come up before it
+// gives up and says why, and how often it says the machine is listed as
+// running with no container yet. Tests shorten both.
+export const machineWait = { ceilingMs: 10 * 60e3, noteEveryMs: 2 * 60e3, statusEveryMs: 30e3, pollMs: 5000 };
 export const MODELS_DIR = path.join(DATA_DIR, "models");
 export const BIN_DIR = path.join(DATA_DIR, "bin");
 export const OUTPUT_DIR = path.join(DATA_DIR, "output");
@@ -903,11 +907,22 @@ function stoppedWhy(status) {
 // rental for the machine's state; without one there is nothing to ask.
 async function machineGone(machine) {
   if (!machine) return null;
-  const status = await machine().catch(() => null);
+  return goneError(await machine().catch(() => null));
+}
+function goneError(status) {
   if (!status) return null;
   if (!status.rented) return new Error("the rented machine is gone, and the files on it with it; rent one again and the download starts over");
   if (status.status === "EXITED") return new Error(`the machine stopped while downloading (${stoppedWhy(status)}). What it fetched is kept on its disk: Run this step again starts the machine and goes on from there`);
   return null;
+}
+// Why a machine waited for never answered: RunPod lists it as running
+// with no container on it (a host not delivering), or its container is up
+// but nothing on it answers.
+function notUp(status) {
+  const minutes = Math.round(machineWait.ceilingMs / 60e3);
+  if (status?.status === "RUNNING" && status.containerUp === false) return `the rented GPU did not come up in ${minutes} minutes: RunPod lists it as running, but no container has started on it${status.podNote ? ` (RunPod: ${status.podNote})` : ""}. This host is not delivering; Replace the machine from the GPU bar rents one on another host (its disk, and any models on it, go with it)`;
+  if (status?.status === "RUNNING") return `the rented GPU did not answer in ${minutes} minutes: its container is up, but nothing on it answers. Stop it and start it again from the GPU bar; if it still does not answer, replace it`;
+  return `the rented GPU did not answer in ${minutes} minutes; check the machine in Settings`;
 }
 
 // Follows a download task on the machine to its end, waiting out drops.
@@ -989,7 +1004,9 @@ function agentDownload(title, route, body, fetchImpl, agent, owner, { machine = 
     const started = Date.now();
     let said = false;
     if (restarted) emit("Starting the rented GPU again; the download goes on from the files already on its disk.");
-    let tries = 0;
+    let status = null;
+    let statusAt = -Infinity;
+    let noted = 0;
     for (;;) {
       if (cancelled()) return;
       try {
@@ -998,15 +1015,25 @@ function agentDownload(title, route, body, fetchImpl, agent, owner, { machine = 
       } catch {
         // not up yet
       }
-      if (Date.now() - started > 10 * 60e3) throw new Error("the rented GPU did not answer in ten minutes; check the machine in Settings");
-      // A machine that is not coming at all (stopped, gone) is not waited for.
-      if (++tries % 6 === 0) {
-        const gone = await machineGone(machine);
+      const waited = Date.now() - started;
+      // A machine that is not coming at all (stopped, gone) is not waited
+      // for. One RunPod lists as running with no container on it yet is
+      // said so every couple of minutes, with RunPod's own word on it, and
+      // past the ceiling the download gives up and names the way out.
+      if (waited - statusAt >= machineWait.statusEveryMs || waited > machineWait.ceilingMs) {
+        statusAt = waited;
+        status = (await machine?.().catch(() => null)) ?? null;
+        const gone = goneError(status);
         if (gone) throw gone;
+      }
+      if (waited > machineWait.ceilingMs) throw new Error(notUp(status));
+      if (status?.status === "RUNNING" && status.containerUp === false && waited >= machineWait.noteEveryMs && waited - noted >= machineWait.noteEveryMs) {
+        noted = waited;
+        emit(`Still waiting: RunPod lists the machine as running, but no container has started on it after ${Math.round(waited / 60e3)} min${status.podNote ? ` (RunPod: ${status.podNote})` : ""}. A fresh host fetches the 9 GB machine image first, which takes longer far from the registry${status.dataCenter ? ` (this one is in ${status.dataCenter})` : ""}; past ten minutes the host is not delivering.`);
       }
       if (!said) emit("Waiting for the machine to start (a new machine takes a few minutes)");
       said = true;
-      await new Promise((r) => setTimeout(r, 5000));
+      await new Promise((r) => setTimeout(r, machineWait.pollMs));
     }
     if (said) emit("The machine is up.");
     const lineText = (j) => (j.total ? `${Math.floor(((j.completed ?? 0) / j.total) * 100)}% of ${(j.total / 1024 ** 3).toFixed(2)} GB${j.file && route !== "/download" ? ` (${j.file})` : ""}` : String(j.status ?? ""));

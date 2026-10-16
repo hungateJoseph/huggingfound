@@ -275,6 +275,20 @@ The machine takes two to four minutes to start. Meanwhile:
   (`pictureUnseen`), and says so above the rows and in the log. Scene
   only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
+- A pod RunPod lists as running whose container never comes up (a fresh
+  host fetching the image, or a host not delivering) used to look like a
+  machine that was merely slow: the proxy answers 404 on both ports, the
+  bar says running, and a download waited ten minutes and said only "did
+  not answer". The status now carries `containerUp` (the pod has a
+  runtime) and `podNote` (RunPod's `lastStatusChange`, when given); the
+  plan's step text and the download's log say "RunPod lists the machine as
+  running, but no container has started on it" with RunPod's note and the
+  data centre, every two minutes, and the ten-minute give-up names the way
+  out (Replace the machine). `machineWait` in runners.js holds the ceiling,
+  the note cadence, the status cadence and the poll, which tests shorten.
+  The bar shows a warning with a Replace button once a running machine has
+  gone ten minutes with nothing on it answering. Stub: `state.noContainer`
+  leaves a running pod without a runtime and notes "Pulling image: 23%".
 - LTX-2 and LTX-2.5 (Lightricks, gated: the LTX-2.x Community License
   accepted on the model page and a read token in Settings) are a video
   family of their own: `/ltx-2/i` in plans.js gives 24 fps, 2 to 10 s,

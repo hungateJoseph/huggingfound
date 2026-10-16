@@ -7,6 +7,7 @@ import { startStubHub } from "./stub-hub.js";
 import { startStubAgent } from "./stub-agent.js";
 import { startStubOllama } from "./stub-ollama.js";
 import { GPUS, KEY, startStubRunpod } from "./stub-runpod.js";
+import { machineWait } from "../src/runners.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-rent-"));
 const { createServer } = await import("../src/server.js");
@@ -1070,4 +1071,37 @@ test("a machine that stops under a download: the run says so within seconds, and
   assert.match(log2, /Done/);
   assert.equal((await json("/api/rent")).status, "RUNNING");
   assert.equal((await post("/api/rent/delete", {})).status, 200);
+});
+
+test("a machine RunPod lists as running with no container on it: the status and the plan say so, and a download waits a bounded while, says why, and names the way out", async () => {
+  await post("/api/rent/delete", {}).catch(() => {});
+  runpod.state.noContainer = true;
+  agent.state.down = true;
+  const saved = { ...machineWait };
+  Object.assign(machineWait, { ceilingMs: 1200, noteEveryMs: 300, statusEveryMs: 200, pollMs: 100 });
+  try {
+    const res = await post("/api/rent", { gb: 48, diskGb: 100 });
+    assert.equal(res.status, 200, await res.text());
+    // The stub moves a new pod along one state a poll: it is listed as running, with no runtime.
+    for (let i = 0; i < 3; i++) await json("/api/rent");
+    const status = await json("/api/rent");
+    assert.deepEqual([status.status, status.imagesReady, status.containerUp, status.podNote], ["RUNNING", false, false, "Pulling image: 23%"], "running by RunPod's word, no container, and RunPod's note on it");
+    const { plan } = await json("/api/model?id=Qwen/Qwen-Image");
+    assert.match(plan.steps[0].text, /RunPod lists the rented GPU as running, but its container has not started yet \(RunPod: Pulling image: 23%\): a fresh host fetches the machine image first, a few minutes; past ten, the host is not delivering, and Replace the machine from the GPU bar rents one on another host\./);
+    const run = await post("/api/run", { kind: "pull-image-repo", args: plan.steps[0].args, where: "rented" });
+    const runText = await run.text();
+    assert.equal(run.status, 200, runText);
+    const runId = JSON.parse(runText).id;
+    let log = "";
+    for (let i = 0; i < 100 && !/Replace the machine/.test(log); i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      log = await (await get(`/api/runs/${runId}`)).text();
+    }
+    assert.match(log, /Waiting for the machine to start \(a new machine takes a few minutes\)[\s\S]*Still waiting: RunPod lists the machine as running, but no container has started on it after 0 min \(RunPod: Pulling image: 23%\)\. A fresh host fetches the 9 GB machine image first, which takes longer far from the registry \(this one is in US-KS-2\); past ten minutes the host is not delivering\.[\s\S]*the rented GPU did not come up in 0 minutes: RunPod lists it as running, but no container has started on it \(RunPod: Pulling image: 23%\)\. This host is not delivering; Replace the machine from the GPU bar rents one on another host \(its disk, and any models on it, go with it\)/);
+  } finally {
+    Object.assign(machineWait, saved);
+    runpod.state.noContainer = false;
+    agent.state.down = false;
+    await post("/api/rent/delete", {}).catch(() => {});
+  }
 });

@@ -4189,12 +4189,18 @@ function renderRental() {
     const graceLeft = r.capGraceUntil ? Math.max(0, r.capGraceUntil - Date.now()) : 0;
     const capNote = running && graceLeft > 0 ? `<div class="notice warn cap-note"><span>Today's machines have reached the ${money(r.maxSpend ?? state.maxSpend ?? 50)} spend cap. This machine stops in about ${Math.max(1, Math.ceil(graceLeft / 60e3))} min, once nothing is being made on it, unless the cap is raised.</span> <button class="primary" id="rent-raise-cap">Raise the cap to ${money((r.maxSpend ?? state.maxSpend ?? 50) + 25)}</button></div>` : "";
     const trouble = r.imageProblem ? ` The image server on it cannot start (${r.imageProblem}); chat still works, and a machine rented after the image is fixed will make pictures.` : "";
+    // Listed as running for long with nothing on it answering: a host that
+    // never started the container (the image still being fetched, or a
+    // host not delivering), said plainly, with RunPod's own word on it and
+    // the way out, rather than a bar that looks fine while the hour bills.
+    const stuckMin = running && !r.ready && !r.imagesReady && r.uptimeSeconds > 600 ? Math.round(r.uptimeSeconds / 60) : 0;
+    const stuck = stuckMin ? `<div class="notice warn"><span>Listed as running by RunPod for ${stuckMin} minutes, but ${r.containerUp === false ? "no container has started on it" : "nothing on it answers"}${r.podNote ? ` (RunPod: ${esc(r.podNote)})` : ""}. ${r.containerUp === false ? "A fresh host fetches the machine image first, a few minutes; this long, the host is not delivering." : "Stop and Start may bring it back."}</span> <button class="primary" id="rent-replace-stuck">Replace the machine</button></div>` : "";
     const older = r.agentVersion != null && r.agentCurrent != null && r.agentVersion < r.agentCurrent;
     const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a ${state.hosted ? "download" : "chat or download"}${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.${state.hosted ? " Chats go straight from your browser to the machine, so the site cannot see them; each message you send counts as use." : ""}` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
     panel.innerHTML = `<div class="rent-card">
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(todaySpend)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
-      ${capNote}
+      ${capNote}${stuck}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
       ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
@@ -4230,6 +4236,7 @@ function renderRental() {
     loadOthers(panel);
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-replace")?.addEventListener("click", replaceMachine);
+    panel.querySelector("#rent-replace-stuck")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-stop-retry")?.addEventListener("click", () => {
       stopRetryingStart();
       if (state.rentError) state.rentError.retrying = false;

@@ -413,6 +413,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       stopReason: pod.status === "EXITED" ? env().RUNPOD_LAST_STOP || null : null,
       dataCenter: pod.dataCenterId ?? null,
       startedAt: pod.startedAt ?? null,
+      // Whether RunPod has a container up for the pod: one listed as
+      // running whose container has not come yet (the image still being
+      // fetched by a fresh host, or a host not delivering) has no runtime.
+      containerUp: Boolean(pod.runtime),
+      // RunPod's own word on the pod's last lifecycle event, when it gives one.
+      podNote: typeof pod.lastStatusChange === "string" && pod.lastStatusChange.trim() ? pod.lastStatusChange.trim().slice(0, 200) : null,
     };
   }
 
