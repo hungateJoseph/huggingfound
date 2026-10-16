@@ -1617,8 +1617,30 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.reload();
   await visitor.waitForSelector("#bar-models");
   await visitor.waitForFunction(() => /\d+ models? on it/.test(document.querySelector("#bar-models").textContent));
+  // One entry per model: a model still coming shows as its download alone,
+  // with what is on the disk so far, not as a model to open or remove yet.
+  const SDXL = "stabilityai/stable-diffusion-xl-base-1.0";
+  rentedAgent.state.slowMs = 150;
+  rentedAgent.state.files.push({ repo: SDXL, file: "model_index.json", gb: 3.2, engine: "diffusers" });
+  const coming = await (await visitor.request.post(`${hostedBase}/api/run`, { data: { kind: "pull-image-model", args: { repo: SDXL, file: "sd_xl_base_1.0.safetensors" }, where: "rented", model: SDXL } })).json();
+  assert.ok(coming.id);
+  await visitor.click("#bar-models");
+  await visitor.waitForSelector("#gpu-runs li");
+  assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");
+  assert.match(await visitor.locator("#gpu-runs li").innerText(), /3\.2 GB of it on the disk so far[\s\S]*downloading/);
+  assert.equal(await visitor.locator(`#gpu-models li[data-kind="image"][data-repo="${SDXL}"]`).count(), 0, "not listed as a model yet");
+  await visitor.keyboard.press("Escape");
+  rentedAgent.state.slowMs = undefined;
+  for (let i = 0; i < 200; i++) {
+    const run = (await (await visitor.request.get(`${hostedBase}/api/runs`)).json()).runs.find((x) => x.id === coming.id);
+    if (run && run.status !== "running") break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  rentedAgent.state.files = rentedAgent.state.files.filter((f) => f.repo !== SDXL);
   await visitor.click("#bar-models");
   await visitor.waitForSelector("#gpu-models .gpu-list li");
+  await visitor.click("#gpu-models-refresh");
+  await visitor.waitForFunction(() => !document.querySelector("#gpu-runs"));
   const text = await visitor.locator("#gpu-models-body").innerText();
   assert.match(text, /Chat models[\s\S]*Cydonia[\s\S]*Image models[\s\S]*stable-diffusion-v1-5-pruned-emaonly-Q8_0\.gguf/);
   assert.match(text, /loaded in the GPU/);

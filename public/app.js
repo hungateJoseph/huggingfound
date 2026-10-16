@@ -5174,28 +5174,45 @@ async function renderGpuModels() {
     body.innerHTML = `<p class="muted small">Could not ask the machine: ${esc(err.message)}</p>`;
     return;
   }
+  // One entry per model. The newest download of a model stands for the
+  // older tries; while it runs, it stands for the model's own row too,
+  // since a folder half-fetched is nothing to open or remove yet, and
+  // says what is on the disk so far. A newest try that failed shows on
+  // the model's row, with the way on. A download that is done shows as
+  // its model alone.
+  const newest = new Map();
+  for (const run of models.runs ?? []) if (run.model && !newest.has(run.model)) newest.set(run.model, run);
+  const runs = (models.runs ?? []).filter((run) => (run.model ? newest.get(run.model) === run && run.status === "running" : run.status !== "done"));
+  const coming = new Set(runs.map((run) => run.model).filter(Boolean));
+  const failedFor = (m) => {
+    const run = newest.get(m.repo ?? m.id ?? "");
+    return run && run.status === "failed" ? run : null;
+  };
+  const onDisk = new Map();
+  for (const m of [...(models.images ?? []), ...(models.chat ?? [])]) if (coming.has(m.repo ?? m.id) && m.gb) onDisk.set(m.repo ?? m.id, (onDisk.get(m.repo ?? m.id) ?? 0) + m.gb);
+  const listed = (list) => (list ?? []).filter((m) => !coming.has(m.repo ?? m.id));
   const row = (m, kind) => {
     // A folder model is named by its model; its index file is a detail.
     const title = kind === "chat" ? m.name : m.file === "model_index.json" ? `${(m.repo ?? m.id ?? "").split("/").pop() || m.file} (folder model)` : `${m.file}`;
     const live = kind === "chat" ? m.running : m.loaded;
+    const failed = failedFor(m);
     return `<li data-kind="${kind}" data-id="${esc(m.id ?? "")}" data-name="${esc(m.name ?? "")}" data-repo="${esc(m.repo ?? "")}" data-file="${esc(m.file ?? "")}">
-      <div><div class="name">${esc(title)}</div><div class="sub">${m.id ? `<span>${esc(m.id)}</span>` : ""}<span>${m.gb ? `${m.gb} GB` : ""}</span>${live ? `<span class="pill live">${kind === "chat" ? "loaded, answering" : "loaded in the GPU"}</span>` : ""}</div></div>
+      <div><div class="name">${esc(title)}</div><div class="sub">${m.id ? `<span>${esc(m.id)}</span>` : ""}<span>${m.gb ? `${m.gb} GB` : ""}</span>${live ? `<span class="pill live">${kind === "chat" ? "loaded, answering" : "loaded in the GPU"}</span>` : ""}${failed ? `<span class="pill bad">last download failed</span><span>${esc(failed.last)}</span>` : ""}</div></div>
       <div class="buttons">${m.id ? `<button class="primary" data-open>Open</button>` : ""}<button class="ghost" data-remove>Remove</button></div>
     </li>`;
   };
-  const chat = models.chatOk ? (models.chat.length ? `<ul class="gpu-list">${models.chat.map((m) => row(m, "chat")).join("")}</ul>` : `<p class="muted small">No chat models on it yet. Open a chat model and download it there.</p>`) : `<p class="muted small">Ollama on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
-  const images = !r.images ? `<p class="muted small">This machine runs chat models only; a machine rented now runs image models too.</p>` : r.imageProblem ? `<p class="muted small">The image server on this machine cannot start (${esc(r.imageProblem)}). This is a fault in the machine image, not in your setup; a machine rented after it is fixed will work.</p>` : models.imagesOk ? (models.images.length ? `<ul class="gpu-list">${models.images.map((m) => row(m, "image")).join("")}</ul>` : `<p class="muted small">No image models on it yet. Open an image model and download it there.</p>`) : `<p class="muted small">The image agent on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
-  // What is being downloaded right now, and what just finished, each with
-  // the way to its model's window where the full log is.
-  // A download that is done shows as its model below, not twice.
-  const runs = (models.runs ?? []).filter((run) => run.status !== "done");
+  const chatList = listed(models.chat);
+  const imageList = listed(models.images);
+  const chat = models.chatOk ? (chatList.length ? `<ul class="gpu-list">${chatList.map((m) => row(m, "chat")).join("")}</ul>` : `<p class="muted small">No chat models on it yet. Open a chat model and download it there.</p>`) : `<p class="muted small">Ollama on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
+  const images = !r.images ? `<p class="muted small">This machine runs chat models only; a machine rented now runs image models too.</p>` : r.imageProblem ? `<p class="muted small">The image server on this machine cannot start (${esc(r.imageProblem)}). This is a fault in the machine image, not in your setup; a machine rented after it is fixed will work.</p>` : models.imagesOk ? (imageList.length ? `<ul class="gpu-list">${imageList.map((m) => row(m, "image")).join("")}</ul>` : `<p class="muted small">No image models on it yet${coming.size ? " besides the one coming" : ""}. Open an image model and download it there.</p>`) : `<p class="muted small">The image agent on the machine is not answering${r.status === "EXITED" ? "; the machine is stopped" : " yet"}.</p>`;
   const runRow = (run) => {
     const name = run.model ? run.model.split("/").pop() : run.title || run.first;
     const pill = run.status === "running" ? `<span class="pill live">downloading</span>` : run.status === "done" ? `<span class="pill good">done</span>` : `<span class="pill bad">failed</span>`;
     const pct = /(\d{1,3})% of/.exec(run.last ?? "");
     const mini = run.status === "running" ? `<div class="progress small ${pct ? "" : "guess"}"><div class="fill" style="width:${pct ? pct[1] : 10}%"></div></div>` : "";
+    const sofar = onDisk.has(run.model) ? `<span>${onDisk.get(run.model).toFixed(1)} GB of it on the disk so far</span>` : "";
     return `<li data-model="${esc(run.model ?? "")}">
-      <div><div class="name">${esc(name)}</div><div class="sub"><span>${esc(run.title || run.first)}</span>${run.last && run.last !== run.first ? `<span>${esc(run.last)}</span>` : ""}${pill}</div>${mini}</div>
+      <div><div class="name">${esc(name)}</div><div class="sub"><span>${esc(run.title || run.first)}</span>${run.last && run.last !== run.first ? `<span>${esc(run.last)}</span>` : ""}${sofar}${pill}</div>${mini}</div>
       <div class="buttons">${run.model ? `<button class="primary" data-open-run>Open</button>` : ""}</div>
     </li>`;
   };
