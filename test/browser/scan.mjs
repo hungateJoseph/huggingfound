@@ -146,9 +146,15 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#browse").isVisible(), false, "the lists stay out of the way");
   assert.equal(await page.locator("#results").isVisible(), false);
   assert.match(await page.locator("#home-hint").innerText(), /No scan yet/);
+  // Under the search, why to use it: the outage case first, then the rest; gone once a search is up.
+  assert.equal(await page.locator("#why").isVisible(), true);
+  assert.equal(await page.locator("#why-title").innerText(), "Why use HuggingFound?");
+  assert.deepEqual(await page.$$eval("#why .reason h3", (els) => els.map((e) => e.textContent)), ["When the service everyone relies on goes down", "Every kind of model in one place", "Runs where you choose", "Know a model before you fetch it", "Yours to keep"]);
+  assert.match(await page.locator("#why .lead-reason").innerText(), /One morning it stops answering, the status page says nothing[\s\S]*runs on your own computer or on a GPU rented by the minute/);
   await page.click("#examples [data-example='coding help']");
   await page.waitForSelector("#found .model");
   assert.equal(await page.locator("#results").isVisible(), true);
+  assert.equal(await page.locator("#why").isVisible(), false, "the reasons step aside for the results");
   assert.match(await page.locator("#found-title").innerText(), /coding help/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");

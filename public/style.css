@@ -283,6 +283,20 @@ body[data-mode="results"] #home, body[data-mode="browse"] #home { padding: 18px 
 body[data-mode="results"] #home h1, body[data-mode="browse"] #home h1 { font-size: 22px; margin-bottom: 8px; }
 body[data-mode="results"] #home .lead, body[data-mode="browse"] #home .lead, body[data-mode="results"] #examples, body[data-mode="browse"] #examples { display: none; }
 body[data-mode="results"] .trait-search.big, body[data-mode="browse"] .trait-search.big { margin: 0 0 12px; max-width: none; }
+/* why use it: a quiet grid under the search, gone once a search or the lists are up */
+.why-use { padding: 10px 0 30px; text-align: center; }
+.why-use h2 { margin: 0 0 8px; font-size: 26px; }
+.why-use .lead { margin: 0 auto 20px; max-width: 640px; }
+.reasons { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; text-align: left; }
+.reason { padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.reason h3 { margin: 0 0 8px; font-size: 16px; }
+.reason p { margin: 0 0 8px; font-size: 14px; color: var(--muted); line-height: 1.5; }
+.reason p:last-child { margin-bottom: 0; }
+.reason.lead-reason { grid-column: 1 / -1; background: var(--accent-soft); border-color: transparent; }
+.reason.lead-reason h3 { font-size: 18px; color: var(--accent-ink); }
+.reason.lead-reason p { color: var(--ink); font-size: 15px; }
+.reason-note { margin: 14px auto 0; max-width: 640px; }
+body[data-mode="results"] #why, body[data-mode="browse"] #why { display: none; }
 .why { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .why span { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--chip); color: var(--muted); }
 .why span.say { background: var(--accent-soft); color: var(--accent-ink); }

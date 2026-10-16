@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>About the developer · HuggingFound</title>
+  <meta name="description" content="Who builds HuggingFound, how it is put together, and where to find the code, the other projects and the open-source work.">
+  <link rel="icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .prose { max-width: 720px; margin: 32px auto 64px; font-size: 16px; line-height: 1.55; }
+    .prose h1 { margin-bottom: 6px; }
+    .prose h2 { margin-top: 32px; font-size: 20px; }
+    .prose h3 { margin: 18px 0 4px; font-size: 16px; }
+    .prose table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+    .prose th, .prose td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .prose th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .prose ul { padding-left: 20px; }
+    .prose li { margin: 4px 0; }
+    .links { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 8px; }
+    .links a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); text-decoration: none; font-weight: 600; font-size: 14px; }
+    .links a:hover { border-color: var(--accent); color: var(--accent-ink); }
+    .links a.primary-link { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .links a.primary-link:hover { background: var(--accent-ink); border-color: var(--accent-ink); color: #fff; }
+    .links svg { width: 16px; height: 16px; fill: currentColor; }
+    .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0 6px; }
+    .fact { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+    .fact b { display: block; font-size: 22px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+    .fact span { color: var(--muted); font-size: 13px; white-space: normal; overflow: visible; text-overflow: clip; display: block; }
+    .project { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 12px 0; }
+    .project h3 { margin: 0 0 4px; }
+    .project p { margin: 4px 0; }
+    .project .tags { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+    .stack { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
+    .stack li { margin: 2px 0; }
+    @media (max-width: 600px) { .stack { grid-template-columns: 1fr; } }
+    .merged { color: var(--ok); font-weight: 600; }
+    .open { color: var(--warn); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="/"><img src="icon.svg" alt="" width="28" height="28"><span>HuggingFound</span></a>
+      <nav class="views"><a class="view-link" href="/">Search</a><a class="view-link on" href="/about.html">About</a></nav>
+      <div class="top-right"></div>
+    </div>
+  </header>
+  <main class="wrap prose">
+    <h1>About the developer</h1>
+    <p class="muted">HuggingFound is designed, written, tested and run by one person. This page says who, how the site is built, and where the rest of the work lives.</p>
+
+    <div class="links">
+      <a class="primary-link" href="https://github.com/hungateJoseph" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <!-- Fill in the LinkedIn handle before the next deploy. -->
+      <a href="https://www.linkedin.com/in/REPLACE-WITH-YOUR-HANDLE" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M0 1.146C0 .513.526 0 1.175 0h13.65C15.474 0 16 .513 16 1.146v13.708c0 .633-.526 1.146-1.175 1.146H1.175C.526 16 0 15.487 0 14.854V1.146zm4.943 12.248V6.169H2.542v7.225h2.401zm-1.2-8.212c.837 0 1.358-.554 1.358-1.248-.015-.709-.52-1.248-1.342-1.248-.822 0-1.359.54-1.359 1.248 0 .694.521 1.248 1.327 1.248h.016zm4.908 8.212V9.359c0-.216.016-.432.08-.586.173-.431.568-.878 1.232-.878.869 0 1.216.662 1.216 1.634v3.865h2.401V9.25c0-2.22-1.184-3.252-2.764-3.252-1.274 0-1.845.7-2.165 1.193v.025h-.016a5.54 5.54 0 0 1 .016-.025V6.169h-2.4c.03.678 0 7.225 0 7.225h2.4z"/></svg>
+        LinkedIn
+      </a>
+      <a href="mailto:hungatejoseph@gmail.com">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M0 4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v.217l-8 4.8-8-4.8V4zm0 1.383v6.617a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V5.383l-7.49 4.494a1 1 0 0 1-1.02 0L0 5.383z"/></svg>
+        Email
+      </a>
+      <a href="https://github.com/hungateJoseph/huggingfound" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.854 4.146a.5.5 0 0 1 0 .708L2.707 8l3.147 3.146a.5.5 0 0 1-.708.708l-3.5-3.5a.5.5 0 0 1 0-.708l3.5-3.5a.5.5 0 0 1 .708 0zm4.292 0a.5.5 0 0 0 0 .708L13.293 8l-3.147 3.146a.5.5 0 0 0 .708.708l3.5-3.5a.5.5 0 0 0 0-.708l-3.5-3.5a.5.5 0 0 0-.708 0z"/></svg>
+        This site's code
+      </a>
+      <a href="https://oopsiblinked.com" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zM1.03 8a6.97 6.97 0 0 1 .98-3.55c.4.33 1.2.78 2.4 1.1a14 14 0 0 0-.27 2.45H1.03zm3.12 1a14 14 0 0 0 .27 2.45c-1.2.32-2 .77-2.4 1.1A6.97 6.97 0 0 1 1.03 9h3.12zM8 1c.55 0 1.46 1.1 2.07 3.26A12.6 12.6 0 0 1 8 4.5c-.73 0-1.42-.09-2.07-.24C6.54 2.1 7.45 1 8 1zm0 4.5c.9 0 1.74-.11 2.5-.31.14.75.22 1.53.25 2.31H5.25c.03-.78.11-1.56.25-2.31.76.2 1.6.31 2.5.31zM5.25 9h5.5a13 13 0 0 1-.25 2.31A9.6 9.6 0 0 0 8 11c-.9 0-1.74.11-2.5.31A13 13 0 0 1 5.25 9zM8 12c.73 0 1.42.09 2.07.24C9.46 14.4 8.55 15 8 15s-1.46-.6-2.07-2.76c.65-.15 1.34-.24 2.07-.24zm3.57-7.45c1.2-.32 2-.77 2.4-1.1A6.97 6.97 0 0 1 14.97 8h-3.12a14 14 0 0 0-.28-3.45zM11.85 9h3.12a6.97 6.97 0 0 1-.98 3.55c-.4-.33-1.2-.78-2.4-1.1.17-.79.26-1.6.26-2.45z"/></svg>
+        Blinked
+      </a>
+    </div>
+
+    <h2>Who</h2>
+    <p>Joseph Hungate, a software engineer in Seattle. Three and a half years at Amazon Web Services on S3 (August 2022 to January 2026), four years before that as a Cyber Software Engineering Officer in the U.S. Army, and a B.S. in Computer Science from Rice University.</p>
+    <ul>
+      <li><b>At AWS</b> I was the tech lead for S3 Express One Zone's billing architecture (15 pricing models, automated canaries and regional rollouts), led the GDPR deletion platform for S3 Tables used across internal services, and led a three-engineer team taking S3 Tables into ten new regions.</li>
+      <li><b>In the Army</b> I was the lead engineer moving seven brigade-level planning systems onto AWS with identity-first access control, and built the CI/CD pipeline that patched hosts for more than a thousand soldiers in the field.</li>
+      <li><b>Now</b> I build tools that make AI models easier to use and easier to trust: this site, and the projects below.</li>
+    </ul>
+
+    <h2>How HuggingFound is built</h2>
+    <p>The whole thing is a small Node server and a hand-written page, with no framework and a single third-party library (Anthropic's SDK, for the optional Claude check). Everything else, from the Hugging Face client to the GPU rental to the Google sign-in, is written in this repository so that it can be read end to end.</p>
+    <div class="facts">
+      <div class="fact"><b>1</b><span>runtime dependency</span></div>
+      <div class="fact"><b>237</b><span>tests, and a real-browser run</span></div>
+      <div class="fact"><b>0</b><span>conversations kept on the server</span></div>
+      <div class="fact"><b>~$8</b><span>a month to host</span></div>
+    </div>
+    <ul class="stack">
+      <li><b>Search</b> ranks models by name, by category and by what people say about them in model cards, Hub discussions, Civitai, GitHub issues, Hacker News, Lemmy, YouTube and Reddit, with refusal-prone models filtered out.</li>
+      <li><b>Fit and speed</b> are estimated from the file size and the machine's memory and GPU before anything is downloaded; measured times replace the guesses after a real run.</li>
+      <li><b>Local runs</b> drive Ollama, whisper.cpp and stable-diffusion.cpp from a fixed set of checked commands, including merging a diffusers repository into one checkpoint.</li>
+      <li><b>GPU rental</b> starts a RunPod machine from a custom image built in GitHub Actions, stops it when idle or at a daily spend cap, survives server restarts, and moves the rental to another data centre when one runs out of stock.</li>
+      <li><b>Privacy by construction</b>: the browser talks to the rented GPU directly, so what a visitor says to a model never passes through the site. Account keys are encrypted at rest. <a href="/privacy.html">The privacy page</a> is kept true by the tests.</li>
+      <li><b>Claude as a second opinion</b>: every answer and every picture can be checked or revised by Claude with the visitor's own key, which is never stored.</li>
+      <li><b>Hosting</b>: one Docker image on Render, defined in the repository, with Google OAuth sign-in and guest sessions that expire on their own.</li>
+      <li><b>Testing</b>: unit and API suites against stand-ins for the Hub, RunPod, Ollama and the GPU agent, and a Playwright test that drives the real page in Chrome through a rental.</li>
+    </ul>
+
+    <h2>Other projects</h2>
+    <div class="project">
+      <h3><a href="https://oopsiblinked.com" target="_blank" rel="noopener">Blinked</a></h3>
+      <p>An agent builder for photographers. Describe a job in plain words and get a plan with who does each step, what it costs and how long, then hand it to an agent that runs across Amazon, Instacart, AWS, Fiverr, TaskRabbit and SMS. Schedules by part of day, publishes open times to a shareable page, takes enquiries without a sign-up, imports from Google Drive, and scans a photo library for blur, closed eyes and framing problems.</p>
+      <p><a href="https://github.com/hungateJoseph/blinked" target="_blank" rel="noopener">Code on GitHub</a></p>
+      <div class="tags"><span class="tag">TypeScript</span><span class="tag">Next.js</span><span class="tag">LLM agents</span><span class="tag">Vision</span><span class="tag">Live at oopsiblinked.com</span></div>
+    </div>
+    <div class="project">
+      <h3><a href="https://github.com/hungateJoseph/agentforge" target="_blank" rel="noopener">AgentForge</a></h3>
+      <p>A local app that takes the accounts you already have (Anthropic, OpenAI, Twilio, Stripe, Slack, GitHub, Gmail and a dozen more), keeps the keys in a .env on your machine, and tells you what they can do together as an agent, what no key can do, and which orchestrator (n8n, MCP servers, Composio, plain code) covers the most of your set.</p>
+      <div class="tags"><span class="tag">JavaScript</span><span class="tag">MCP</span><span class="tag">n8n</span><span class="tag">Runs locally</span></div>
+    </div>
+
+    <h2>Open-source contributions</h2>
+    <p>Fixes to the tools I use, each one a reproducible bug with a test. Merged ones are in a release or on their way to one.</p>
+    <table>
+      <tr><th>Project</th><th>Change</th><th>Status</th></tr>
+      <tr><td><a href="https://github.com/vitejs/vite/pull/23636" target="_blank" rel="noopener">Vite</a></td><td>Skip caching CSS of chunks in an import cycle</td><td class="merged">Merged</td></tr>
+      <tr><td><a href="https://github.com/nitrojs/nitro/pull/4683" target="_blank" rel="noopener">Nitro</a></td><td>Externalize a package's own entry as its bare name</td><td class="merged">Merged</td></tr>
+      <tr><td><a href="https://github.com/vuejs/language-tools/pull/6231" target="_blank" rel="noopener">Vue language tools</a></td><td>Stop checking JS Vue files as TypeScript in component-meta</td><td class="merged">Merged</td></tr>
+      <tr><td><a href="https://github.com/medusajs/medusa/pull/17072" target="_blank" rel="noopener">Medusa</a></td><td>Resume a multi-key lock acquisition from the key it waited on</td><td class="open">Open</td></tr>
+      <tr><td><a href="https://github.com/TanStack/router/pull/8541" target="_blank" rel="noopener">TanStack Router</a></td><td>Preserve route exports under code splitting</td><td class="open">Open</td></tr>
+      <tr><td><a href="https://github.com/storybookjs/storybook/pull/36472" target="_blank" rel="noopener">Storybook</a></td><td>Keep negated tags when a story is extended; register the toolbar landmark only while shown</td><td class="open">Open</td></tr>
+      <tr><td><a href="https://github.com/nrwl/nx/pull/37207" target="_blank" rel="noopener">Nx</a></td><td>Prune npm lockfile workspace packages that have no name field</td><td class="open">Open</td></tr>
+      <tr><td><a href="https://github.com/volarjs/volar.js/pull/320" target="_blank" rel="noopener">Volar</a></td><td>Keep overlapping completion requests from sharing one result list</td><td class="open">Open</td></tr>
+      <tr><td><a href="https://github.com/iamkun/dayjs/pull/3240" target="_blank" rel="noopener">Day.js</a></td><td>Apply the week token when parsing in UTC mode</td><td class="open">Open</td></tr>
+    </table>
+
+    <h2>Get in touch</h2>
+    <p>I am open to software engineering roles, especially ones that put AI models in front of people who are not engineers. The fastest way to reach me is <a href="mailto:hungatejoseph@gmail.com">email</a>; the code for everything above is on <a href="https://github.com/hungateJoseph" target="_blank" rel="noopener">GitHub</a>, and a bug report or a pull request on <a href="https://github.com/hungateJoseph/huggingfound/issues" target="_blank" rel="noopener">this site's repository</a> is always welcome.</p>
+  </main>
+  <footer class="site-foot">
+    <span class="muted small">HuggingFound</span>
+    <a class="muted small" href="/about.html">About the developer</a>
+    <a class="muted small" href="/privacy.html">Privacy</a>
+  </footer>
+</body>
+</html>

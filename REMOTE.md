@@ -275,6 +275,16 @@ The machine takes two to four minutes to start. Meanwhile:
   (`pictureUnseen`), and says so above the rows and in the log. Scene
   only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
+- The front page carries a "Why use HuggingFound?" section under the
+  search (`#why`, `.why-use`, `.reasons`, `.reason.lead-reason`), shown in
+  home mode only (hidden by `body[data-mode]` for results and browse). The
+  lead reason is the outage case: a team's one assistant stops answering
+  and nothing else is up; HuggingFound opens the whole of Hugging Face,
+  running on the person's computer or a rented card. Four more: every
+  kind of model, runs where you choose, know a model before you fetch it,
+  yours to keep; a closing note that open models are smaller than the
+  largest paid services. Plain static markup in index.html; the scan's
+  first step checks the headings and that it steps aside for results.
 - Placement: twice in a day a two-card and a one-card H200 pod in EUR-IS-4
   sat listed as running with no container for ten minutes and more (the
   proxy answering 404 on both ports), while a pod in US-NC-1 came up in

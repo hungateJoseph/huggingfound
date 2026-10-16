@@ -16,6 +16,7 @@
       </a>
       <nav class="views">
         <button class="view-link on" id="nav-home">Search</button>
+        <a class="view-link" href="/about.html">About</a>
       </nav>
       <div class="top-right">
         <button class="ghost hosted-only" id="open-checker">Check an answer</button>
@@ -51,6 +52,35 @@
         <button class="chip strong" id="nav-browse">Browse everything</button>
       </div>
       <p class="muted small" id="home-hint"></p>
+    </section>
+
+    <section id="why" class="why-use" aria-labelledby="why-title">
+      <h2 id="why-title">Why use HuggingFound?</h2>
+      <p class="lead">Hugging Face holds hundreds of thousands of open models. HuggingFound finds the one for the job, says what people make of it, and runs it where you choose. Here is when that matters.</p>
+      <div class="reasons">
+        <article class="reason lead-reason">
+          <h3>When the service everyone relies on goes down</h3>
+          <p>A team runs its day on one assistant: drafts, code, meeting notes, pictures for a deck. One morning it stops answering, the status page says nothing, and the other big services are down or full. The work does not wait.</p>
+          <p>HuggingFound is not one service. It opens the whole of Hugging Face: chat and coding models, image and video models, transcription, in the thousands. Search for what you need, pick one, and it runs on your own computer or on a GPU rented by the minute. With that many models, one that does the job is always there, and nobody can switch it off.</p>
+        </article>
+        <article class="reason">
+          <h3>Every kind of model in one place</h3>
+          <p>Writing and chat, code, math and reasoning, models that read pictures, image generation, video clips with sound, speech to text. Each model card says what it makes, how big it is, and what it needs to run.</p>
+        </article>
+        <article class="reason">
+          <h3>Runs where you choose</h3>
+          <p>Small models run on a laptop, with nothing leaving it but the download. Bigger ones run on a data-centre card rented by the hour, which stops by itself when idle or when you say so, and keeps your spend under a cap you set.</p>
+        </article>
+        <article class="reason">
+          <h3>Know a model before you fetch it</h3>
+          <p>HuggingFound reads each model's card and its community discussions, and sums up in a line what people say: what it is good at, what it gets wrong, which version to take. Pictures and clips can be checked by Claude, with your own key, and asked for again with a change.</p>
+        </article>
+        <article class="reason">
+          <h3>Yours to keep</h3>
+          <p>Open weights do not expire and cannot be withdrawn from your disk. What you make is kept in your browser and on your computer, not on a server. Keys you add stay encrypted with your account and are never shown again.</p>
+        </article>
+      </div>
+      <p class="muted small reason-note">Open models are smaller than the largest paid services and take a little setting up; the trade is that they are many, they are yours, and they run when nothing else does.</p>
     </section>
 
     <section id="notice" class="notice info" hidden></section>
@@ -416,6 +446,7 @@ npm start</code>
   <script src="app.js"></script>
   <footer class="site-foot">
     <span class="muted small">HuggingFound</span>
+    <a class="muted small" id="nav-about" href="/about.html">About the developer</a>
     <a class="hosted-only muted small" id="nav-privacy" href="/privacy.html">Privacy</a>
   </footer>
 </body>

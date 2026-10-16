@@ -52,6 +52,18 @@ test("the state says it is hosted and describes a typical laptop, not this machi
   assert.equal(s.refresh.hours, 0);
 });
 
+test("the about page is served, links the developer's GitHub, and names this site's repository", async () => {
+  const res = await get("/about.html");
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /text\/html/);
+  const page = await res.text();
+  assert.match(page, /github\.com\/hungateJoseph"/);
+  assert.match(page, /github\.com\/hungateJoseph\/huggingfound/);
+  assert.match(page, /mailto:hungatejoseph@gmail\.com/);
+  // The front page and the privacy page both point at it.
+  for (const p of ["/", "/privacy.html"]) assert.match(await (await get(p)).text(), /href="\/about\.html"/, p);
+});
+
 test("nothing that runs, downloads, chats or changes settings is reachable", async () => {
   // What never happens on the server itself, signed in or not.
   for (const p of ["/api/chat", "/api/scan", "/api/voices/gather", "/api/unload", "/api/upload"]) {
