@@ -252,7 +252,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
 export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4 };
-export const AGENT_VERSION = 9;
+export const AGENT_VERSION = 10;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;
@@ -481,8 +481,9 @@ export function diffusersFit(gb, machine, modular = false) {
 // The size to recommend for a folder model: room for it at 8 bits with
 // margin, which is where quality is still close to full precision. A
 // modular pipeline is never quantised; its models take turns on the card
-// when they do not all fit, so a card with room for most of it does, and
-// a second card would sit idle.
+// when they do not all fit, so a card with room for most of it does. On a
+// two-card machine the worker puts its text encoder on the second card and
+// the rest whole on the first, which is the fast way for MiniMax-H3.
 function recommendedGb(gb, modular = false) {
   return gb ? gb * (modular ? 0.7 : 0.6) : null;
 }

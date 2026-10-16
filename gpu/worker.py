@@ -126,6 +126,7 @@ def load(req):
 MODE_NOTES = {
     "gpu": "",
     "multi-gpu": "Spread across the machine's cards.",
+    "two-cards": "Spread over the machine's two cards: the words are read on the second, and every pass runs whole on the first, with nothing swapped from the machine's memory.",
     "8-bit": "Loaded at 8 bits to fit the card: a little lower quality than full precision.",
     "4-bit": "Loaded at 4 bits to fit the card: noticeably lower quality and slower; a bigger card would do better.",
     "offload": "Bigger than the card: streamed through it from the machine's memory, slowly.",
@@ -361,6 +362,8 @@ def load_modular(model_dir, dtype, weights, n, first, total):
         if n and needed * 1.15 < first:
             pipe.to("cuda")
             mode = "gpu"
+        elif n > 1 and on_two_cards(pipe, first):
+            mode = "two-cards"
         elif n:
             manager.enable_auto_cpu_offload(device="cuda", memory_reserve_margin="12GB")
             mode = "turns"
@@ -374,6 +377,75 @@ def load_modular(model_dir, dtype, weights, n, first, total):
     if workflow:
         say({"progress": 0, "note": f"loaded for the {workflow} workflow: {needed:.0f} GB of {weights:.0f}"})
     return pipe, mode
+
+
+def on_two_cards(pipe, first):
+    """A modular pipeline too big for one card, on a machine with two: the
+    text encoder, which reads the words once per clip, goes whole on the
+    second card; the transformer and the decoders go whole on the first,
+    where every pass then runs at full speed with nothing swapped in from
+    the machine's memory (MiniMax-H3: a 62 GB encoder beside 72 GB of the
+    rest, where one 141 GB card holds neither set with room to work).
+
+    The blocks build the encoder's inputs on the pipeline's device and
+    call the encoder's inner model directly, so hooks on the encoder move
+    whatever arrives onto its own card, and a top-level call's answers
+    back; the pipeline is made to keep reporting the first card as its
+    device, so latents, noise and timesteps are made there. Anything that
+    goes wrong leaves the pipeline as it was, for the next way of loading."""
+    import torch
+
+    te = getattr(pipe, "text_encoder", None)
+    if not isinstance(te, torch.nn.Module) or torch.cuda.device_count() < 2:
+        return False
+
+    def gb(module):
+        return sum(p.numel() * p.element_size() for p in module.parameters()) / 1024**3
+
+    rest = [m for name, m in pipe.components.items() if isinstance(m, torch.nn.Module) and m is not te]
+    second = torch.cuda.get_device_properties(1).total_memory / 1024**3
+    if sum(gb(m) for m in rest) * 1.15 >= first or gb(te) * 1.1 >= second:
+        return False
+    main, other = torch.device("cuda:0"), torch.device("cuda:1")
+
+    def move(x, device):
+        if torch.is_tensor(x):
+            return x.to(device)
+        if isinstance(x, tuple):
+            return tuple(move(v, device) for v in x)
+        if isinstance(x, list):
+            return [move(v, device) for v in x]
+        if isinstance(x, dict):
+            for k in list(x.keys()):
+                x[k] = move(x[k], device)
+            return x
+        return x
+
+    def inputs_over(module, args, kwargs):
+        return move(args, other), move(kwargs, other)
+
+    def answers_back(module, args, output):
+        return move(output, main)
+
+    try:
+        te.to(other)
+        for m in rest:
+            m.to(main)
+        inner = getattr(te, "model", None)
+        te.register_forward_pre_hook(inputs_over, with_kwargs=True)
+        te.register_forward_hook(answers_back)
+        if isinstance(inner, torch.nn.Module) and inner is not te:
+            inner.register_forward_pre_hook(inputs_over, with_kwargs=True)
+        pipe.__class__ = type(f"{type(pipe).__name__}OnTwoCards", (type(pipe),), {"device": property(lambda self: main), "_execution_device": property(lambda self: main)})
+        return True
+    except Exception as err:  # noqa: BLE001
+        say({"progress": 0, "note": f"could not spread the model over the two cards ({type(err).__name__}: {str(err)[:160]}); its models take turns on one instead"})
+        with contextlib.suppress(Exception):
+            te.to("cpu")
+            for m in rest:
+                m.to("cpu")
+            torch.cuda.empty_cache()
+        return False
 
 
 def modular_facts(pipe):

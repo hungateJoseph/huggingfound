@@ -246,7 +246,13 @@ The machine takes two to four minutes to start. Meanwhile:
   Anthropic key there is a third, Scene: Claude lays the words out as
   shots (review mode "scene": the length asked and the model's one-shot
   range go to it; it answers "Shot N (T s): ..." lines, cut at rest, each
-  repeating who and where). A scene goes by way of "Preview Claude's
+  repeating who and where). On a two-card machine (the 282 GB size) the
+  worker puts a modular pipeline's text encoder on the second card and
+  the transformer and decoders whole on the first (`on_two_cards`, mode
+  "two-cards"), so MiniMax-H3 runs every pass at full speed instead of
+  taking turns from the machine's memory; the pipeline is made to report
+  the first card as its device, and hooks on the encoder move its inputs
+  over and a top-level call's answers back. Image version 10. A scene goes by way of "Preview Claude's
   scene setup", which stands in for Generate and Add to queue: the shots
   show as editable rows (length and words, add and remove), then
   "Generate this scene", "Add to queue" or "Discard". The preview works
