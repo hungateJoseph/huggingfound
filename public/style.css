@@ -491,6 +491,11 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .suggest { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
 .suggest p { margin: 0 0 6px; }
 .suggest textarea { font: inherit; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; width: 100%; background: var(--surface); color: var(--ink); resize: vertical; }
+.shots { margin: 6px 0; padding-left: 22px; }
+.shots li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: start; margin: 6px 0; }
+.shots .shot-len { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); padding-top: 6px; }
+.shots .shot-seconds { width: 60px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.shots .shot-remove { font-size: 13px; padding: 4px 10px; margin-top: 4px; }
 .try .autosave { margin: 6px 0 0; display: block; }
 .try .autosave input[type=number] { width: 72px; margin: 0 4px; }
 .kept-head { margin-top: 18px; }

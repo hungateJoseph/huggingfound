@@ -127,6 +127,19 @@ test("expanding a description asks for prose a model follows, with the avoid lis
   assert.throws(() => buildRequest({ kind: "prompt", mode: "other", prompt: "x" }), /Unknown/);
 });
 
+test("a scene is laid out as shots within the model's range, cut at rest, each repeating who and where", () => {
+  const req = buildRequest({ kind: "prompt", mode: "scene", clip: true, model: "wan", prompt: "a man on a trampoline does a front flip, falls, then a backflip; the camera pans to his father", seconds: 12, minSeconds: 1, maxSeconds: 5, negative: "blurry" });
+  assert.match(req.system, /cut at moments of rest, never in the middle of a movement[\s\S]*repeats the subject, their clothes, the setting and the light[\s\S]*Shot 1 \(8 s\):/);
+  assert.equal(req.max_tokens, 6000);
+  assert.match(req.messages[0].content, /video model \(wan\)\. The model makes 1 to 5 seconds in one go; the whole scene should run about 12 seconds\.[\s\S]*<scene>\na man on a trampoline[\s\S]*<\/scene>[\s\S]*avoid: blurry\. Leave those out[\s\S]*Reply with only the shot lines\./);
+  const fromPicture = buildRequest({ kind: "prompt", mode: "scene", clip: true, prompt: "she walks to the window", seconds: 10, minSeconds: 5, maxSeconds: 15, image: { media_type: "image/png", data: PNG.toString("base64") } });
+  assert.match(fromPicture.system, /must be kept exactly/);
+  assert.equal(fromPicture.messages[0].content[0].type, "image");
+  assert.match(fromPicture.messages[0].content[1].text, /The first shot starts from the picture shown/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "scene", prompt: "x", minSeconds: 1, maxSeconds: 5 }), /needs a length/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "scene", prompt: " ", seconds: 10, minSeconds: 1, maxSeconds: 5 }), /happens in the scene/);
+});
+
 test("bad requests are refused before anything is sent", () => {
   assert.throws(() => buildRequest({ kind: "text", question: "q", answer: "  " }), ReviewError);
   assert.throws(() => buildRequest({ kind: "image", file: "notes.txt" }, { outputDir }), /not a picture/);

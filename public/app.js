@@ -2224,18 +2224,29 @@ function renderImage(box, t) {
   // long one, which is pieces joined. The kind and the length asked for
   // each are kept.
   const canLong = Boolean(spec) && longMax > spec.maxSeconds;
+  // A scene: Claude lays a sequence of events out as shots, each with its
+  // own description and length, made as pieces are.
+  const canScene = canLong && claudeAvailable();
+  const sceneMin = spec ? Math.min(longMax, spec.minSeconds * 2) : 0;
   let clipKind = "short";
   let longSeconds = 30;
+  let sceneSeconds = 30;
   try {
-    if (canLong && localStorage.getItem("clipKind") === "long") clipKind = "long";
+    const k = localStorage.getItem("clipKind");
+    if (canLong && k === "long") clipKind = "long";
+    if (canScene && k === "scene") clipKind = "scene";
     longSeconds = Number(localStorage.getItem(`longSeconds:${t.repo}`)) || 30;
+    sceneSeconds = Number(localStorage.getItem(`sceneSeconds:${t.repo}`)) || 30;
   } catch {
     // no storage
   }
-  if (spec) longSeconds = Math.min(longMax, Math.max(spec.maxSeconds + 1, Math.round(longSeconds)));
+  if (spec) {
+    longSeconds = Math.min(longMax, Math.max(spec.maxSeconds + 1, Math.round(longSeconds)));
+    sceneSeconds = Math.min(longMax, Math.max(sceneMin, Math.round(sceneSeconds)));
+  }
   let shortSeconds = spec?.defaultSeconds ?? 0;
-  const lengthRange = (kind) => (kind === "long" ? { min: spec.maxSeconds + 1, max: longMax, value: longSeconds } : { min: spec.minSeconds, max: spec.maxSeconds, value: shortSeconds });
-  const lengthHelp = (kind) => (kind === "long" ? `${spec.maxSeconds + 1} to ${longMax} seconds, made as pieces of at most ${spec.maxSeconds} s, each starting where the last ended, then joined on the machine into one clip; each piece comes out at the nearest length the model's frames allow.` : `${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.`);
+  const lengthRange = (kind) => (kind === "scene" ? { min: sceneMin, max: longMax, value: sceneSeconds } : kind === "long" ? { min: spec.maxSeconds + 1, max: longMax, value: longSeconds } : { min: spec.minSeconds, max: spec.maxSeconds, value: shortSeconds });
+  const lengthHelp = (kind) => (kind === "scene" ? `${sceneMin} to ${longMax} seconds in all. Claude chooses the shots, each ${spec.minSeconds} to ${spec.maxSeconds} s, with lengths adding up to this; you see and change them before anything is sent.` : kind === "long" ? `${spec.maxSeconds + 1} to ${longMax} seconds, made as pieces of at most ${spec.maxSeconds} s, each starting where the last ended, then joined on the machine into one clip; each piece comes out at the nearest length the model's frames allow.` : `${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.`);
   const qualities = plan?.qualities ?? {};
   const options = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === saved ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
   const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
@@ -2257,6 +2268,7 @@ function renderImage(box, t) {
       <div class="quality clip-kind" id="clip-kind">
         <label><input type="radio" name="clipKind" value="short" ${clipKind === "short" ? "checked" : ""}> <b>Short clip</b> <span class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot: one continuous motion, as the model makes it</span></label>
         <label><input type="radio" name="clipKind" value="long" ${clipKind === "long" ? "checked" : ""}> <b>Long clip</b> <span class="muted">${spec.maxSeconds + 1} to ${longMax} seconds, made as pieces of at most ${spec.maxSeconds} s that each start where the last ended, then joined into one; a soft seam at each join</span></label>
+        ${canScene ? `<label><input type="radio" name="clipKind" value="scene" ${clipKind === "scene" ? "checked" : ""}> <b>Scene</b> <span class="muted">a sequence of events, ${sceneMin} to ${longMax} seconds: Claude lays it out as shots, each with its own description and length, shown here to change before anything is sent; the shots are made one after another, each starting where the last ended, then joined into one. The shots stand in for the High expansion</span></label>` : ""}
       </div>` : ""}
       <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${lengthRange(clipKind).min}" max="${lengthRange(clipKind).max}" step="1" value="${lengthRange(clipKind).value}"><small class="muted" id="seconds-help">${lengthHelp(clipKind)}</small></label>
       <div class="effort-title">Quality</div>
@@ -2367,13 +2379,17 @@ function renderImage(box, t) {
     const range = lengthRange(kind);
     const asked = Math.min(range.max, Math.max(range.min, Number(box.querySelector("#video-seconds")?.value) || range.value));
     // Longer than one shot: equal pieces, each within the model's length.
-    const pieces = asked > spec.maxSeconds ? Math.ceil(asked / spec.maxSeconds) : 1;
+    // A scene's shots are Claude's to lay out; until then the guess is
+    // equal pieces of the model's length.
+    const scene = kind === "scene";
+    const pieces = scene ? Math.max(2, Math.ceil(asked / spec.maxSeconds)) : asked > spec.maxSeconds ? Math.ceil(asked / spec.maxSeconds) : 1;
     const seconds = asked / pieces;
     const each = clipEstimate(spec, lvl, seconds, t.repo);
-    const q = { steps: each.level.steps, width: each.level.width, height: each.level.height, frames: each.frames, fps: spec.fps, cfg: spec.cfg, ...(each.level.expand ? { expand: true } : {}) };
+    const q = { steps: each.level.steps, width: each.level.width, height: each.level.height, frames: each.frames, fps: spec.fps, cfg: spec.cfg, ...(each.level.expand && !scene ? { expand: true } : {}) };
     const eachText = `${(each.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${each.level.steps} steps`;
     const estimate = pieces > 1 ? { ...each, seconds: each.seconds * pieces } : each;
-    return { level: lvl, seconds, pieces, q, eachText, text: pieces > 1 ? `${((each.frames * pieces) / spec.fps).toFixed(1)} s as ${pieces} pieces of ${eachText}` : eachText, estimate, each };
+    const text = scene ? `about ${asked} s as a scene of shots laid out by Claude, at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${each.level.steps} steps` : pieces > 1 ? `${((each.frames * pieces) / spec.fps).toFixed(1)} s as ${pieces} pieces of ${eachText}` : eachText;
+    return { kind, asked, level: lvl, seconds, pieces, q, eachText, text, estimate, each };
   };
   const refreshEstimate = () => {
     const el = box.querySelector("#estimate");
@@ -2382,7 +2398,7 @@ function renderImage(box, t) {
     const est = c.estimate;
     const load = loadSeconds(t.repo);
     const each = c.each ?? est;
-    const shape = c.pieces > 1 ? `a ${((each.frames * c.pieces) / spec.fps).toFixed(1)}-second clip made as ${c.pieces} pieces of ${(each.frames / spec.fps).toFixed(1)} s at ${each.level.width} by ${each.level.height}, ${each.frames} frames each, ${each.level.steps} steps, each starting where the last ended, then joined (a soft seam at each join)` : `a ${(each.frames / spec.fps).toFixed(1)}-second clip at ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${each.level.steps} steps`;
+    const shape = c.kind === "scene" ? `a scene of about ${c.asked} seconds, made as shots Claude lays out (guessed here as ${c.pieces} of about ${(each.frames / spec.fps).toFixed(1)} s) at ${each.level.width} by ${each.level.height}, ${each.level.steps} steps, each starting where the last ended, then joined (a soft seam at each cut)` : c.pieces > 1 ? `a ${((each.frames * c.pieces) / spec.fps).toFixed(1)}-second clip made as ${c.pieces} pieces of ${(each.frames / spec.fps).toFixed(1)} s at ${each.level.width} by ${each.level.height}, ${each.frames} frames each, ${each.level.steps} steps, each starting where the last ended, then joined (a soft seam at each join)` : `a ${(each.frames / spec.fps).toFixed(1)}-second clip at ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${each.level.steps} steps`;
     el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""}${c.pieces > 1 ? " in all" : ""} for ${shape}${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}`;
     // Above what this machine has run out of memory at: said before asking.
     const limit = memoryLimit(t.repo);
@@ -2409,10 +2425,11 @@ function renderImage(box, t) {
     const kind = canLong ? box.querySelector("input[name=clipKind]:checked")?.value ?? "short" : "short";
     const n = Number(box.querySelector("#video-seconds").value);
     if (n) {
-      if (kind === "long") {
-        longSeconds = n;
+      if (kind === "long" || kind === "scene") {
+        if (kind === "long") longSeconds = n;
+        else sceneSeconds = n;
         try {
-          localStorage.setItem(`longSeconds:${t.repo}`, String(n));
+          localStorage.setItem(`${kind}Seconds:${t.repo}`, String(n));
         } catch {
           // no storage
         }
@@ -2491,7 +2508,7 @@ function renderImage(box, t) {
   const makeItem = (prompt) => {
     const c = chosen();
     const typed = $("#image-negative").value.trim();
-    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, pieces: c.pieces ?? 1, each: c.eachText ?? c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null };
+    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, pieces: c.pieces ?? 1, each: c.eachText ?? c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null, ...(c.kind === "scene" ? { scene: true, sceneSeconds: c.asked, shots: null } : {}) };
   };
   // The queue: several requests, run one after another by one click. It is
   // kept in this browser under the model, so leaving the window or the page
@@ -2589,6 +2606,7 @@ function renderImage(box, t) {
   // change or to set aside. What is sent is what is in the box, as it
   // stands, with nobody reading it again.
   async function withExpansion(item) {
+    if (item.scene && !item.shots) return withScene(item);
     const el = box.querySelector("#suggest");
     if (!item.expand || item.expanded || !claudeAvailable() || !el) return [];
     el.hidden = false;
@@ -2615,6 +2633,87 @@ function renderImage(box, t) {
         item.expand = false;
         el.hidden = true;
         resolve(["Sending your words as typed."]);
+      });
+    });
+  }
+
+  // A scene: Claude lays the description out as shots, each with its own
+  // words and length, shown first to change, add to or cut. What is in the
+  // rows is what goes, shot by shot, with nobody reading it again. With no
+  // shots, the words go as one long clip of equal pieces.
+  async function withScene(item) {
+    const el = box.querySelector("#suggest");
+    const level = item.level ?? "medium";
+    const asPlain = (line) => {
+      const pieces = Math.max(1, Math.ceil(item.sceneSeconds / spec.maxSeconds));
+      const each = clipEstimate(spec, level, item.sceneSeconds / pieces, t.repo);
+      item.scene = false;
+      item.shots = null;
+      item.pieces = pieces;
+      item.q = { ...item.q, frames: each.frames };
+      item.each = `${(each.frames / spec.fps).toFixed(1)} s at ${level} quality, ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${each.level.steps} steps`;
+      item.settings = pieces > 1 ? `${((each.frames * pieces) / spec.fps).toFixed(1)} s as ${pieces} pieces of ${item.each}` : item.each;
+      item.estimate = { base: each.base * pieces, seconds: each.seconds * pieces };
+      return [`${line} ${pieces > 1 ? `Made as a long clip of ${pieces} equal pieces from your words instead.` : "Made as one clip from your words instead."}`];
+    };
+    if (!claudeAvailable() || !el) return asPlain("No Anthropic key for Claude to lay out the shots.");
+    el.hidden = false;
+    el.innerHTML = `<p class="muted small">Claude is laying the scene out as shots; they show here first, to change before anything is sent.</p>`;
+    const got = await sceneShots(item.prompt, item.sceneSeconds, spec, t.repo, item.negative, await startingPictureFor(item, t.repo));
+    if (!got.shots.length) {
+      el.hidden = true;
+      return asPlain(`Claude laid out no shots (${got.why}).`);
+    }
+    return new Promise((resolve) => {
+      el.innerHTML = `<p class="muted small"><b>The scene as shots.</b> Each is made on its own, starting from the last frame of the one before, from the words in its row as they stand here, unreviewed. Change, add or remove shots; each runs ${spec.minSeconds} to ${spec.maxSeconds} seconds, and the one after a cut should repeat who and where, since the model sees only its own words and one frame.</p>
+        <ol class="shots" id="shots"></ol>
+        <p class="tools-row"><button class="ghost" id="shot-add">Add a shot</button></p>
+        <p class="muted small" id="shots-total"></p>
+        <p class="tools-row"><button class="primary" id="shots-send">Send these shots</button><button class="ghost" id="shots-mine">Send my words as one long clip</button></p>`;
+      const list = el.querySelector("#shots");
+      const read = () => [...list.querySelectorAll("li")].map((li) => ({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds)), text: li.querySelector(".shot-text").value.trim() })).filter((s) => s.text);
+      const total = () => {
+        const shots = read();
+        const secs = shots.reduce((a, s) => a + framesFor(s.seconds, spec) / spec.fps, 0);
+        const est = shots.reduce((a, s) => a + clipEstimate(spec, level, s.seconds, t.repo).seconds, 0);
+        el.querySelector("#shots-total").textContent = shots.length ? `${shots.length} shot${shots.length === 1 ? "" : "s"}, ${secs.toFixed(1)} s in all, about ${shortDuration(est)}${price ? ` and ${money((price * est) / 3600)} of machine time` : ""}.` : "No shots: add one, or send your words as one long clip.";
+      };
+      const addRow = (shot) => {
+        const li = document.createElement("li");
+        li.innerHTML = `<label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><textarea class="shot-text" rows="2">${esc(shot.text)}</textarea><button class="ghost shot-remove" title="Remove this shot">Remove</button>`;
+        li.querySelector(".shot-remove").addEventListener("click", () => {
+          li.remove();
+          total();
+        });
+        li.querySelector(".shot-seconds").addEventListener("input", total);
+        li.querySelector(".shot-text").addEventListener("input", total);
+        list.append(li);
+      };
+      for (const s of got.shots) addRow(s);
+      total();
+      el.querySelector("#shot-add").addEventListener("click", () => {
+        addRow({ seconds: spec.minSeconds, text: "" });
+        list.lastElementChild.querySelector(".shot-text").focus();
+        total();
+      });
+      el.querySelector("#shots-send").addEventListener("click", () => {
+        const shots = read();
+        if (!shots.length) return;
+        el.hidden = true;
+        item.shots = shots.map((s) => ({ seconds: framesFor(s.seconds, spec) / spec.fps, frames: framesFor(s.seconds, spec), text: s.text }));
+        item.shotsEdited = shots.length !== got.shots.length || shots.some((s, i) => s.text !== got.shots[i].text || s.seconds !== Math.min(spec.maxSeconds, Math.max(spec.minSeconds, got.shots[i].seconds)));
+        item.pieces = item.shots.length;
+        const lv = spec.levels[level] ?? spec.levels.medium;
+        const sum = item.shots.reduce((a, s) => a + s.frames, 0) / spec.fps;
+        const ests = item.shots.map((s) => clipEstimate(spec, level, s.seconds, t.repo));
+        item.settings = `${sum.toFixed(1)} s as a scene of ${item.pieces} shots at ${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} steps`;
+        item.each = `${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} steps`;
+        item.estimate = { base: ests.reduce((a, e) => a + e.base, 0), seconds: ests.reduce((a, e) => a + e.seconds, 0) };
+        resolve([]);
+      });
+      el.querySelector("#shots-mine").addEventListener("click", () => {
+        el.hidden = true;
+        resolve(asPlain("Sending your words as typed."));
       });
     });
   }
@@ -2829,7 +2928,7 @@ function renderImage(box, t) {
     const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
     // The seed the machine used, so a reply can keep to it; a machine from
     // before seeds were passed along says nothing, and that is remembered.
-    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null };
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null, shots: item.shots?.length ? item.shots : null, shotsEdited: Boolean(item.shotsEdited) };
     await keepResult(entry);
     rec.shown.add(entry.id);
     const name = `${kind === "video" ? "clip" : "image"}-${entry.id}.${kind === "video" ? "mp4" : "png"}`;
@@ -2876,12 +2975,20 @@ function renderImage(box, t) {
   const onStatusFor = (text) => rec.onStatus?.(text);
   async function runPieces(item, openedFor, say) {
     const group = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    say(`A ${((item.q.frames * item.pieces) / spec.fps).toFixed(1)}-second clip, made as ${item.pieces} pieces of ${(item.q.frames / spec.fps).toFixed(1)} s, each starting where the last ended, then joined.`);
+    const shots = item.shots?.length ? item.shots : null;
+    const lv = spec.levels[item.level] ?? spec.levels.medium;
+    if (shots) {
+      say(`Scene of ${(shots.reduce((a, s) => a + s.frames, 0) / spec.fps).toFixed(1)} seconds in ${shots.length} shots, laid out by Claude${item.shotsEdited ? ", with your changes" : ""}, each starting where the last ended, then joined:`);
+      shots.forEach((s, i) => say(`  Shot ${i + 1} (${s.seconds.toFixed(1)} s): ${s.text}`));
+    } else say(`A ${((item.q.frames * item.pieces) / spec.fps).toFixed(1)}-second clip, made as ${item.pieces} pieces of ${(item.q.frames / spec.fps).toFixed(1)} s, each starting where the last ended, then joined.`);
     const entries = [];
     let prev = null;
     for (let k = 1; k <= item.pieces; k++) {
-      const piece = { ...item, pieces: 1, piece: { group, index: k, of: item.pieces }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: k === 1 ? item.expand : false, expanded: item.expanded ?? null, expandSaid: k > 1 ? true : item.expandSaid, estimate: item.estimate ? { base: item.estimate.base, seconds: Math.round(item.estimate.seconds / item.pieces) } : null, settings: `piece ${k} of ${item.pieces}, ${item.each ?? item.settings}` };
-      say(`Piece ${k} of ${item.pieces}${prev ? ", from the last frame of the one before" : ""}`);
+      const shot = shots?.[k - 1] ?? null;
+      const piece = shot
+        ? { ...item, prompt: shot.text, q: { ...item.q, frames: shot.frames }, scene: false, shots: null, pieces: 1, piece: { group, index: k, of: item.pieces, shot: true }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: false, expanded: null, expandSaid: true, estimate: { base: clipEstimate(spec, item.level, shot.seconds, t.repo).base, seconds: clipEstimate(spec, item.level, shot.seconds, t.repo).seconds }, settings: `shot ${k} of ${item.pieces}, ${shot.seconds.toFixed(1)} s at ${item.level} quality, ${lv.width} by ${lv.height}, ${shot.frames} frames, ${lv.steps} steps` }
+        : { ...item, pieces: 1, piece: { group, index: k, of: item.pieces }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: k === 1 ? item.expand : false, expanded: item.expanded ?? null, expandSaid: k > 1 ? true : item.expandSaid, estimate: item.estimate ? { base: item.estimate.base, seconds: Math.round(item.estimate.seconds / item.pieces) } : null, settings: `piece ${k} of ${item.pieces}, ${item.each ?? item.settings}` };
+      say(`${shot ? "Shot" : "Piece"} ${k} of ${item.pieces}${prev ? ", from the last frame of the one before" : ""}`);
       const req = { item: piece, args: await requestArgs(piece, say) };
       if (piece.expanded) item.expanded = piece.expanded;
       await agentBatch(t.agent, [req], say, {
@@ -2913,7 +3020,7 @@ function renderImage(box, t) {
     const job = await followJob(t.agent, id, say);
     job.took = null;
     const total = entries.reduce((a, e) => a + (e.q?.frames ?? 0), 0) / spec.fps;
-    await finishResult({ item: { ...item, settings: `${total.toFixed(1)} s in ${entries.length} pieces, ${item.each ?? ""}`.replace(/, $/, ""), piece: { group, joined: entries.length }, estimate: null, after: entries.at(-1).id, replyTo: null, continues: null, expanded: item.expanded ?? null }, args: null }, job, openedFor, say);
+    await finishResult({ item: { ...item, settings: shots ? `${total.toFixed(1)} s as a scene of ${entries.length} shots, ${item.each ?? ""}`.replace(/, $/, "") : `${total.toFixed(1)} s in ${entries.length} pieces, ${item.each ?? ""}`.replace(/, $/, ""), piece: { group, joined: entries.length }, estimate: null, after: entries.at(-1).id, replyTo: null, continues: null, expanded: item.expanded ?? null }, args: null }, job, openedFor, say);
   }
 
   // Runs requests: one from the Generate button, several from the queue,
@@ -4292,7 +4399,7 @@ function rememberQueue(repo, items) {
 // What a result is, in a line: what it answers, the words asked, what
 // Claude expanded them into, and the settings.
 function captionText(e) {
-  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
+  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.shots ? `a scene of ${e.shots.length} shots laid out by Claude${e.shotsEdited ? " and edited" : ""}: ${e.shots.map((s, i) => `${i + 1} (${Number(s.seconds).toFixed(1)} s) ${s.text}`).join(" / ")}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
 }
 
 // The settings of a result kept before they were kept with it, read back
@@ -4367,6 +4474,23 @@ async function startingPictureFor(item, repo) {
 
 // Claude expands a short description into the detailed one these models do
 // best with; or says why not, and the words go as they are.
+// A scene laid out by Claude as shots, each with a length and a
+// description, read from lines of the form "Shot 1 (8 s): ...".
+async function sceneShots(prompt, seconds, spec, model, negative, image = null) {
+  const got = await claudeText({ kind: "prompt", mode: "scene", clip: true, model, prompt, negative, seconds, minSeconds: spec.minSeconds, maxSeconds: spec.maxSeconds, ...(image ? { image } : {}) });
+  if (!got.text) return { shots: [], why: got.why };
+  const shots = parseShots(got.text);
+  return { shots, why: shots.length ? "" : "Claude wrote no Shot lines" };
+}
+function parseShots(text) {
+  const shots = [];
+  for (const line of String(text).split(/\n+/)) {
+    const m = line.match(/^\s*(?:[-*]\s*)?shot\s*\d+\s*\(\s*(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)?\s*\)\s*[:.\u2013-]\s*(.+)$/i);
+    if (m) shots.push({ seconds: Number(m[1]), text: m[2].trim() });
+  }
+  return shots;
+}
+
 async function expandWords(prompt, clip, model, negative, image = null) {
   const got = await claudeText({ kind: "prompt", mode: "expand", clip, model, prompt, negative, ...(image ? { image } : {}) });
   if (got.text && got.text.length <= prompt.length) return { text: "", why: "Claude's description was no longer than yours" };

@@ -88,6 +88,19 @@ Why: one or two plain sentences on what you changed and why
 
 Plain text only; no markdown.`;
 
+// A scene laid out as shots: each shot is a piece the model makes in one
+// go from the last frame of the shot before, with its own description and
+// length, so a sequence of events happens in order instead of the same
+// words going to every piece.
+const SCENE_SYSTEM = `You write shot lists for open-source video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos. Everyday actions are described plainly and literally, as in a shooting script. The person describes a sequence of events longer than the model makes in one go. Lay it out as shots. Each shot is made separately by the same model, starting from the last frame of the shot before, so: cut at moments of rest, never in the middle of a movement (a jump, a turn, a fall); every shot's description stands on its own and repeats the subject, their clothes, the setting and the light in the same words, since the model making it sees only that text and one still frame; anyone who is to appear later is already in frame in the shot before; the camera is still unless a movement is asked for. Use as few shots as the events allow, each within the length range given, with the lengths adding up to the total asked for, give or take a second. Keep every element the person named and add nothing that changes what they asked for. Such models read plain descriptive prose, not instructions, "no" or "not".
+
+Reply with only the shots, one per line, each in this form and nothing else:
+
+Shot 1 (8 s): the description, 30 to 80 words, one paragraph
+Shot 2 (7 s): the next description
+
+Plain text only; no heading, no markdown, no comment.`;
+
 // With a starting picture, the words must defer to it: the person, the
 // clothes, the place and the light are already decided, and a description
 // that re-imagines them has the model replace them. Added to the brief for
@@ -201,6 +214,22 @@ export function buildRequest(input, { outputDir } = {}) {
     const parts = [`The clip was made${input.model ? ` by ${input.model}` : ""} from this description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, `What happens next:`, `<next>\n${request}\n</next>`, ...(picture ? ["The next clip starts from the frame shown: the person, clothes, place and light in it are to be kept."] : []), "Reply with only the description of the next clip."];
     const text = parts.join("\n\n");
     return { ...base, max_tokens: 4000, system: picture ? CONTINUE_SYSTEM + WITH_PICTURE : CONTINUE_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
+  }
+  if (input.kind === "prompt" && input.mode === "scene") {
+    const prompt = String(input.prompt ?? "").trim();
+    if (!prompt) throw new ReviewError("Say what happens in the scene.");
+    const total = Number(input.seconds);
+    const min = Number(input.minSeconds);
+    const max = Number(input.maxSeconds);
+    if (!(total > 0 && min > 0 && max >= min)) throw new ReviewError("The scene needs a length and the model's shot range.");
+    const negative = String(input.negative ?? "").trim();
+    const picture = pictureOf(input);
+    const parts = [`Lay out this scene as shots for a video model${input.model ? ` (${input.model})` : ""}. The model makes ${min} to ${max} seconds in one go; the whole scene should run about ${total} seconds.`, `<scene>\n${prompt}\n</scene>`];
+    if (negative) parts.push(`It is asked to avoid: ${negative}. Leave those out of the descriptions.`);
+    if (picture) parts.push("The first shot starts from the picture shown: the person, clothes, place and light in it are to be kept through every shot, and each description should say so.");
+    parts.push("Reply with only the shot lines.");
+    const text = parts.join("\n\n");
+    return { ...base, max_tokens: 6000, system: picture ? SCENE_SYSTEM + WITH_PICTURE : SCENE_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   if (input.kind === "prompt" && input.mode === "expand") {
     const prompt = String(input.prompt ?? "").trim();

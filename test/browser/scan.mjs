@@ -64,6 +64,13 @@ const reviewer = {
       onText(`Description: a woman in a bright gym doing jumping jacks in bare feet, feet apart as her hands meet overhead, then together as her arms come down; medium shot, camera still, whole body in frame.${input.image ? " She stays as she is in the picture." : ""}\nAvoid: socks, shoes, zooming in, closed eyes\nWhy: Spelt out the motion and moved what you did not want into the avoid list, since the model cannot read "not".`);
       return { declined: false, model: "claude-opus-5", note: "" };
     }
+    // A scene as shots, each with its length and its own words; one that
+    // cannot be laid out comes back without Shot lines.
+    if (input.mode === "scene") {
+      if (/no shots please/.test(input.prompt)) onText("I cannot lay this one out as shots.");
+      else onText("Shot 1 (4 s): a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still\nShot 2 (3 s): the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, sunny back garden\nShot 3 (5 s): the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence");
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
     // The next shot: what happens next, as the scene goes on.
     if (input.mode === "continue") {
       onText(`${input.request.replace(/^ok, now /, "")}, the scene going on`);
@@ -1316,7 +1323,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.waitForSelector("#video-seconds");
   // A short clip is one shot; a long one, on a model that starts from a
   // picture, is pieces joined: chosen apart, each with its own lengths.
-  assert.deepEqual(await visitor.$$eval("#clip-kind input", (els) => els.map((e) => [e.value, e.checked])), [["short", true], ["long", false]]);
+  assert.deepEqual(await visitor.$$eval("#clip-kind input", (els) => els.map((e) => [e.value, e.checked])), [["short", true], ["long", false], ["scene", false]]);
   assert.match(await visitor.locator("#clip-kind").innerText(), /Short clip\s+1 to 5 seconds in one shot: one continuous motion[\s\S]*Long clip\s+6 to 30 seconds, made as pieces of at most 5 s that each start where the last ended, then joined into one; a soft seam at each join/);
   assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["3", "1", "5"], "a short clip is 1 to 5 seconds");
   assert.match(await visitor.locator("#seconds-help").innerText(), /^1 to 5 seconds in one shot at 16 frames a second; the clip comes out/);
@@ -1473,6 +1480,48 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   const cont = visitor.locator("#image-out .image-card", { hasText: "Continues an earlier clip" });
   assert.equal(await cont.count(), 1);
   assert.match(await cont.locator(".caption").innerText(), /^Continues an earlier clip \("ok, now the ice melts and the river runs again"\) · the ice melts and the river runs again, the scene going on · 4\.1 s at low quality/);
+  // A scene: Claude lays the words out as shots, each with its own
+  // description and length, shown first to change; each shot is made from
+  // the last frame of the one before, then all are joined.
+  assert.match(await visitor.locator("#clip-kind").innerText(), /Scene\s+a sequence of events, 2 to 30 seconds: Claude lays it out as shots, each with its own description and length, shown here to change before anything is sent/);
+  await visitor.click("#clip-kind input[value=scene]");
+  assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["30", "2", "30"]);
+  assert.match(await visitor.locator("#seconds-help").innerText(), /^2 to 30 seconds in all\. Claude chooses the shots, each 1 to 5 s/);
+  await visitor.fill("#video-seconds", "12");
+  assert.match(await visitor.locator("#estimate").innerText(), /in all for a scene of about 12 seconds, made as shots Claude lays out \(guessed here as 3 of about 4\.1 s\) at 832 by 480, 20 steps, each starting where the last ended, then joined \(a soft seam at each cut\)/);
+  const sceneBefore = rentedAgent.state.jobs.length;
+  await visitor.fill("#image-prompt", "a man on a trampoline does a front flip, falls on his face, then a backflip; the camera pans to his father applauding");
+  await visitor.click("#image-go");
+  await visitor.waitForSelector("#shots li");
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).seconds, reviewed.at(-1).minSeconds, reviewed.at(-1).maxSeconds, reviewed.at(-1).clip], ["scene", 12, 1, 5, true], "Claude is told the length and the model's shot range");
+  assert.equal(await visitor.locator("#shots li").count(), 3);
+  assert.deepEqual(await visitor.$$eval("#shots .shot-seconds", (els) => els.map((e) => e.value)), ["4", "3", "5"]);
+  assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 12\.2 s in all, about /);
+  // Changed by hand: one shot's words, another's length, a fourth added
+  // then removed; nothing goes back to Claude.
+  const sceneReviews = reviewed.length;
+  await visitor.fill("#shots li:nth-child(2) .shot-text", "the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, bare feet, sunny back garden");
+  await visitor.fill("#shots li:nth-child(3) .shot-seconds", "4");
+  await visitor.click("#shot-add");
+  assert.equal(await visitor.locator("#shots li").count(), 4);
+  await visitor.locator("#shots li:nth-child(4) .shot-remove").click();
+  assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 11\.2 s in all/);
+  await visitor.click("#shots-send");
+  assert.equal(reviewed.length, sceneReviews, "the edited shots are not sent back to Claude");
+  await visitor.waitForFunction(() => /Joining the 3 pieces/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
+  await visitor.waitForFunction(() => /11\.2 s as a scene of 3 shots/.test(document.querySelector("#image-out")?.textContent ?? ""), null, { timeout: 30000 });
+  const shotJobs = rentedAgent.state.jobs.slice(sceneBefore, sceneBefore + 3);
+  assert.deepEqual(shotJobs.map((j) => [j.prompt, j.frames, j.init ? j.init.slice(0, 22) : null]), [["a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still", 65, null], ["the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, bare feet, sunny back garden", 49, "data:image/png;base64,"], ["the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence", 65, "data:image/png;base64,"]], "each shot goes with its own words and length, the later ones from the frame before");
+  assert.match(await visitor.locator("#image-log").innerText(), /Scene of 11\.2 seconds in 3 shots, laid out by Claude, with your changes, each starting where the last ended, then joined:\n\s+Shot 1 \(4\.1 s\): a man in a grey T-shirt[\s\S]*Shot 1 of 3\n[\s\S]*Shot 2 of 3, from the last frame of the one before[\s\S]*Shot 3 of 3/);
+  const sceneCard = visitor.locator("#image-out .image-card", { hasText: "as a scene of 3 shots" });
+  assert.match(await sceneCard.locator(".caption").innerText(), /a scene of 3 shots laid out by Claude and edited: 1 \(4\.1 s\) a man in a grey T-shirt[\s\S]*2 \(3\.1 s\)[\s\S]*3 \(4\.1 s\)[\s\S]*11\.2 s as a scene of 3 shots, low quality, 832 by 480, 20 steps/);
+  // No shot lines from Claude: the words go as one clip, or as equal pieces when the length needs them.
+  await visitor.fill("#video-seconds", "2");
+  await visitor.fill("#image-prompt", "no shots please");
+  await visitor.click("#image-go");
+  await visitor.waitForFunction(() => /Claude laid out no shots \(Claude wrote no Shot lines\)\. Made as one clip from your words instead\./.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 20000 });
+  assert.deepEqual([rentedAgent.state.jobs.at(-1).prompt, rentedAgent.state.jobs.at(-1).frames], ["no shots please", 33]);
   await visitor.click("#clip-kind input[value=short]");
   await visitor.fill("#video-seconds", "3");
   await visitor.fill("#image-prompt", "");
@@ -1481,10 +1530,10 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   // The machine is stopped, so the window offers to start it; the clips show all the same.
   await visitor.waitForSelector("#kept .image-card");
-  assert.equal(await visitor.locator("#kept .image-card").count(), 9, "the two clips, the reply, the unexpanded one, the three pieces, the joined clip and the continuation");
-  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*9 results made with this model[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
+  assert.equal(await visitor.locator("#kept .image-card").count(), 14, "the two clips, the reply, the unexpanded one, the three pieces, the joined clip, the continuation, the three shots, the joined scene and the clip made without shots");
+  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*14 results made with this model[\s\S]*no shots please[\s\S]*as a scene of 3 shots[\s\S]*shot 3 of 3[\s\S]*shot 1 of 3[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
   await visitor.locator("#kept .kept-remove").first().click();
-  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 8);
+  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 13);
   await visitor.keyboard.press("Escape");
   // The machine stopped as asked; started again, and the clip model taken
   // off the stand-in machine, for what follows.

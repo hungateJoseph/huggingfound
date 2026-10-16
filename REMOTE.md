@@ -234,7 +234,15 @@ The machine takes two to four minutes to start. Meanwhile:
   form offers the two apart: Short clip (one shot, the model's own range)
   and Long clip (from one second past that up to six shots' worth, a
   minute at most), each with its own length box range and remembered
-  length, and the estimate line says how it will be made. A machine from before joining
+  length, and the estimate line says how it will be made. With an
+  Anthropic key there is a third, Scene: Claude lays the words out as
+  shots (review mode "scene": the length asked and the model's one-shot
+  range go to it; it answers "Shot N (T s): ..." lines, cut at rest, each
+  repeating who and where), shown as editable rows (length and words, add
+  and remove) before anything is sent; what is in the rows goes to the
+  model shot by shot, unreviewed, each shot from the last frame of the one
+  before, then joined as "T s as a scene of N shots". No Shot lines: the
+  words go as a plain long clip of equal pieces. A machine from before joining
   leaves the pieces one by one.
 - A reply to a clip can continue it instead of changing it: the next clip
   starts from this one's last frame (the kept frame, or one read from the
