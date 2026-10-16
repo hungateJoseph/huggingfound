@@ -330,6 +330,29 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   async function catalog(count) {
     return request("GET", `/catalog/gpus?include=AVAILABILITY&product=POD&cloud=SECURE&count=${count}&minCudaVersion=${MIN_CUDA}`);
   }
+  // The data centres the catalogue says hold this card, with stock, as
+  // RunPod spells them (US-NC-1, EUR-IS-4); none when it does not say.
+  function dataCentersOf(g) {
+    const list = Array.isArray(g.dataCenters) ? g.dataCenters : [];
+    return list.map((d) => ({ id: String(d.id ?? d.dataCenterId ?? d.name ?? ""), available: !(d.availability === "NONE" || d.available === false || d.stock === "NONE") })).filter((d) => d.id);
+  }
+  // Data centres where a machine of this account sat listed as running
+  // with no container for ten minutes or more, remembered for a day: the
+  // next rent is placed elsewhere when the card is in stock elsewhere.
+  // Kept as "EUR-IS-4@1760000000000,US-KS-2@…": plain text, as the
+  // settings file and the account store both carry without quoting.
+  const SLOW_DC_MS = 24 * 3600e3;
+  function slowDataCenterEntries() {
+    return String(env().RUNPOD_SLOW_DCS || "").split(",").map((s) => s.trim().split("@")).filter(([id, at]) => id && Number(at) > 0 && now() - Number(at) < SLOW_DC_MS);
+  }
+  function slowDataCenters() {
+    return slowDataCenterEntries().map(([id]) => id);
+  }
+  function rememberSlowDataCenter(id) {
+    if (!id || slowDataCenters().includes(id)) return;
+    const kept = [...slowDataCenterEntries(), [id, String(now())]];
+    save({ RUNPOD_SLOW_DCS: kept.map(([d, at]) => `${d}@${at}`).join(",") });
+  }
   async function tiers({ fresh = false } = {}) {
     if (!fresh && options.tiers && options.key === key() && now() - options.at < OPTIONS_TTL) return options.tiers;
     const lists = {};
@@ -348,7 +371,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.secure === "number" && !(Number(g.maxCount?.secure) >= 1 && g.maxCount.secure < count));
       const free = inTier.filter((g) => g.availability && g.availability !== "NONE").sort(byPrice);
       const pick = free[0] ?? inTier.sort(byPrice)[0] ?? null;
-      const card = (g) => ({ id: g.id, name: g.name || g.id, memory: g.memory, availability: g.availability ?? "UNKNOWN", pricePerHour: g.price.secure * count });
+      const card = (g) => ({ id: g.id, name: g.name || g.id, memory: g.memory, availability: g.availability ?? "UNKNOWN", pricePerHour: g.price.secure * count, dataCenters: dataCentersOf(g) });
       return {
         gb: tier.gb,
         count,
@@ -412,6 +435,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // Why it last stopped by itself: "idle:30", "cap:50", "away:10" or "done".
       stopReason: pod.status === "EXITED" ? env().RUNPOD_LAST_STOP || null : null,
       dataCenter: pod.dataCenterId ?? null,
+      slowDataCenters: slowDataCenters(),
       startedAt: pod.startedAt ?? null,
       // Whether RunPod has a container up for the pod: one listed as
       // running whose container has not come yet (the image still being
@@ -621,6 +645,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         return { rented: false, gone: true };
       }
       const running = pod.status === "RUNNING";
+      // Ten minutes listed as running with no container: the host is not
+      // delivering, and its data centre is avoided by the next rent.
+      if (running && !pod.runtime && pod.startedAt && now() - new Date(pod.startedAt).getTime() > 10 * 60e3 && pod.dataCenterId) rememberSlowDataCenter(pod.dataCenterId);
       let ready = Boolean(last?.ready) && running;
       let imagesReady = Boolean(last?.imagesReady) && running;
       let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "", agentVersion: last?.agentVersion ?? null, agentRefused: last?.agentRefused ?? false };
@@ -684,15 +711,25 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const tried = [];
       let pod = null;
       let pick = null;
-      while (!pod && tried.length < 3) {
+      // Placement: the data centres with the card in stock, less the ones
+      // where a machine of this account never started; when RunPod has no
+      // stock among those after all, any data centre will do.
+      const avoid = slowDataCenters();
+      let preferred = null;
+      while (!pod && tried.length < 4) {
         pick = (offer?.cards ?? [offer?.gpu]).find((c) => c && !tried.some((t) => t.id === c.id)) ?? null;
         if (!pick) break;
-        tried.push(pick);
+        if (preferred !== false) {
+          const good = (pick.dataCenters ?? []).filter((d) => d.available && !avoid.includes(d.id)).map((d) => d.id);
+          preferred = avoid.length && good.length ? good : null;
+        }
+        if (!preferred) tried.push(pick);
         try {
           pod = await request("POST", "/pods", {
             name: "huggingfound",
             image: full ? image : OLLAMA_IMAGE,
             ...(full && auth ? { registry: auth } : {}),
+            ...(preferred ? { dataCenterIds: preferred } : {}),
             gpu: { id: pick.id, count, minCudaVersion: MIN_CUDA },
             cloud: "SECURE",
             disk: CONTAINER_DISK_GB,
@@ -702,6 +739,11 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
           });
         } catch (err) {
           if (!(err.status === 502 && /no longer any instances|not enough free|no capacity|out of stock|not available/i.test(err.message))) throw err;
+          // No stock in the preferred data centres: the same card anywhere.
+          if (preferred) {
+            preferred = false;
+            continue;
+          }
           offer = (await tiers({ fresh: true }).catch(() => null))?.find((t) => t.gb === tier.gb) ?? offer;
         }
       }

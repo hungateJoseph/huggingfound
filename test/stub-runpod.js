@@ -45,7 +45,9 @@ export function startStubRunpod() {
       const stocked = (g, n = count) => ({ ...g, availability: state.stock?.[g.id]?.[n] ?? g.availability });
       if (req.method === "GET" && url.pathname === "/catalog/gpus") {
         state.catalogQueries.push(url.search);
-        return reply(200, { gpus: GPUS.map((g) => stocked(g)) });
+        // With availability asked for, each card says which data centres hold it.
+        const dcs = url.searchParams.get("include") === "AVAILABILITY" ? (g) => ({ ...g, dataCenters: state.dataCenters?.[g.id] ?? [{ id: "US-KS-2", availability: g.availability }, { id: "EUR-IS-4", availability: g.availability }] }) : (g) => g;
+        return reply(200, { gpus: GPUS.map((g) => dcs(stocked(g))) });
       }
       // Every pod on the account, as RunPod lists them (deleted ones included, as TERMINATED).
       if (req.method === "GET" && url.pathname === "/pods") return reply(200, { pods: Object.values(state.pods).map(view), pagination: { nextCursor: null } });
@@ -67,8 +69,10 @@ export function startStubRunpod() {
         if (gpu.availability === "NONE") return reply(409, { message: "no capacity" });
         // Gone between the listing and the request, as RunPod says it.
         if (state.refuse?.has(gpu.id) || stocked(gpu, data.gpu?.count ?? 1).availability === "NONE") return reply(400, { message: "There are no longer any instances available with the requested specifications. Please refresh and try again." });
+        // No stock in the data centres asked for, as a test says.
+        if (state.refusePlacement && data.dataCenterIds?.length) return reply(400, { message: "There are no longer any instances available with the requested specifications. Please refresh and try again." });
         const id = `pod${state.nextId++}abc`;
-        const pod = { id, name: data.name, image: data.image, status: "PROVISIONING", cost: gpu.price.secure * (data.gpu.count ?? 1), gpu: { id: gpu.id, count: data.gpu.count ?? 1, memory: gpu.memory }, ports: data.ports, env: data.env, mounts: data.mounts, disk: data.disk, dataCenterId: "US-KS-2", createdAt: new Date().toISOString(), startedAt: null, runtime: null, polls: 0 };
+        const pod = { id, name: data.name, image: data.image, status: "PROVISIONING", cost: gpu.price.secure * (data.gpu.count ?? 1), gpu: { id: gpu.id, count: data.gpu.count ?? 1, memory: gpu.memory }, ports: data.ports, env: data.env, mounts: data.mounts, disk: data.disk, dataCenterId: data.dataCenterIds?.[0] ?? "US-KS-2", createdAt: new Date().toISOString(), startedAt: null, runtime: null, polls: 0 };
         state.pods[id] = pod;
         state.created.push(data);
         return reply(201, view(pod));

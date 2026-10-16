@@ -1134,3 +1134,35 @@ test("an agent that restarts under a download is told from a dropped line: the r
     await post("/api/rent/delete", {}).catch(() => {});
   }
 });
+
+test("a data centre where a machine never started its container is avoided by the next rent, when the card is in stock elsewhere", async () => {
+  await post("/api/rent/delete", {}).catch(() => {});
+  runpod.state.noContainer = true;
+  try {
+    const res = await post("/api/rent", { gb: 48, diskGb: 100 });
+    assert.equal(res.status, 200, await res.text());
+    for (let i = 0; i < 3; i++) await json("/api/rent");
+    const status = await json("/api/rent");
+    assert.deepEqual([status.containerUp, status.dataCenter, status.slowDataCenters], [false, "US-KS-2", []], "no container yet, but ten minutes have not passed");
+    runpod.state.pods[status.id].startedAt = new Date(Date.now() - 11 * 60e3).toISOString();
+    const aged = await json("/api/rent");
+    assert.deepEqual(aged.slowDataCenters, ["US-KS-2"], `listed as running with no container for ten minutes: its data centre is remembered; got ${JSON.stringify(aged)}`);
+    assert.equal((await post("/api/rent/delete", {})).status, 200);
+    runpod.state.noContainer = false;
+    const again = await post("/api/rent", { gb: 48, diskGb: 100 });
+    assert.equal(again.status, 200, await again.text());
+    assert.deepEqual(runpod.state.created.at(-1).dataCenterIds, ["EUR-IS-4"], "placed where the card is in stock, away from the slow data centre");
+    assert.equal((await json("/api/rent")).dataCenter, "EUR-IS-4");
+    assert.equal((await post("/api/rent/delete", {})).status, 200);
+    // No stock in the preferred data centres after all: the same card anywhere.
+    runpod.state.refusePlacement = true;
+    const anywhere = await post("/api/rent", { gb: 48, diskGb: 100 });
+    assert.equal(anywhere.status, 200, await anywhere.text());
+    assert.equal(runpod.state.created.at(-1).dataCenterIds, undefined);
+    assert.equal((await json("/api/rent")).dataCenter, "US-KS-2");
+  } finally {
+    runpod.state.noContainer = false;
+    runpod.state.refusePlacement = false;
+    await post("/api/rent/delete", {}).catch(() => {});
+  }
+});

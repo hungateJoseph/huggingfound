@@ -275,6 +275,21 @@ The machine takes two to four minutes to start. Meanwhile:
   (`pictureUnseen`), and says so above the rows and in the log. Scene
   only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
+- Placement: twice in a day a two-card and a one-card H200 pod in EUR-IS-4
+  sat listed as running with no container for ten minutes and more (the
+  proxy answering 404 on both ports), while a pod in US-NC-1 came up in
+  under four. The status now remembers such a data centre for a day
+  (`RUNPOD_SLOW_DCS`, "EUR-IS-4@<ms>,…", written when a pod has been
+  RUNNING without a runtime for ten minutes), the summary carries
+  `slowDataCenters`, the bar's warning names the data centre and says the
+  next rent is placed away from it, and `rent()` passes `dataCenterIds`
+  (the data centres the catalogue lists the card in stock, less the slow
+  ones; `GET /catalog/gpus?include=AVAILABILITY` gives `dataCenters` per
+  card, kept on each tier's cards) when there is something to avoid; a
+  stock refusal with a preference list is retried without one. Stub:
+  `state.dataCenters[gpuId]`, default US-KS-2 and EUR-IS-4 for every card;
+  `state.refusePlacement` refuses a create that names data centres; a pod
+  lands in the first preferred data centre.
 - LTX-2.5 on the machine, first try (2026-10-16): the load failed with
   "no file named model.safetensors … found in directory <the repo root>":
   a component the index names had no folder on the disk (the prompt
