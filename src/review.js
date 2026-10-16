@@ -60,6 +60,24 @@ Avoid: what the model must not show, comma-separated, or the word nothing
 
 Then one plain sentence on what this remake can and cannot achieve. Plain text only; no markdown.`;
 
+// A long clip was made as shots, each from the last frame of the one
+// before, then joined; the person says what went wrong. Only the shots
+// the complaint touches are made again, from revised words and the same
+// seeds, with the rest kept as they are: a missing hat in one shot is not
+// a reason to make the whole clip over.
+const FIX_SYSTEM = `You help people fix long video clips made by open-source video models they run on rented GPUs. Such a clip is made as shots, one after another, each shot by the model in one go from its own description and the last frame of the shot before, then the shots are joined. The person shows you the shot list the clip was made from and says what is wrong with the result: often the model left out something the words asked for, or got a detail wrong. Only the shots that need it will be made again, from revised words with the same random seed, so the scene stays close wherever the words stay the same; the other shots are kept as they are. The model reads short, plain, literal description, not instructions, "no" or "not"; what it left out is best said again early in the description, concretely, and once more where it matters.
+
+Work out which shots the complaint touches. A missing or wrong thing in one shot touches that shot alone; a missing or wrong thing about a person, an object or the setting that is in frame through later shots touches every shot from the first wrong one on. When a later shot is made again, it starts from the new last frame of the shot before, so the fix carries through.
+
+Reply with exactly these lines and nothing else:
+
+Shot N: the full revised description for shot N, every element of its old one included, with the fix made and said plainly
+(one such line for each shot to make again, in order, and none for a shot that stays)
+Carry: yes or no, whether the shots after the last one named above are to be made again too so the change carries through them (yes when the fixed thing stays in frame; no when it was over by then)
+Why: one plain sentence on what you changed and where
+
+Plain text only; no markdown.`;
+
 // A short description expanded into the detailed one an image or video
 // model does best with: the subject, the setting, the light, the camera.
 const EXPAND_SYSTEM = `You write descriptions for open-source image and video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos, illustrations. The person gives a short description. Everyday actions and scenes are described plainly and literally as they would be in a shooting script: someone taking off a jacket, changing shoes, swimming, dancing, arguing, cooking. Expand it into the detailed description such a model does best with: the subject and what it does, the setting, the light, the colours and the mood, the camera (the framing, and for a clip its movement and pace), the style and the medium. Keep every element the person named and add nothing that changes what they asked for; where they left something open, choose what fits. Such models read plain descriptive prose, not instructions, "no" or "not".
@@ -233,6 +251,15 @@ export function buildRequest(input, { outputDir } = {}) {
     parts.push("Reply with only the shot lines.");
     const text = parts.join("\n\n");
     return { ...base, max_tokens: 6000, system: picture ? SCENE_SYSTEM + WITH_PICTURE : SCENE_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
+  }
+  if (input.kind === "prompt" && input.mode === "fix") {
+    if (!request) throw new ReviewError("Say what is wrong with the clip.");
+    const shots = Array.isArray(input.shots) ? input.shots.map((s, i) => ({ index: Number(s.index) || i + 1, seconds: Number(s.seconds) || 0, text: String(s.text ?? "").trim() })).filter((s) => s.text) : [];
+    if (shots.length < 2) throw new ReviewError("A fix needs the clip's shots, two or more.");
+    const prompt = String(input.prompt ?? "").trim();
+    const negative = String(input.negative ?? "").trim();
+    const parts = [`A clip was made${input.model ? ` by ${input.model}` : ""} as ${shots.length} shots, joined${prompt ? ", from this request:" : "."}`, ...(prompt ? [`<request>\n${prompt}\n</request>`] : []), "The shots, each with its length and the description it was made from:", `<shots>\n${shots.map((s) => `Shot ${s.index} (${s.seconds.toFixed(1)} s): ${s.text}`).join("\n")}\n</shots>`, negative ? `The model was asked to avoid: ${negative}.` : "", "What is wrong with the result:", `<wrong>\n${request}\n</wrong>`, "Write the Shot lines for the shots to make again, then the Carry and Why lines."].filter(Boolean);
+    return { ...base, max_tokens: 6000, system: FIX_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "prompt" && input.mode === "expand") {
     const prompt = String(input.prompt ?? "").trim();

@@ -75,6 +75,12 @@ const reviewer = {
       else onText("Shot 1 (4 s): a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still\n**Shot 2 (3 seconds):** the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, sunny back garden\n- Shot 3 (7–12 s) – the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence\nNote: the father is in frame from the first shot.");
       return { declined: false, model: "claude-opus-5", note: "" };
     }
+    // A fix to a pieced clip: which shot to make again, with its words, and whether the rest follow.
+    if (input.mode === "fix") {
+      if (/no idea/.test(input.request)) onText("I cannot tell which shot from this.");
+      else onText(`Shot 2: ${input.shots[1].text}, his wife beside him in a big orange hat\nCarry: ${/from the second shot on/.test(input.request) ? "yes" : "no"}\nWhy: the hat was left out of shot 2.`);
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
     // The next shot: what happens next, as the scene goes on.
     if (input.mode === "continue") {
       onText(`${input.request.replace(/^ok, now /, "")}, the scene going on`);
@@ -1482,7 +1488,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   // A reply can continue the clip instead of changing it: the next clip
   // starts from the last frame, with the words for what happens next.
   await joinedCard.locator(".reply-go").click();
-  assert.equal(await joinedCard.locator(".reply-go").innerText(), "Reply: change or continue it");
+  assert.equal(await joinedCard.locator(".reply-go").innerText(), "Reply: fix a shot or continue it");
   await joinedCard.locator(".reply-mode input[value=continue]").check();
   assert.equal(await joinedCard.locator(".reply-run").innerText(), "Continue it");
   assert.match(await joinedCard.locator(".reply-text").getAttribute("placeholder"), /Say what happens next/);
@@ -1497,6 +1503,54 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   const cont = visitor.locator("#image-out .image-card", { hasText: "Continues an earlier clip" });
   assert.equal(await cont.count(), 1);
   assert.match(await cont.locator(".caption").innerText(), /^Continues an earlier clip \("ok, now the ice melts and the river runs again"\) · the ice melts and the river runs again, the scene going on · 4\.1 s at low quality/);
+  // A fix to the pieced clip: only the piece the complaint touches is made
+  // again, with the seed it had, from the last frame of the piece before;
+  // the others are kept, and all are joined again, a kept one sent up
+  // when the machine no longer has it. Claude reads which piece; the plan
+  // shows first, to tick and change.
+  await joinedCard.locator(".reply-mode input[value=change]").check();
+  assert.equal(await joinedCard.locator(".reply-run").innerText(), "Fix it");
+  assert.match(await joinedCard.locator(".reply-text").getAttribute("placeholder"), /Say what is wrong/);
+  await joinedCard.locator(".reply-text").fill("the orange hat is missing from the second shot on");
+  await joinedCard.locator(".reply-run").click();
+  await joinedCard.locator(".fix .fix-shots li").nth(2).waitFor();
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).request, reviewed.at(-1).prompt, reviewed.at(-1).shots.map((s) => [s.index, s.seconds.toFixed(1), s.text])], ["fix", "the orange hat is missing from the second shot on", "a river in spring", [[1, "4.1", "a river in spring"], [2, "4.1", "a river in spring"], [3, "4.1", "a river in spring"]]], "Claude is given the pieces as they were made, with the request and the complaint");
+  assert.match(await joinedCard.locator(".fix > p").first().innerText(), /^The fix, piece by piece\. Claude's reading: the hat was left out of shot 2\. A ticked piece is made again from the words in its row, with the same seed/);
+  assert.deepEqual(await joinedCard.locator(".fix .fix-redo").evaluateAll((els) => els.map((e) => e.checked)), [false, true, false]);
+  assert.equal(await joinedCard.locator(".fix .fix-carry").isChecked(), true, "the hat stays in frame: the pieces after follow");
+  assert.deepEqual(await joinedCard.locator(".fix .fix-state").allInnerTexts(), ["kept", "made again", "made again, after the change"]);
+  assert.match(await joinedCard.locator(".fix-total").innerText(), /^2 of 3 pieces made again \(8\.1 s of 12\.2\) at low quality, 832 by 480, 20 passes each, about [\s\S]*; the other 1 kept, then all joined again\./);
+  await joinedCard.locator(".fix .fix-carry").uncheck();
+  assert.deepEqual(await joinedCard.locator(".fix .fix-state").allInnerTexts(), ["kept", "made again", "kept"]);
+  assert.match(await joinedCard.locator(".fix-total").innerText(), /^1 of 3 pieces made again \(4\.1 s of 12\.2\)/);
+  assert.equal(await joinedCard.locator(".fix .fix-shots li").nth(1).locator(".shot-text").inputValue(), "a river in spring, his wife beside him in a big orange hat");
+  // The third piece is gone from the machine: it goes up from the browser to be joined.
+  rentedAgent.state.gone = new Set([pieces[2].id]);
+  const fixBefore = rentedAgent.state.jobs.length;
+  await joinedCard.locator(".fix-go").click();
+  await visitor.waitForFunction(() => /Joining the 3 pieces into one clip on the machine \(1 of them sent up from this browser\)/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
+  await visitor.waitForFunction(() => /piece 2 made again for it, the rest kept/.test(document.querySelector("#image-out")?.textContent ?? ""), null, { timeout: 30000 });
+  await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 20000 });
+  const remadePiece = rentedAgent.state.jobs[fixBefore];
+  assert.deepEqual([remadePiece.prompt, remadePiece.seed, remadePiece.frames, remadePiece.init ? remadePiece.init.slice(0, 22) : null, remadePiece.strength], ["a river in spring, his wife beside him in a big orange hat", pieces[1].seed, 65, "data:image/png;base64,", 0.9], "one piece made again: Claude's words, the seed it had, from the last frame of the piece before");
+  assert.deepEqual(rentedAgent.state.joins.at(-1), [pieces[0].id, remadePiece.id, "sent:fake mp4"], "the kept first piece by its job, the new second, and the third sent up from the browser");
+  assert.match(await visitor.locator("#image-log").innerText(), /Fix to the earlier clip: "the orange hat is missing from the second shot on"\n1 of 3 pieces made again from revised words by Claude, each with the seed it had and starting from the last frame of the one before; the other 2 kept as they were; then all joined again:\n\s+Piece 1 \(4\.1 s\): kept\n\s+Piece 2 \(4\.1 s\): a river in spring, his wife beside him in a big orange hat\n\s+Piece 3 \(4\.1 s\): kept\nPiece 1 of 3: kept as it was\nPiece 2 of 3, made again, from the last frame of the one before\n[\s\S]*Piece 3 of 3: kept as it was/);
+  const fixedCard = visitor.locator("#image-out .image-card", { hasText: "piece 2 made again for it" });
+  assert.equal(await fixedCard.count(), 1);
+  assert.match(await fixedCard.locator(".caption").innerText(), /^In reply to an earlier clip \("the orange hat is missing from the second shot on"\) · piece 2 made again for it, the rest kept · a river in spring · 12\.2 s in 3 pieces, low quality, 832 by 480, 20 steps/);
+  assert.match(await visitor.locator("#image-out .image-card", { hasText: "piece 2 of 3, made again" }).locator(".caption").innerText(), /a river in spring, his wife beside him in a big orange hat · piece 2 of 3, made again, 4\.1 s at low quality/);
+  rentedAgent.state.gone = null;
+  // Claude naming no piece: the one the reply names is ticked instead, and the plan can be dropped.
+  await fixedCard.locator(".reply-go").click();
+  await fixedCard.locator(".reply-text").fill("no idea what went wrong, but the hat is missing in the last shot");
+  await fixedCard.locator(".reply-run").click();
+  await fixedCard.locator(".fix .fix-shots li").nth(2).waitFor();
+  assert.match(await fixedCard.locator(".fix > p").first().innerText(), /^The fix, piece by piece\. Claude named no piece to make again \(I cannot tell which shot from this\.\); the piece your reply names is ticked\./);
+  assert.deepEqual(await fixedCard.locator(".fix .fix-redo").evaluateAll((els) => els.map((e) => e.checked)), [false, false, true], "the last shot, from the words");
+  const fixJobs = rentedAgent.state.jobs.length;
+  await fixedCard.locator(".fix-discard").click();
+  assert.equal(await fixedCard.locator(".fix").count(), 0);
+  assert.equal(rentedAgent.state.jobs.length, fixJobs);
   // A scene: Claude lays the words out as shots, each with its own
   // description and length, shown first to change; each shot is made from
   // the last frame of the one before, then all are joined. It goes by way
@@ -1598,10 +1652,10 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   // The machine is stopped, so the window offers to start it; the clips show all the same.
   await visitor.waitForSelector("#kept .image-card");
-  assert.equal(await visitor.locator("#kept .image-card").count(), 15, `the two clips, the reply, the unexpanded one, the three pieces, the joined clip, the continuation, the slow clip, the three shots, the joined scene and the clip made without shots; got: ${JSON.stringify(await visitor.$$eval("#kept .caption", (els) => els.map((e) => e.textContent.slice(0, 90))))}`);
-  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*15 results made with this model[\s\S]*no shots please[\s\S]*as a scene of 3 shots[\s\S]*shot 3 of 3[\s\S]*shot 1 of 3[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
+  assert.equal(await visitor.locator("#kept .image-card").count(), 17, `the two clips, the reply, the unexpanded one, the three pieces, the joined clip, the piece made again and the clip fixed with it, the continuation, the slow clip, the three shots, the joined scene and the clip made without shots; got: ${JSON.stringify(await visitor.$$eval("#kept .caption", (els) => els.map((e) => e.textContent.slice(0, 90))))}`);
+  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*17 results made with this model[\s\S]*no shots please[\s\S]*as a scene of 3 shots[\s\S]*shot 3 of 3[\s\S]*shot 1 of 3[\s\S]*piece 2 made again for it, the rest kept[\s\S]*piece 2 of 3, made again[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
   await visitor.locator("#kept .kept-remove").first().click();
-  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 14);
+  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 16);
   await visitor.keyboard.press("Escape");
   // The machine stopped as asked; started again, and the clip model taken
   // off the stand-in machine, for what follows.

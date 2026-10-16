@@ -64,7 +64,7 @@ export function startStubAgent() {
         Object.defineProperty(data, "__state", { value: state, enumerable: false });
       }
       res.setHeader("Content-Type", "application/json");
-      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 10), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length, busy: Boolean(state.busy) || state.jobs.some((j) => /slow please/.test(j.prompt) && !state.release), ...(state.diskFreeGb != null ? { diskFreeGb: state.diskFreeGb, diskTotalGb: state.diskTotalGb ?? 50 } : {}) }));
+      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 11), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length, busy: Boolean(state.busy) || state.jobs.some((j) => /slow please/.test(j.prompt) && !state.release), ...(state.diskFreeGb != null ? { diskFreeGb: state.diskFreeGb, diskTotalGb: state.diskTotalGb ?? 50 } : {}) }));
       if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files, addons: state.addons }));
       if (req.url === "/lease") {
         state.leases.push(data.minutes ?? null);
@@ -142,8 +142,10 @@ export function startStubAgent() {
         }
         const id = `${state.jobs.length + 1}`.padStart(16, "0");
         polls.delete(id);
-        (state.joins ??= []).push(data.ids);
-        state.jobs.push({ id, repo: "join/video", file: "model_index.json", prompt: `joined ${data.ids.length}`, joined: data.ids });
+        // Pieces by job id, or clips sent up from the browser, as the newer agent takes them.
+        const named = Array.isArray(data.pieces) ? data.pieces.map((p) => (p.video ? `sent:${Buffer.from(p.video, "base64").toString()}` : p.id)) : data.ids;
+        (state.joins ??= []).push(named);
+        state.jobs.push({ id, repo: "join/video", file: "model_index.json", prompt: `joined ${named.length}`, joined: named });
         res.statusCode = 202;
         return res.end(JSON.stringify({ id, status: "generating" }));
       }
@@ -159,7 +161,8 @@ export function startStubAgent() {
       const m = req.url.match(/^\/jobs\/(\w+)(\/result|\/last)?(?:\?(.*))?$/);
       if (m) {
         const job = state.jobs.find((j) => j.id === m[1]);
-        if (!job) {
+        // A job swept from the machine (half an hour on, or a restart), as a test says.
+        if (!job || state.gone?.has(m[1])) {
           res.statusCode = 404;
           return res.end("{}");
         }

@@ -127,6 +127,15 @@ test("expanding a description asks for prose a model follows, with the avoid lis
   assert.throws(() => buildRequest({ kind: "prompt", mode: "other", prompt: "x" }), /Unknown/);
 });
 
+test("a fix to a pieced clip asks which shots to make again, with the shot list, the request and what went wrong", () => {
+  const req = buildRequest({ kind: "prompt", mode: "fix", clip: true, model: "wan", prompt: "a man eats a hamburger next to his wife in a big orange hat; he spills ketchup on his white pants", request: "the wife's orange hat is missing from the second shot on", negative: "blurry", shots: [{ index: 1, seconds: 4.1, text: "a man eats a hamburger at a diner table, his wife beside him in a big orange hat" }, { index: 2, seconds: 4.1, text: "the same man bites the hamburger, his wife beside him" }, { index: 3, seconds: 4.1, text: "ketchup drips onto the man's white pants; his wife laughs" }] });
+  assert.match(req.system, /Only the shots that need it will be made again[\s\S]*Shot N: the full revised description[\s\S]*Carry: yes or no[\s\S]*Why:/);
+  assert.equal(req.max_tokens, 6000);
+  assert.match(req.messages[0].content, /A clip was made by wan as 3 shots, joined, from this request:\n\n<request>\na man eats a hamburger[\s\S]*<shots>\nShot 1 \(4\.1 s\): a man eats a hamburger at a diner table[\s\S]*Shot 3 \(4\.1 s\): ketchup drips[\s\S]*<\/shots>\n\nThe model was asked to avoid: blurry\.\n\nWhat is wrong with the result:\n\n<wrong>\nthe wife's orange hat is missing from the second shot on\n<\/wrong>\n\nWrite the Shot lines for the shots to make again, then the Carry and Why lines\./);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "fix", request: " ", shots: [{ text: "a" }, { text: "b" }] }), /Say what is wrong/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "fix", request: "no hat", shots: [{ text: "a" }] }), /two or more/);
+});
+
 test("a scene is laid out as shots within the model's range, cut at rest, each repeating who and where", () => {
   const req = buildRequest({ kind: "prompt", mode: "scene", clip: true, model: "wan", prompt: "a man on a trampoline does a front flip, falls, then a backflip; the camera pans to his father", seconds: 12, minSeconds: 1, maxSeconds: 5, negative: "blurry" });
   assert.match(req.system, /cut at moments of rest, never in the middle of a movement[\s\S]*repeats the subject, their clothes, the setting and the light[\s\S]*Shot 1 \(8 s\):/);

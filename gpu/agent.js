@@ -84,7 +84,7 @@ function idleWatch() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "10";
+const VERSION = "11";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -93,6 +93,8 @@ const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
 const SUBPATH_RE = /^(?!\.)[\w.+-]+(?:\/(?!\.)[\w.+-]+){0,2}$/;
 const PART_DIRS = ["unet", "vae", "text_encoder", "text_encoder_2"];
 const MAX_BODY = 12 * 1024 * 1024;
+// A join may carry whole clips up from the browser, several at once.
+const JOIN_BODY = 400 * 1024 * 1024;
 const JOB_TTL = 30 * 60e3;
 
 fs.mkdirSync(MODELS_DIR, { recursive: true });
@@ -512,7 +514,7 @@ function runFfmpeg(args) {
 }
 function startJoin(pieces) {
   const id = crypto.randomBytes(8).toString("hex");
-  const job = { id, status: "generating", createdAt: Date.now(), image: null, video: null, kind: "video", progress: null, error: null, note: "", seed: null, joined: pieces.map((p) => p.id) };
+  const job = { id, status: "generating", createdAt: Date.now(), image: null, video: null, kind: "video", progress: null, error: null, note: "", seed: null, joined: pieces.map((p) => p.id ?? "sent") };
   jobs.set(id, job);
   (async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hf-join-"));
@@ -1119,12 +1121,27 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/jobs/join") {
       touchActivity();
-      const body = await readJson(req);
-      const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
-      if (ids.length < 2 || ids.length > 24 || !ids.every((id) => /^[a-f0-9]{16}$/.test(id))) return send(res, 400, { error: "Name two to twenty-four clips to join, in order" });
-      const pieces = ids.map((id) => jobs.get(id));
-      if (pieces.some((p) => !p)) return send(res, 404, { error: "One of those clips is no longer on this machine" });
-      if (pieces.some((p) => p.status !== "completed" || !p.video)) return send(res, 409, { error: "Every piece has to be a finished clip" });
+      // Each piece is a job on this machine, named by id, or a clip the
+      // browser kept and sends up (a piece from before a restart, or from
+      // more than half an hour ago, when one shot of a clip is made again
+      // and the rest are joined around it as they were).
+      const body = await readJson(req, JOIN_BODY);
+      const named = Array.isArray(body.pieces) ? body.pieces : Array.isArray(body.ids) ? body.ids.map((id) => ({ id })) : [];
+      if (named.length < 2 || named.length > 24) return send(res, 400, { error: "Name two to twenty-four clips to join, in order" });
+      const pieces = [];
+      for (const p of named) {
+        if (p && typeof p === "object" && typeof p.video === "string" && p.video) {
+          if (!/^[A-Za-z0-9+/]+=*$/.test(p.video)) return send(res, 400, { error: "A clip sent up did not arrive intact" });
+          pieces.push({ id: null, video: p.video, last: null });
+          continue;
+        }
+        const id = String(p && typeof p === "object" ? p.id ?? "" : p ?? "");
+        if (!/^[a-f0-9]{16}$/.test(id)) return send(res, 400, { error: "Name each piece by its job on this machine, or send the clip itself" });
+        const job = jobs.get(id);
+        if (!job) return send(res, 404, { error: "One of those clips is no longer on this machine" });
+        if (job.status !== "completed" || !job.video) return send(res, 409, { error: "Every piece has to be a finished clip" });
+        pieces.push(job);
+      }
       const job = startJoin(pieces);
       return send(res, 202, { id: job.id, status: job.status });
     }

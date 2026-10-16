@@ -275,6 +275,34 @@ The machine takes two to four minutes to start. Meanwhile:
   (`pictureUnseen`), and says so above the rows and in the log. Scene
   only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
+- A clip made as pieces or shots (or any one of its pieces) is fixed shot
+  by shot rather than made again whole: its reply box reads "Fix a shot"
+  (the "change" mode routed to `fixClip`). Only the shots the complaint
+  touches are made again, each from revised words with the seed it had and
+  from the last frame of the shot before; the others are kept as they were
+  (the newest kept piece for each index of the group), and all are joined
+  again, with a reply caption ("piece 2 made again for it, the rest kept").
+  Claude says which shots and writes their words (review mode "fix": the
+  request, the shot list with lengths and words, and what is wrong go to
+  it; it answers "Shot N: ..." lines for the shots to make again, "Carry:
+  yes|no" for whether the shots after follow so the change carries
+  through, and a "Why:" line); without a key, or when Claude names none,
+  the shot is read from the reply ("in shot 2", "the second shot", "the
+  last one", "at 0:12", "12 seconds in") and its words revised from it as
+  a single clip's would be. The plan shows first under the clip: a tick
+  per shot (ticking one with its old words still there puts the revised
+  ones in; editing a row ticks it), the words, a carry tick, a total line
+  with the time, then "Make the fix" (or add to the queue while busy) or
+  Discard. The first shot made again starts from the photo the clip began
+  from, kept with that shot (`startPicture`, the data URL the machine was
+  sent); a clip from before that is made again from its words. The join
+  (POST /jobs/join, image 11) takes `pieces`: each a job on the machine
+  (`{id}`) or the clip itself sent up from the browser (`{video}`,
+  base64, up to 400 MB a request), for pieces the machine swept (jobs
+  live half an hour) or lost to a restart; the page probes each kept
+  piece's job and sends up the ones not there. An older machine joins by
+  job only; with a piece to send up, the page says so and the shots are
+  kept one by one.
 - A reply to a clip can continue it instead of changing it: the next clip
   starts from this one's last frame (the kept frame, or one read from the
   clip in the browser for older results) with the words for what happens

@@ -496,6 +496,12 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .shots .shot-len { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); padding-top: 6px; }
 .shots .shot-seconds { width: 60px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .shots .shot-remove { font-size: 13px; padding: 4px 10px; margin-top: 4px; }
+.fix { display: grid; gap: 6px; width: 100%; padding-top: 6px; border-top: 1px solid var(--line); }
+.fix .fix-shots li { grid-template-columns: auto 1fr auto; }
+.fix .shot-len { white-space: nowrap; }
+.fix .fix-state { padding-top: 8px; white-space: nowrap; }
+.fix .fix-carry-row { display: flex; gap: 6px; align-items: center; }
+.fix .fix-total { margin: 0; }
 .try .autosave { margin: 6px 0 0; display: block; }
 .try .autosave input[type=number] { width: 72px; margin: 0 4px; }
 .kept-head { margin-top: 18px; }

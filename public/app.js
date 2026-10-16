@@ -2880,6 +2880,7 @@ function renderImage(box, t) {
   // whole, and the seed keeps the scene close.
   async function reply(entry, text, foot, mode = "change") {
     if (mode === "continue" && entry.kind === "video") return continueClip(entry, text, foot);
+    if (mode === "change" && piecedClip(entry)) return fixClip(entry, text, foot);
     const picture = entry.kind !== "video";
     foot.textContent = claudeAvailable() ? "Claude is writing the revised description" : "Revising the words";
     const revised = await reviseFor(entry, text, t.repo);
@@ -2945,6 +2946,109 @@ function renderImage(box, t) {
     run([item], { intro: lines });
   }
 
+  // A fix to a clip made as shots: what is wrong, said as to a person. Only
+  // the shots the complaint touches are made again, from revised words with
+  // the same seeds, each from the last frame of the shot before; the rest
+  // are kept as they were, and all are joined again, so a hat missing from
+  // one shot of a thirty-second clip costs one shot, not thirty seconds.
+  // Claude says which shots and writes their words, with a key; without
+  // one the shot is read from the reply ("in shot 2", "the last shot") and
+  // its words revised from it. The plan shows first, under the clip, to
+  // tick, untick or change before anything is sent.
+  async function fixClip(entry, text, foot) {
+    const group = entry.piece.group;
+    const n = entry.piece.joined ?? entry.piece.of;
+    const kept = await keptResults(t.repo);
+    const old = [];
+    for (let k = 1; k <= n; k++) {
+      const e = kept.filter((x) => x.piece?.group === group && x.piece.index === k && x.blob).sort((a, b) => b.madeAt - a.madeAt)[0];
+      if (!e) throw new Error(`${entry.shots ? "shot" : "piece"} ${k} of the ${n} is no longer kept here, so the clip cannot be fixed shot by shot; ask for it again as a new request`);
+      old.push(e);
+    }
+    const level = entry.level ?? old[0].level ?? "medium";
+    const lv = spec.levels[level] ?? spec.levels.medium;
+    const word = entry.shots ? "shot" : "piece";
+    const shots = old.map((e, i) => ({ index: i + 1, seconds: (e.q?.frames ?? 0) / spec.fps, frames: e.q?.frames ?? framesFor(spec.minSeconds, spec), text: e.prompt, seed: e.seed, keep: e.id }));
+    foot.textContent = claudeAvailable() ? "Claude is working out which shots to make again" : "Reading which shot to make again";
+    const plan = await fixPlan(entry, shots, text, t.repo);
+    foot.textContent = "";
+    const wrap = foot.closest(".reply");
+    wrap.querySelector(".fix")?.remove();
+    const el = document.createElement("div");
+    el.className = "fix";
+    const suggested = shots.map((s) => plan.changes.get(s.index) ?? reviseWords(s.text, entry.negative, text).prompt);
+    const none = !plan.changes.size;
+    const reading = plan.claude ? `Claude named no ${word} to make again (${esc(plan.claude)})${none ? `: tick the ${word}s to make again.` : `; the ${word} your reply names is ticked.`}` : plan.by === "Claude" ? `Claude's reading${plan.why ? `: ${esc(plan.why)}` : "."}` : none ? `No ${word} is named in the reply${plan.why && plan.why !== "no shot named in the reply" ? ` (Claude: ${esc(plan.why)})` : ""}: tick the ${word}s to make again.` : `From your words${plan.why ? ` (Claude: ${esc(plan.why)})` : ""}.`;
+    el.innerHTML = `<p class="muted small"><b>The fix, ${word} by ${word}.</b> ${reading} A ticked ${word} is made again from the words in its row, with the same seed, starting from the last frame of the ${word} before; the others are kept as they are, and all are joined again.</p>
+      <ol class="shots fix-shots"></ol>
+      <label class="muted small fix-carry-row"><input type="checkbox" class="fix-carry" ${plan.carry ? "checked" : ""}> Make the ${word}s after the last ticked one again too, so the change carries through them</label>
+      <p class="muted small fix-total"></p>
+      <p class="tools-row"><button class="primary fix-go">${rec.active ? "Add the fix to the queue (runs after the request under way)" : "Make the fix"}</button><button class="ghost fix-discard">Discard</button></p>`;
+    const list = el.querySelector(".fix-shots");
+    for (const s of shots) {
+      const li = document.createElement("li");
+      li.innerHTML = `<label class="shot-len"><input type="checkbox" class="fix-redo" ${plan.changes.has(s.index) ? "checked" : ""}> ${s.index} · ${s.seconds.toFixed(1)} s</label><textarea class="shot-text" rows="2">${esc(plan.changes.get(s.index) ?? s.text)}</textarea><span class="muted small fix-state"></span>`;
+      list.append(li);
+    }
+    const rows = [...list.querySelectorAll("li")];
+    // Which shots go: the ticked ones, and with the carry tick every one
+    // after the last of them.
+    const redo = () => {
+      const ticked = rows.map((li, i) => (li.querySelector(".fix-redo").checked ? i + 1 : 0)).filter(Boolean);
+      const last = ticked.at(-1) ?? 0;
+      const carry = el.querySelector(".fix-carry").checked && last;
+      return rows.map((_, i) => ticked.includes(i + 1) || (carry && i + 1 > last));
+    };
+    const total = () => {
+      const going = redo();
+      rows.forEach((li, i) => (li.querySelector(".fix-state").textContent = going[i] ? (li.querySelector(".fix-redo").checked ? "made again" : "made again, after the change") : "kept"));
+      const count = going.filter(Boolean).length;
+      const secs = shots.reduce((a, s, i) => a + (going[i] ? s.frames / spec.fps : 0), 0);
+      const est = shots.reduce((a, s, i) => a + (going[i] ? clipEstimate(spec, level, s.seconds, t.repo).seconds : 0), 0);
+      el.querySelector(".fix-total").textContent = count ? `${count} of ${n} ${word}s made again (${secs.toFixed(1)} s of ${shots.reduce((a, s) => a + s.frames / spec.fps, 0).toFixed(1)}) at ${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} passes each, about ${shortDuration(est)}${price ? ` and ${money((price * est) / 3600)} of machine time` : ""}; the other ${n - count} kept, then all joined again.` : `Nothing ticked: tick a ${word} to make again, or discard.`;
+      el.querySelector(".fix-go").disabled = !count;
+    };
+    rows.forEach((li, i) => {
+      const tick = li.querySelector(".fix-redo");
+      const area = li.querySelector(".shot-text");
+      tick.addEventListener("change", () => {
+        // Ticked with its old words still there, a shot takes the revised ones: the same words and seed would give the same shot.
+        if (tick.checked && area.value.trim() === shots[i].text) area.value = suggested[i];
+        total();
+      });
+      area.addEventListener("input", () => {
+        if (!tick.checked && area.value.trim() !== shots[i].text) tick.checked = true;
+        total();
+      });
+    });
+    el.querySelector(".fix-carry").addEventListener("change", total);
+    total();
+    wrap.append(el);
+    el.querySelector(".fix-discard").addEventListener("click", () => el.remove());
+    el.querySelector(".fix-go").addEventListener("click", () => {
+      const going = redo();
+      if (!going.some(Boolean)) return;
+      const planned = shots.map((s, i) => ({ seconds: s.seconds, frames: s.frames, text: going[i] ? rows[i].querySelector(".shot-text").value.trim() || s.text : s.text, seed: s.seed, keep: s.keep, redo: going[i] }));
+      const made = planned.filter((s) => s.redo);
+      const ests = made.map((s) => clipEstimate(spec, level, s.seconds, t.repo));
+      const sum = planned.reduce((a, s) => a + s.frames, 0) / spec.fps;
+      const which = planned.map((s, i) => (s.redo ? i + 1 : 0)).filter(Boolean);
+      const edited = made.some((s, i) => s.text !== suggested[which[i] - 1]);
+      const item = { prompt: entry.prompt, negative: entry.negative ?? "", quality: null, level, q: old[0].q ?? entry.q, seed: entry.seed ?? old[0].seed ?? randomSeed(), pieces: n, shots: planned, shotsEdited: Boolean(entry.shotsEdited), scene: false, expand: false, expandSaid: true, startFile: null, replyTo: { id: entry.id, text }, fix: { group, text, redo: which, by: plan.by, edited, scene: Boolean(entry.shots) }, settings: `${which.length} of ${n} ${entry.shots ? "shots" : "pieces"} made again, ${sum.toFixed(1)} s in all at ${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} steps`, each: `${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} steps`, estimate: { base: ests.reduce((a, e) => a + e.base, 0), seconds: ests.reduce((a, e) => a + e.seconds, 0) } };
+      const lines = [`Fix to the earlier clip: "${text}"`];
+      el.remove();
+      if (rec.active) {
+        queue.push(item);
+        renderQueue();
+        for (const line of lines) rec.lines.push(line);
+        foot.textContent = "Added to the queue; it goes after what is running.";
+        return;
+      }
+      foot.textContent = "Asked; the log above follows it.";
+      run([item], { intro: lines });
+    });
+  }
+
   // A request's arguments for the machine: the files it needs are read now,
   // and at High the words are expanded first, once, by Claude.
   async function requestArgs(item, say = () => {}) {
@@ -2970,6 +3074,12 @@ function renderImage(box, t) {
         extra.init = await readAsDataUrl(item.startFile);
         extra.strength = 0.9;
       }
+    }
+    // The first shot made again for a fix starts from the photo the clip
+    // was made from, kept with that shot.
+    if (item.startInit) {
+      extra.init = item.startInit;
+      extra.strength = 0.9;
     }
     // A continuation, or the next piece of a long clip: it starts from the
     // last frame of the clip before, kept in this browser.
@@ -3033,7 +3143,7 @@ function renderImage(box, t) {
     const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
     // The seed the machine used, so a reply can keep to it; a machine from
     // before seeds were passed along says nothing, and that is remembered.
-    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null, shots: item.shots?.length ? item.shots : null, shotsEdited: Boolean(item.shotsEdited) };
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null, shots: item.shots?.length ? item.shots : null, shotsEdited: Boolean(item.shotsEdited), fix: item.fix ?? null, startPicture: (item.startFile || item.startInit) && typeof args?.init === "string" ? args.init : null };
     await keepResult(entry);
     rec.shown.add(entry.id);
     const name = `${kind === "video" ? "clip" : "image"}-${entry.id}.${kind === "video" ? "mp4" : "png"}`;
@@ -3079,21 +3189,40 @@ function renderImage(box, t) {
   // into one clip. A machine from before joining leaves the pieces as they are.
   const onStatusFor = (text) => rec.onStatus?.(text);
   async function runPieces(item, openedFor, say) {
-    const group = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const fix = item.fix ?? null;
+    const group = fix?.group ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const shots = item.shots?.length ? item.shots : null;
     const lv = spec.levels[item.level] ?? spec.levels.medium;
-    if (shots) {
+    const word = fix ? (fix.scene ? "Shot" : "Piece") : "Shot";
+    if (fix) {
+      say(`${fix.redo.length} of ${item.pieces} ${word.toLowerCase()}s made again from revised words${fix.by === "Claude" ? " by Claude" : ""}${fix.edited ? ", with your changes" : ""}, each with the seed it had and starting from the last frame of the one before; the other ${item.pieces - fix.redo.length} kept as ${item.pieces - fix.redo.length === 1 ? "it was" : "they were"}; then all joined again:`);
+      shots.forEach((s, i) => say(`  ${word} ${i + 1} (${s.seconds.toFixed(1)} s): ${s.redo ? s.text : "kept"}`));
+    } else if (shots) {
       say(`Scene of ${(shots.reduce((a, s) => a + s.frames, 0) / spec.fps).toFixed(1)} seconds in ${shots.length} shots, laid out by Claude${item.shotsEdited ? ", with your changes" : ""}, each starting where the last ended, then joined:`);
       shots.forEach((s, i) => say(`  Shot ${i + 1} (${s.seconds.toFixed(1)} s): ${s.text}`));
     } else say(`A ${((item.q.frames * item.pieces) / spec.fps).toFixed(1)}-second clip, made as ${item.pieces} pieces of ${(item.q.frames / spec.fps).toFixed(1)} s, each starting where the last ended, then joined.`);
     const entries = [];
+    const fresh = new Set();
     let prev = null;
     for (let k = 1; k <= item.pieces; k++) {
       const shot = shots?.[k - 1] ?? null;
+      // A shot the fix leaves alone: the one kept here stands in its place.
+      if (fix && !shot.redo) {
+        const old = (await keptResults(t.repo)).find((e) => e.id === shot.keep);
+        if (!old?.blob) throw new Error(`${word.toLowerCase()} ${k} is no longer kept here`);
+        say(`${word} ${k} of ${item.pieces}: kept as it was`);
+        prev = old;
+        entries.push(old);
+        continue;
+      }
+      // The first shot made again starts from the photo the clip began
+      // from, kept with the old shot; without one it starts from its words.
+      const first = fix && k === 1 ? (await keptResults(t.repo)).find((e) => e.id === shot.keep) : null;
+      if (fix && k === 1 && !first?.startPicture && t.startPicture === "required") throw new Error("the first shot began from a photo that is not kept here; pick it again and ask for the clip as a new request");
       const piece = shot
-        ? { ...item, prompt: shot.text, q: { ...item.q, frames: shot.frames }, scene: false, shots: null, pieces: 1, piece: { group, index: k, of: item.pieces, shot: true }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: false, expanded: null, expandSaid: true, estimate: { base: clipEstimate(spec, item.level, shot.seconds, t.repo).base, seconds: clipEstimate(spec, item.level, shot.seconds, t.repo).seconds }, settings: `shot ${k} of ${item.pieces}, ${shot.seconds.toFixed(1)} s at ${item.level} quality, ${lv.width} by ${lv.height}, ${shot.frames} frames, ${lv.steps} steps` }
+        ? { ...item, prompt: shot.text, q: { ...item.q, frames: shot.frames }, scene: false, shots: null, fix: null, pieces: 1, piece: { group, index: k, of: item.pieces, shot: !fix || fix.scene, ...(fix ? { fixes: shot.keep } : {}) }, seed: fix && Number.isInteger(shot.seed) ? shot.seed : (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, startInit: first?.startPicture ?? null, replyTo: null, expand: false, expanded: null, expandSaid: true, estimate: { base: clipEstimate(spec, item.level, shot.seconds, t.repo).base, seconds: clipEstimate(spec, item.level, shot.seconds, t.repo).seconds }, settings: `${word.toLowerCase()} ${k} of ${item.pieces}${fix ? ", made again" : ""}, ${shot.seconds.toFixed(1)} s at ${item.level} quality, ${lv.width} by ${lv.height}, ${shot.frames} frames, ${lv.steps} steps` }
         : { ...item, pieces: 1, piece: { group, index: k, of: item.pieces }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: k === 1 ? item.expand : false, expanded: item.expanded ?? null, expandSaid: k > 1 ? true : item.expandSaid, estimate: item.estimate ? { base: item.estimate.base, seconds: Math.round(item.estimate.seconds / item.pieces) } : null, settings: `piece ${k} of ${item.pieces}, ${item.each ?? item.settings}` };
-      say(`${shot ? "Shot" : "Piece"} ${k} of ${item.pieces}${prev ? ", from the last frame of the one before" : ""}`);
+      say(`${shot ? word : "Piece"} ${k} of ${item.pieces}${fix ? ", made again" : ""}${prev ? ", from the last frame of the one before" : piece.startInit ? ", from the photo the clip began from" : ""}`);
       const req = { item: piece, args: await requestArgs(piece, say) };
       if (piece.expanded) item.expanded = piece.expanded;
       await agentBatch(t.agent, [req], say, {
@@ -3103,18 +3232,32 @@ function renderImage(box, t) {
           if (err) throw err;
           prev = await finishResult(r, job, openedFor, say);
           entries.push(prev);
+          fresh.add(prev.id);
         },
       });
     }
-    const ids = entries.map((e) => e.jobId).filter(Boolean);
-    if (ids.length !== entries.length) {
-      say("The pieces are kept and saved one by one, in order.");
-      return;
+    // The pieces for the machine to join: the ones it still has, by job;
+    // the others (kept shots from before a restart, or from more than
+    // half an hour ago) sent up from this browser.
+    const pieces = [];
+    let sent = 0;
+    for (const e of entries) {
+      const there = e.jobId && (fresh.has(e.id) || (await fetch(`${t.agent}/jobs/${e.jobId}?lean=1`, { headers: agentHeaders(), cache: "no-store", signal: AbortSignal.timeout(20e3) }).then((r) => r.ok).catch(() => false)));
+      if (there) pieces.push({ id: e.jobId });
+      else {
+        if (!e.blob) {
+          say(`${word} ${e.piece?.index ?? "?"} is no longer kept here, so the pieces cannot be joined; they are kept one by one, in order.`);
+          return;
+        }
+        pieces.push({ video: await blobToBase64(e.blob) });
+        sent++;
+      }
     }
-    say(`Joining the ${entries.length} pieces into one clip on the machine`);
-    const res = await fetch(`${t.agent}/jobs/join`, { method: "POST", headers: { "Content-Type": "application/json", ...agentHeaders() }, body: JSON.stringify({ ids }) }).catch(() => null);
-    if (!res || res.status === 404) {
-      say("This machine's image is from before clips could be joined on it; the pieces are kept and saved one by one, in order. A machine on the current image joins them.");
+    say(`Joining the ${entries.length} pieces into one clip on the machine${sent ? ` (${sent} of them sent up from this browser)` : ""}`);
+    const ids = pieces.every((p) => p.id) ? pieces.map((p) => p.id) : null;
+    const res = await fetch(`${t.agent}/jobs/join`, { method: "POST", headers: { "Content-Type": "application/json", ...agentHeaders() }, body: JSON.stringify({ ...(ids ? { ids } : {}), pieces }) }).catch(() => null);
+    if (!res || res.status === 404 || (res.status === 400 && sent)) {
+      say(`This machine's image is from before ${sent ? "kept pieces could be sent up to be joined" : "clips could be joined on it"}; the pieces are kept and saved one by one, in order. A machine on the current image joins them.`);
       return;
     }
     if (!res.ok) {
@@ -3125,7 +3268,8 @@ function renderImage(box, t) {
     const job = await followJob(t.agent, id, say);
     job.took = null;
     const total = entries.reduce((a, e) => a + (e.q?.frames ?? 0), 0) / spec.fps;
-    await finishResult({ item: { ...item, settings: shots ? `${total.toFixed(1)} s as a scene of ${entries.length} shots, ${item.each ?? ""}`.replace(/, $/, "") : `${total.toFixed(1)} s in ${entries.length} pieces, ${item.each ?? ""}`.replace(/, $/, ""), piece: { group, joined: entries.length }, estimate: null, after: entries.at(-1).id, replyTo: null, continues: null, expanded: item.expanded ?? null }, args: null }, job, openedFor, say);
+    const joinedSettings = fix ? `${total.toFixed(1)} s ${fix.scene ? `as a scene of ${entries.length} shots` : `in ${entries.length} pieces`}, ${item.each ?? ""}`.replace(/, $/, "") : shots ? `${total.toFixed(1)} s as a scene of ${entries.length} shots, ${item.each ?? ""}`.replace(/, $/, "") : `${total.toFixed(1)} s in ${entries.length} pieces, ${item.each ?? ""}`.replace(/, $/, "");
+    await finishResult({ item: { ...item, settings: joinedSettings, piece: { group, joined: entries.length }, estimate: null, after: entries.at(-1).id, replyTo: fix ? item.replyTo : null, continues: null, expanded: item.expanded ?? null, shots: fix && !fix.scene ? null : item.shots, shotsEdited: fix ? true : item.shotsEdited }, args: null }, job, openedFor, say);
   }
 
   // Runs requests: one from the Generate button, several from the queue,
@@ -4053,7 +4197,7 @@ function renderRental() {
       ${capNote}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
-      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
+      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.retrying ? ` <b>Start is asked again every minute for ${Math.max(1, Math.ceil((startRetry.until - Date.now()) / 60e3))} more minutes${startRetry.tries ? ` (${startRetry.tries} so far)` : ""}; this can be left as it is.</b>` : state.rentError.noGpu && state.rentError.action === "start" ? " Start was asked again every minute for half an hour without luck." : ""}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>${state.rentError.retrying ? `<button class="ghost" id="rent-stop-retry">Stop asking</button>` : ""}` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
@@ -4543,7 +4687,7 @@ function pendingJobs(repo) {
 function rememberPending(repo, id, item, at) {
   try {
     const list = pendingJobs(repo).filter((p) => p.id !== id);
-    list.push({ id, at, item: item ? { ...item, startFile: undefined } : null });
+    list.push({ id, at, item: item ? { ...item, startFile: undefined, startInit: undefined } : null });
     localStorage.setItem(`pending:${repo}`, JSON.stringify(list));
   } catch {
     // no storage
@@ -4577,7 +4721,7 @@ function rememberQueue(repo, items) {
 // What a result is, in a line: what it answers, the words asked, what
 // Claude expanded them into, and the settings.
 function captionText(e) {
-  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.shots ? `a scene of ${e.shots.length} shots laid out by Claude${e.shotsEdited ? " and edited" : ""}: ${e.shots.map((s, i) => `${i + 1} (${Number(s.seconds).toFixed(1)} s) ${s.text}`).join(" / ")}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
+  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.fix ? `${e.fix.scene ? "shot" : "piece"}${e.fix.redo.length === 1 ? "" : "s"} ${listText(e.fix.redo)} made again for it, the rest kept` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.shots ? `a scene of ${e.shots.length} shots laid out by Claude${e.shotsEdited ? " and edited" : ""}: ${e.shots.map((s, i) => `${i + 1} (${Number(s.seconds).toFixed(1)} s) ${s.text}`).join(" / ")}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
 }
 
 // The settings of a result kept before they were kept with it, read back
@@ -4813,6 +4957,66 @@ async function reviseFor(entry, text, model) {
   return { prompt: description, negative: /^(nothing|none|-)\.?$/i.test(avoid) ? entry.negative || "" : avoid, keep: Number.isFinite(keep) ? keep : local.keep, by: "Claude" };
 }
 
+// A clip made as pieces and joined, or one of its pieces: a change to it is
+// a fix, shot by shot, rather than a remake whole.
+function piecedClip(entry) {
+  return entry?.kind === "video" && Boolean(entry.piece?.group) && (entry.piece.joined > 1 || entry.piece.of > 1);
+}
+
+// Which shots of a pieced clip a reply touches, and their revised words:
+// Claude's reading with a key, and the reply's own words otherwise or when
+// Claude names no shot. `changes` maps a shot's number to its new words;
+// `carry` says whether the shots after the last named go again too.
+async function fixPlan(entry, shots, text, model) {
+  const local = fixFromWords(shots, entry.negative, text);
+  if (!claudeAvailable()) return local;
+  const got = await claudeText({ kind: "prompt", mode: "fix", clip: true, model, request: text, prompt: entry.prompt, negative: entry.negative, shots: shots.map((s) => ({ index: s.index, seconds: s.seconds, text: s.text })) });
+  if (!got.text) return { ...local, why: got.why };
+  const changes = new Map();
+  for (const m of got.text.matchAll(/^[^\w\n]*Shot\s+(\d+)\s*(?:\([^)]*\))?\s*[:\-–]\s*(.+)$/gim)) {
+    const i = Number(m[1]);
+    const words = m[2].replace(/[*_`]/g, "").trim();
+    if (i >= 1 && i <= shots.length && words) changes.set(i, words);
+  }
+  const why = /^[^\w\n]*Why:\s*(.+)$/im.exec(got.text)?.[1]?.replace(/[*_`]/g, "").trim() ?? "";
+  // No shot named by Claude: the reply's own words say which, if any.
+  if (!changes.size) return { ...local, claude: why || got.text.trim().slice(0, 200) || "no Shot line" };
+  return { changes, carry: /^[^\w\n]*Carry:\s*yes/im.test(got.text), why, by: "Claude" };
+}
+
+// The shot a reply names, read from its words: "in shot 2", "the second
+// shot", "the last one", "at 0:12", "12 seconds in"; its words revised
+// from the reply as a single clip's would be.
+function fixFromWords(shots, negative, text) {
+  const s = ` ${String(text)} `;
+  const ordinal = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
+  const picked = new Set();
+  for (const m of s.matchAll(/\b(?:shot|piece|part|section|segment)s?\s*(?:number\s*|no\.?\s*|#)?(\d+)\b/gi)) picked.add(Number(m[1]));
+  for (const m of s.matchAll(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|1st|2nd|3rd|\d+th)\s+(?:shot|piece|part|one|bit|section|segment)\b/gi)) picked.add(ordinal[m[1].toLowerCase()] ?? parseInt(m[1], 10));
+  if (/\b(last|final|closing|end)\s+(shot|piece|part|one|bit|section|segment)\b|\b(at|near|towards?) the (end|close)\b/i.test(s)) picked.add(shots.length);
+  if (/\b(opening|start|starting|beginning)\s+(shot|piece|part|one|bit|section|segment)\b|\b(at|near) the (start|beginning|opening)\b/i.test(s)) picked.add(1);
+  for (const m of s.matchAll(/\b(?:at|around|about|near)\s+(\d+):(\d{2})\b|\b(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)\s+in\b/gi)) {
+    const at = m[1] != null ? Number(m[1]) * 60 + Number(m[2]) : Number(m[3]);
+    let acc = 0;
+    for (const sh of shots) {
+      acc += sh.seconds;
+      if (at < acc) {
+        picked.add(sh.index);
+        break;
+      }
+    }
+  }
+  const changes = new Map();
+  for (const i of [...picked].filter((i) => i >= 1 && i <= shots.length).sort((a, b) => a - b)) changes.set(i, reviseWords(shots[i - 1].text, negative, text).prompt);
+  return { changes, carry: false, why: changes.size ? "" : "no shot named in the reply", by: "words" };
+}
+
+// Numbers as a person lists them: "2", "2 and 3", "1, 3 and 4".
+function listText(nums) {
+  const a = nums.map(String);
+  return a.length <= 1 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a.at(-1)}`;
+}
+
 // The revised words from the reply alone. Praise and the framing of the
 // complaint go; what is asked for joins the description and what is asked
 // away joins the avoid list. "looks good but I asked for two jump ropes,
@@ -4871,15 +5075,18 @@ function addReply(card, entry, onReply) {
   if (!card || !onReply || !entry || card.querySelector(".reply-wrap")) return;
   const clip = entry.kind === "video";
   const canContinue = clip && Boolean(onReply.canContinue);
+  const pieced = piecedClip(entry);
   const words = {
-    change: { hint: clip ? "Say what to change, as to a person: good, but the camera should move slower" : "Say what to change, as to a person: good, but I asked for two jump ropes and there is one", note: clip ? "The clip is made again from the revised words with the same seed, so the scene stays close." : "The same model paints over this picture with the change: a fraction of the time of a fresh one.", go: "Ask again" },
+    change: pieced
+      ? { hint: "Say what is wrong, as to a person: good, but the orange hat is missing from the second shot on", note: "Only the shots the change touches are made again, with the seeds they had; the rest are kept as they are, and all are joined again. The plan shows here first.", go: "Fix it" }
+      : { hint: clip ? "Say what to change, as to a person: good, but the camera should move slower" : "Say what to change, as to a person: good, but I asked for two jump ropes and there is one", note: clip ? "The clip is made again from the revised words with the same seed, so the scene stays close." : "The same model paints over this picture with the change: a fraction of the time of a fresh one.", go: "Ask again" },
     continue: { hint: "Say what happens next, as to a person: now he stands up and leaves the cards on the table", note: "The next clip starts from this one's last frame, so the scene carries on; the two play one after another here.", go: "Continue it" },
   };
   const wrap = document.createElement("div");
   wrap.className = "reply-wrap";
-  wrap.innerHTML = `<button class="ghost reply-go">${canContinue ? "Reply: change or continue it" : "Reply with a change"}</button>
+  wrap.innerHTML = `<button class="ghost reply-go">${canContinue ? (pieced ? "Reply: fix a shot or continue it" : "Reply: change or continue it") : pieced ? "Reply: fix a shot" : "Reply with a change"}</button>
     <div class="reply" hidden>
-      ${canContinue ? `<div class="row reply-mode"><label><input type="radio" name="reply-mode-${esc(entry.id)}" value="change" checked> Change it</label><label><input type="radio" name="reply-mode-${esc(entry.id)}" value="continue"> Continue it</label></div>` : ""}
+      ${canContinue ? `<div class="row reply-mode"><label><input type="radio" name="reply-mode-${esc(entry.id)}" value="change" checked> ${pieced ? "Fix a shot" : "Change it"}</label><label><input type="radio" name="reply-mode-${esc(entry.id)}" value="continue"> Continue it</label></div>` : ""}
       <textarea class="reply-text" rows="2" placeholder="${words.change.hint}"></textarea>
       <div class="row"><button class="primary reply-run">${words.change.go}</button><span class="muted small reply-note">${words.change.note}</span></div>
       <div class="muted small reply-foot"></div>
