@@ -163,3 +163,17 @@ test("the files a diffusers folder needs: index, configs, one copy of each weigh
   assert.equal(repo.gb.toFixed(2), "5.31");
   assert.equal(repoFiles([{ name: "flux1-dev-Q8_0.gguf", gb: 12 }]), null, "no index, no folder");
 });
+
+test("a folder carrying the same weights twice is fetched as its index names: the spare sharding and the one-file copy stay on the Hub", async () => {
+  const hub = createHub({ base: stub.base });
+  const m = await hub.model("Lightricks/LTX-2.5-Diffusers", { token: "hf_mine" });
+  const names = m.files.map((f) => f.name);
+  assert.ok(names.includes("transformer/diffusion_pytorch_model-00001-of-00008.safetensors") && names.includes("transformer/diffusion_pytorch_model-00004-of-00008.safetensors"), "the eight parts the index names");
+  assert.ok(!names.some((n) => /transformer\/diffusion_pytorch_model-\d{5}-of-00004/.test(n)), "the four-part copy is left");
+  assert.ok(names.includes("connectors/diffusion_pytorch_model-00001-of-00002.safetensors") && !names.includes("connectors/diffusion_pytorch_model.safetensors"), "the connectors' one-file copy is left");
+  assert.ok(names.includes("transformer/diffusion_pytorch_model.safetensors.index.json") && names.includes("text_encoder/model-00001-of-00002.safetensors"), "a folder sharded one way only is untouched");
+  const indexAsks = stub.requests.filter((r) => /LTX-2\.5-Diffusers\/resolve\/main\/.*\.index\.json/.test(r.path));
+  assert.deepEqual(indexAsks.map((r) => [r.path.split("/resolve/main/")[1], r.auth]), [["connectors/diffusion_pytorch_model.safetensors.index.json", "Bearer hf_mine"], ["transformer/diffusion_pytorch_model.safetensors.index.json", "Bearer hf_mine"]], "only the folders sharded two ways are asked about, with the person's token");
+  const repo = repoFiles(m.files);
+  assert.equal(repo.files.filter((f) => f.from.startsWith("transformer/")).length, 6, "config, index and the eight parts... less the two this stub lists: four parts, config and index");
+});

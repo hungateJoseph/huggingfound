@@ -114,8 +114,42 @@ export function createHub({ fetchImpl = fetch, base = "https://huggingface.co", 
     if (!res.ok) throw new Error(`Hugging Face replied HTTP ${res.status} for ${id}`);
     const m = await res.json();
     const files = (m.siblings ?? []).map((s) => ({ name: s.rfilename, gb: s.size ? s.size / 1024 ** 3 : null }));
-    return { ...summarize(m), files, cardData: m.cardData ?? {} };
+    return { ...summarize(m), files: await withoutSpareShards(id, files, h), cardData: m.cardData ?? {} };
   }
+
+  // A folder that carries the same weights twice, sharded two ways
+  // (LTX-2.5's transformer comes in four parts and in eight, 38 GB each),
+  // is loaded from the parts its index names; the other set is not
+  // fetched. The index is small and read here, with the person's token
+  // for a gated repository; when it cannot be read, every part stays.
+  async function withoutSpareShards(id, files, h) {
+    const groups = new Map();
+    for (const f of files) {
+      const m = /^((?:.*\/)?[^/]+)-\d{5}-of-(\d{5})\.safetensors$/.exec(f.name);
+      if (m) (groups.get(m[1]) ?? groups.set(m[1], new Set()).get(m[1])).add(m[2]);
+    }
+    let out = files;
+    for (const [stem, totals] of groups) {
+      // Sharded two ways, or sharded beside a one-file copy of the same weights.
+      if (totals.size < 2 && !files.some((f) => f.name === `${stem}.safetensors`)) continue;
+      const index = `${stem}.safetensors.index.json`;
+      if (!files.some((f) => f.name === index)) continue;
+      const dir = stem.includes("/") ? stem.slice(0, stem.lastIndexOf("/") + 1) : "";
+      let named;
+      try {
+        const res = await fetchImpl(new URL(`/${id}/resolve/main/${index}`, base), { headers: h });
+        if (!res.ok) continue;
+        named = new Set(Object.values((await res.json()).weight_map ?? {}).map((v) => `${dir}${v}`));
+      } catch {
+        continue;
+      }
+      if (!named.size) continue;
+      // The spare parts, and a one-file copy of the same weights beside them.
+      out = out.filter((f) => named.has(f.name) || !((f.name.startsWith(`${stem}-`) && /-\d{5}-of-\d{5}\.safetensors$/.test(f.name)) || f.name === `${stem}.safetensors`));
+    }
+    return out;
+  }
+
 
   // The model card as the author wrote it (markdown), empty when there is none.
   async function card(id) {

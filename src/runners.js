@@ -934,18 +934,27 @@ async function pollAgentTask(agent, id, route, emit, cancelled, fetchImpl, machi
   for (;;) {
     await new Promise((r) => setTimeout(r, 2000));
     if (cancelled()) return;
-    let state;
+    let poll = null;
     try {
-      const poll = await fetchImpl(`${agent}/downloads/${id}?after=${cursor}`, { signal: AbortSignal.timeout(10000) });
-      // The agent answers but has no such task: the machine restarted. The
-      // files it fetched are on its disk; a new run picks up from them.
-      if (poll.status === 404 && failures >= 6) throw new Error("the machine restarted and no longer has this download's record; the files it fetched are kept, and running the step again goes on from them");
-      if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
-      state = await poll.json();
-      if (failures >= 6) emit("Reconnected to the machine.");
-      failures = 0;
+      poll = await fetchImpl(`${agent}/downloads/${id}?after=${cursor}`, { signal: AbortSignal.timeout(10000) });
     } catch {
+      poll = null;
+    }
+    let state = null;
+    if (poll?.ok) {
+      try {
+        state = await poll.json();
+      } catch {
+        state = null;
+      }
+    }
+    if (!state) {
       failures++;
+      // The agent answers but has no such task: the machine's agent
+      // restarted (its container came back, or the process did), and its
+      // record of the task went with it. Said as such, not as a dropped
+      // line, and at once rather than after five minutes of asking.
+      if (poll?.status === 404 && failures >= 3) throw new Error("the machine's agent restarted and no longer has this download's record; running the step again fetches whatever is missing from its disk");
       // A machine pulling files at full speed answers slowly; a few
       // misses are normal, and the download goes on regardless. A machine
       // that has stopped or gone is another matter, and is asked about.
@@ -957,6 +966,8 @@ async function pollAgentTask(agent, id, route, emit, cancelled, fetchImpl, machi
       if (failures > 150) throw new Error("the machine could not be reached for five minutes; the download may still be going there, and opening the model again shows what has arrived");
       continue;
     }
+    if (failures >= 6) emit("Reconnected to the machine.");
+    failures = 0;
     for (const j of state.lines) {
       const text = lineText(j);
       if (text && text !== last) emit(text);

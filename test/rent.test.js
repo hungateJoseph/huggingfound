@@ -388,7 +388,7 @@ test("a machine from before a feature is told apart by its agent's version, and 
   assert.equal((await json("/api/model?id=John6666/pony-realism-v23-sdxl")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=Qwen/Qwen-Image")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).plan.runnable, true, "a single-file model still runs on the old machine");
-  assert.equal((await json("/api/rent")).agentCurrent, 12, "the status says which version is current");
+  assert.equal((await json("/api/rent")).agentCurrent, 13, "the status says which version is current");
   agent.state.version = 9;
   assert.equal((await json("/api/model?id=h94/IP-Adapter-FaceID")).plan.runnable, true);
 });
@@ -1102,6 +1102,35 @@ test("a machine RunPod lists as running with no container on it: the status and 
     Object.assign(machineWait, saved);
     runpod.state.noContainer = false;
     agent.state.down = false;
+    await post("/api/rent/delete", {}).catch(() => {});
+  }
+});
+
+test("an agent that restarts under a download is told from a dropped line: the run says so within seconds and names the way on", async () => {
+  await post("/api/rent/delete", {}).catch(() => {});
+  const res = await post("/api/rent", { gb: 48, diskGb: 100 });
+  assert.equal(res.status, 200, await res.text());
+  for (let i = 0; i < 3; i++) await json("/api/rent");
+  const { plan } = await json("/api/model?id=Qwen/Qwen-Image");
+  agent.state.slowMs = 1500;
+  try {
+    const run = await post("/api/run", { kind: "pull-image-repo", args: plan.steps[0].args, where: "rented" });
+    const runText = await run.text();
+    assert.equal(run.status, 200, runText);
+    const runId = JSON.parse(runText).id;
+    await new Promise((r) => setTimeout(r, 1200));
+    assert.ok(agent.state.tasks.size > 0, "the download is a task on the machine");
+    // The agent comes back fresh: its record of the task is gone.
+    agent.state.tasks.clear();
+    let log = "";
+    for (let i = 0; i < 100 && !/Failed:/.test(log); i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      log = await (await get(`/api/runs/${runId}`)).text();
+    }
+    assert.match(log, /Failed: the machine's agent restarted and no longer has this download's record; running the step again fetches whatever is missing from its disk/);
+    assert.doesNotMatch(log, /could not be reached for five minutes/);
+  } finally {
+    agent.state.slowMs = 5;
     await post("/api/rent/delete", {}).catch(() => {});
   }
 });

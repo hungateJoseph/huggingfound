@@ -275,6 +275,29 @@ The machine takes two to four minutes to start. Meanwhile:
   (`pictureUnseen`), and says so above the rows and in the log. Scene
   only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
+- LTX-2.5 on the machine, first try (2026-10-16): the load failed with
+  "no file named model.safetensors … found in directory <the repo root>":
+  a component the index names had no folder on the disk (the prompt
+  enhancer, left on the Hub), and diffusers looks for such a component in
+  the folder's root. Passing it as `None` to `from_pretrained` should
+  skip it (`load_module` drops components passed as None); belt and
+  braces, the worker now also marks absent components `[null, null]` in
+  the on-disk model_index.json (a `model_index.json.hub` copy kept), says
+  in the load note which components the index names, which are left on
+  the Hub and which folders hold no weights, and refuses a folder without
+  weights with "run the download again". Image version 13. The repository
+  also carries the transformer sharded two ways (four parts and eight, 38
+  GB each) and the connectors as one file and as two parts: hf.js
+  `withoutSpareShards` (in `hub.model`) reads each such folder's
+  `*.safetensors.index.json` with the person's token and keeps the parts
+  it names, dropping the spare sharding and the one-file copy (about 45
+  GB less to fetch). runners.js `pollAgentTask`: the "machine restarted"
+  detection used to throw inside its own try/catch and be swallowed, so a
+  restarted agent (404 on the task) looked like a dropped line for five
+  minutes and then was blamed on the connection; it is now told after
+  three 404s as "the machine's agent restarted and no longer has this
+  download's record; running the step again fetches whatever is missing
+  from its disk".
 - A pod RunPod lists as running whose container never comes up (a fresh
   host fetching the image, or a host not delivering) used to look like a
   machine that was merely slow: the proxy answers 404 on both ports, the

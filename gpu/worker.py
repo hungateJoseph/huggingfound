@@ -22,6 +22,7 @@ import io
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -176,10 +177,28 @@ def load_folder(model_dir, dtype, weights):
         return load_modular(model_dir, dtype, weights, n, first, total)
     # Components the index names whose folders were left on the Hub (LTX-2.5's
     # prompt-enhancing Gemma, which the app has Claude for): passed as absent,
-    # which the pipeline takes for its optional ones, rather than looked for.
-    for name, spec in index.items():
-        if isinstance(spec, list) and spec and spec[0] and not os.path.isdir(os.path.join(model_dir, name)):
+    # and marked absent in the index on the disk as well, which every loader
+    # honours; otherwise the library looks for them in the folder's root and
+    # fails on "no file named model.safetensors". Said in the log, with any
+    # folder that is there but holds no weights, so a failed load names its cause.
+    absent = [name for name, spec in index.items() if isinstance(spec, list) and spec and spec[0] and not os.path.isdir(os.path.join(model_dir, name))]
+    hollow = [name for name, spec in index.items() if isinstance(spec, list) and spec and spec[0] and name not in absent and spec[0] in ("diffusers", "transformers") and not any(f.endswith((".safetensors", ".bin", ".ckpt", ".pt")) for f in os.listdir(os.path.join(model_dir, name)))]
+    if absent or hollow:
+        say({"progress": 0, "note": f"components the index names: {', '.join(k for k, v in index.items() if isinstance(v, list))}" + (f"; left on the Hub, not loaded: {', '.join(absent)}" if absent else "") + (f"; folders without weights: {', '.join(hollow)}" if hollow else "")})
+    if absent:
+        for name in absent:
             common[name] = None
+        try:
+            index_path = os.path.join(model_dir, "model_index.json")
+            backup = os.path.join(model_dir, "model_index.json.hub")
+            if not os.path.exists(backup):
+                shutil.copyfile(index_path, backup)
+            with open(index_path, "w", encoding="utf-8") as f:
+                json.dump({**index, **{name: [None, None] for name in absent}}, f, indent=2)
+        except OSError as err:
+            say({"progress": 0, "note": f"the index could not be marked ({err}); loading all the same"})
+    if hollow:
+        raise ValueError(f"the model's folder is missing weights for {', '.join(hollow)}; run the download again and it fetches what is missing")
     if n and weights * 1.15 < first:
         pipe = DiffusionPipeline.from_pretrained(model_dir, **common)
         pipe.to("cuda")

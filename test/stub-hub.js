@@ -65,14 +65,34 @@ export const FILES = {
     { rfilename: "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors", size: 24.5 * 1024 ** 3 },
     { rfilename: "vae/ltx-2.5-video-vae-bf16.safetensors", size: 1.4 * 1024 ** 3 },
   ],
+  // The same weights twice over, as the Hub has it: the transformer sharded
+  // in four and in eight, the connectors in one file and in two; the index
+  // beside each names the set that loads. A prompt enhancer and the full
+  // transformer the pipeline never loads.
   "Lightricks/LTX-2.5-Diffusers": [
     { rfilename: "model_index.json", size: 500 },
+    { rfilename: "modular_model_index.json", size: 3900 },
     { rfilename: "scheduler/scheduler_config.json", size: 300 },
     { rfilename: "text_encoder/config.json", size: 1200 },
-    { rfilename: "text_encoder/model.safetensors", size: 24.5 * 1024 ** 3 },
+    { rfilename: "text_encoder/model-00001-of-00002.safetensors", size: 12.5 * 1024 ** 3 },
+    { rfilename: "text_encoder/model-00002-of-00002.safetensors", size: 12 * 1024 ** 3 },
+    { rfilename: "text_encoder/model.safetensors.index.json", size: 66000 },
     { rfilename: "tokenizer/tokenizer.json", size: 7000000 },
+    { rfilename: "connectors/config.json", size: 800 },
+    { rfilename: "connectors/diffusion_pytorch_model.safetensors", size: 6.3 * 1024 ** 3 },
+    { rfilename: "connectors/diffusion_pytorch_model-00001-of-00002.safetensors", size: 5 * 1024 ** 3 },
+    { rfilename: "connectors/diffusion_pytorch_model-00002-of-00002.safetensors", size: 1.3 * 1024 ** 3 },
+    { rfilename: "connectors/diffusion_pytorch_model.safetensors.index.json", size: 30000 },
     { rfilename: "transformer/config.json", size: 600 },
-    { rfilename: "transformer/diffusion_pytorch_model.safetensors", size: 39.1 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model-00001-of-00004.safetensors", size: 19.5 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model-00002-of-00004.safetensors", size: 19.6 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model-00001-of-00008.safetensors", size: 9.8 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model-00002-of-00008.safetensors", size: 9.7 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model-00003-of-00008.safetensors", size: 9.8 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model-00004-of-00008.safetensors", size: 9.8 * 1024 ** 3 },
+    { rfilename: "transformer/diffusion_pytorch_model.safetensors.index.json", size: 446000 },
+    { rfilename: "transformer_full/diffusion_pytorch_model-00001-of-00004.safetensors", size: 19.5 * 1024 ** 3 },
+    { rfilename: "prompt_enhancer/model-00001-of-00001.safetensors", size: 10 * 1024 ** 3 },
     { rfilename: "vae/config.json", size: 800 },
     { rfilename: "vae/diffusion_pytorch_model.safetensors", size: 1.4 * 1024 ** 3 },
   ],
@@ -224,6 +244,14 @@ export function startStubHub({ extraModels = [] } = {}) {
           }
         }, 150);
         return;
+      }
+      // A sharding index: the parts of the biggest set are the ones that load.
+      if (/\.safetensors\.index\.json$/.test(dl[2])) {
+        const stem = dl[2].replace(/\.safetensors\.index\.json$/, "");
+        const parts = (FILES[m.id] ?? []).map((s) => s.rfilename).filter((n) => n.startsWith(`${stem}-`) && /-\d{5}-of-\d{5}\.safetensors$/.test(n));
+        const biggest = parts.map((n) => /-of-(\d{5})\.safetensors$/.exec(n)[1]).sort().at(-1);
+        const weight_map = Object.fromEntries(parts.filter((n) => n.endsWith(`-of-${biggest}.safetensors`)).map((n, i) => [`layer.${i}`, n.split("/").pop()]));
+        return json(res, 200, { metadata: {}, weight_map });
       }
       // A file that announces more than it sends, as a dropped connection does.
       if (/short\.bin$/.test(dl[2])) {
