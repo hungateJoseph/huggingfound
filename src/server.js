@@ -372,7 +372,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         // Whether the idle time was set by hand; unset, it depends on the machine's price.
         idleSet: saved.RUNPOD_IDLE_MINUTES !== undefined && saved.RUNPOD_IDLE_MINUTES !== "",
         // Minutes without a click or key before the page asks whether anyone is there; short by default.
-        presenceMinutes: Number(saved.RUNPOD_PRESENCE_MINUTES) > 0 ? Number(saved.RUNPOD_PRESENCE_MINUTES) : 10,
+        presenceMinutes: Number(saved.RUNPOD_PRESENCE_MINUTES) > 0 ? Number(saved.RUNPOD_PRESENCE_MINUTES) : 30,
         maxSpend: ctx.rental ? ctx.rental.maxSpend() : 50,
         hidden: hiddenList(saved.HIDDEN_MODELS),
         stopOnQuit: !hosted && saved.RUNPOD_STOP_ON_QUIT !== "0",
@@ -809,7 +809,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (req.method === "POST" && action === "delete") return send(res, 200, await mine.remove());
         return send(res, 404, { error: "Not found" });
       } catch (err) {
-        return send(res, err instanceof RentError ? err.status : 500, { error: err.message, ...(err.noGpu ? { noGpu: true } : {}) });
+        return send(res, err instanceof RentError ? err.status : 500, { error: err.message, ...(err.noGpu ? { noGpu: true } : {}), ...(err.busy ? { busy: true } : {}) });
       }
     }
     // Whether the chat server answers, and what it holds.

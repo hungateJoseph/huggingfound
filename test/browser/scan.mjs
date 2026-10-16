@@ -1482,21 +1482,34 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.match(await cont.locator(".caption").innerText(), /^Continues an earlier clip \("ok, now the ice melts and the river runs again"\) · the ice melts and the river runs again, the scene going on · 4\.1 s at low quality/);
   // A scene: Claude lays the words out as shots, each with its own
   // description and length, shown first to change; each shot is made from
-  // the last frame of the one before, then all are joined.
-  assert.match(await visitor.locator("#clip-kind").innerText(), /Scene\s+a sequence of events, 2 to 30 seconds: Claude lays it out as shots, each with its own description and length, shown here to change before anything is sent/);
+  // the last frame of the one before, then all are joined. It goes by way
+  // of a preview, which can be read while the machine is busy with
+  // something else, and from there into the queue.
+  assert.match(await visitor.locator("#clip-kind").innerText(), /Scene\s+a sequence of events, 2 to 30 seconds\. Claude lays it out as shots, each with its own description and length, shown to change before anything is sent[\s\S]*The quality chosen below applies to every shot \(its canvas and passes\), so a scene at Low is the quick way to see the sequence; at High the shot list takes the place of the one-paragraph expansion/);
+  await visitor.click("#clip-kind input[value=short]");
+  await visitor.fill("#video-seconds", "3");
+  rentedAgent.state.release = false;
+  await visitor.fill("#image-prompt", "slow please");
+  await visitor.click("#image-go");
+  await visitor.waitForFunction(() => /Generating, 27%/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
+  const sceneBefore = rentedAgent.state.jobs.length;
   await visitor.click("#clip-kind input[value=scene]");
+  assert.deepEqual(await visitor.$$eval("#image-go, #queue-add, #scene-preview", (els) => els.map((e) => [e.id, e.hidden])), [["image-go", true], ["queue-add", true], ["scene-preview", false]], "a scene goes by way of the preview");
+  assert.equal(await visitor.locator("#scene-preview").innerText(), "Preview Claude's scene setup");
+  assert.equal(await visitor.locator("#scene-preview").isEnabled(), true, "the preview is there while the machine works");
   assert.deepEqual(await visitor.$eval("#video-seconds", (e) => [e.value, e.min, e.max]), ["30", "2", "30"]);
   assert.match(await visitor.locator("#seconds-help").innerText(), /^2 to 30 seconds in all\. Claude chooses the shots, each 1 to 5 s/);
   await visitor.fill("#video-seconds", "12");
   assert.match(await visitor.locator("#estimate").innerText(), /in all for a scene of about 12 seconds, made as shots Claude lays out \(guessed here as 3 of about 4\.1 s\) at 832 by 480, 20 steps, each starting where the last ended, then joined \(a soft seam at each cut\)/);
-  const sceneBefore = rentedAgent.state.jobs.length;
   await visitor.fill("#image-prompt", "a man on a trampoline does a front flip, falls on his face, then a backflip; the camera pans to his father applauding");
-  await visitor.click("#image-go");
+  await visitor.click("#scene-preview");
   await visitor.waitForSelector("#shots li");
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).seconds, reviewed.at(-1).minSeconds, reviewed.at(-1).maxSeconds, reviewed.at(-1).clip], ["scene", 12, 1, 5, true], "Claude is told the length and the model's shot range");
   assert.equal(await visitor.locator("#shots li").count(), 3);
   assert.deepEqual(await visitor.$$eval("#shots .shot-seconds", (els) => els.map((e) => e.value)), ["4", "3", "5"]);
-  assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 12\.2 s in all, about /);
+  assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 12\.2 s in all at low quality \(832 by 480, 20 passes each\), about [\s\S]*A lower quality above makes every shot quicker\./);
+  assert.equal(await visitor.locator("#scene-go").isHidden(), true, "busy: the scene cannot be made now");
+  assert.equal(await visitor.locator("#scene-queue").innerText(), "Add to queue (runs after the request under way)");
   // Changed by hand: one shot's words, another's length, a fourth added
   // then removed; nothing goes back to Claude.
   const sceneReviews = reviewed.length;
@@ -1505,23 +1518,45 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.click("#shot-add");
   assert.equal(await visitor.locator("#shots li").count(), 4);
   await visitor.locator("#shots li:nth-child(4) .shot-remove").click();
-  assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 11\.2 s in all/);
-  await visitor.click("#shots-send");
+  assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 11\.2 s in all at low quality/);
+  await visitor.click("#scene-queue");
   assert.equal(reviewed.length, sceneReviews, "the edited shots are not sent back to Claude");
-  await visitor.waitForFunction(() => /Joining the 3 pieces/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 30000 });
+  assert.equal(await visitor.locator("#suggest").isHidden(), true);
+  assert.equal(await visitor.locator("#queue-list li").count(), 1);
+  assert.match(await visitor.locator("#queue-list").innerText(), /a man on a trampoline[\s\S]*11\.2 s as a scene of 3 shots at low quality, 832 by 480, 20 steps/);
+  assert.match(await visitor.locator("#queue-estimate").innerText(), /They start by themselves when the request under way finishes/);
+  // The clip under way finishes: the scene goes next, by itself.
+  rentedAgent.state.release = true;
+  await visitor.waitForFunction(() => /Joining the 3 pieces/.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 40000 });
   await visitor.waitForFunction(() => /11\.2 s as a scene of 3 shots/.test(document.querySelector("#image-out")?.textContent ?? ""), null, { timeout: 30000 });
-  const shotJobs = rentedAgent.state.jobs.slice(sceneBefore, sceneBefore + 3);
+  await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 20000 });
+  const shotJobs = rentedAgent.state.jobs.filter((j) => /grey T-shirt/.test(j.prompt));
+  assert.ok(rentedAgent.state.jobs.length >= sceneBefore + 3, "three shot jobs after the clip that was under way");
   assert.deepEqual(shotJobs.map((j) => [j.prompt, j.frames, j.init ? j.init.slice(0, 22) : null]), [["a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still", 65, null], ["the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, bare feet, sunny back garden", 49, "data:image/png;base64,"], ["the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence", 65, "data:image/png;base64,"]], "each shot goes with its own words and length, the later ones from the frame before");
-  assert.match(await visitor.locator("#image-log").innerText(), /Scene of 11\.2 seconds in 3 shots, laid out by Claude, with your changes, each starting where the last ended, then joined:\n\s+Shot 1 \(4\.1 s\): a man in a grey T-shirt[\s\S]*Shot 1 of 3\n[\s\S]*Shot 2 of 3, from the last frame of the one before[\s\S]*Shot 3 of 3/);
+  assert.match(await visitor.locator("#image-log").innerText(), /Next from the queue\.\n[\s\S]*Scene of 11\.2 seconds in 3 shots, laid out by Claude, with your changes, each starting where the last ended, then joined:\n\s+Shot 1 \(4\.1 s\): a man in a grey T-shirt[\s\S]*Shot 1 of 3\n[\s\S]*Shot 2 of 3, from the last frame of the one before[\s\S]*Shot 3 of 3/);
   const sceneCard = visitor.locator("#image-out .image-card", { hasText: "as a scene of 3 shots" });
   assert.match(await sceneCard.locator(".caption").innerText(), /a scene of 3 shots laid out by Claude and edited: 1 \(4\.1 s\) a man in a grey T-shirt[\s\S]*2 \(3\.1 s\)[\s\S]*3 \(4\.1 s\)[\s\S]*11\.2 s as a scene of 3 shots, low quality, 832 by 480, 20 steps/);
-  // No shot lines from Claude: the words go as one clip, or as equal pieces when the length needs them.
+  // No shot lines from Claude: the preview says so, and the words can go
+  // as one clip, or as equal pieces when the length needs them.
   await visitor.fill("#video-seconds", "2");
   await visitor.fill("#image-prompt", "no shots please");
-  await visitor.click("#image-go");
+  await visitor.click("#scene-preview");
+  await visitor.waitForSelector("#scene-go:not([hidden])");
+  assert.match(await visitor.locator("#suggest").innerText(), /No shots from Claude \(Claude wrote no Shot lines\)\. Your words can go as one clip instead\./);
+  assert.equal(await visitor.locator("#scene-queue").innerText(), "Add to queue", "free now: the scene can be made at once or queued");
+  await visitor.click("#scene-go");
   await visitor.waitForFunction(() => /Claude laid out no shots \(Claude wrote no Shot lines\)\. Made as one clip from your words instead\./.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
   await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 20000 });
   assert.deepEqual([rentedAgent.state.jobs.at(-1).prompt, rentedAgent.state.jobs.at(-1).frames], ["no shots please", 33]);
+  // Discarded: nothing goes anywhere.
+  await visitor.fill("#image-prompt", "a second thought");
+  await visitor.click("#scene-preview");
+  await visitor.waitForSelector("#scene-discard");
+  const jobsBeforeDiscard = rentedAgent.state.jobs.length;
+  await visitor.click("#scene-discard");
+  assert.equal(await visitor.locator("#suggest").isHidden(), true);
+  assert.equal(rentedAgent.state.jobs.length, jobsBeforeDiscard);
+  assert.equal(await visitor.locator("#queue-list li").count(), 0);
   await visitor.click("#clip-kind input[value=short]");
   await visitor.fill("#video-seconds", "3");
   await visitor.fill("#image-prompt", "");
@@ -1530,10 +1565,10 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   // The machine is stopped, so the window offers to start it; the clips show all the same.
   await visitor.waitForSelector("#kept .image-card");
-  assert.equal(await visitor.locator("#kept .image-card").count(), 14, "the two clips, the reply, the unexpanded one, the three pieces, the joined clip, the continuation, the three shots, the joined scene and the clip made without shots");
-  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*14 results made with this model[\s\S]*no shots please[\s\S]*as a scene of 3 shots[\s\S]*shot 3 of 3[\s\S]*shot 1 of 3[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
+  assert.equal(await visitor.locator("#kept .image-card").count(), 15, `the two clips, the reply, the unexpanded one, the three pieces, the joined clip, the continuation, the slow clip, the three shots, the joined scene and the clip made without shots; got: ${JSON.stringify(await visitor.$$eval("#kept .caption", (els) => els.map((e) => e.textContent.slice(0, 90))))}`);
+  assert.match(await visitor.locator("#kept").innerText(), /Kept here[\s\S]*15 results made with this model[\s\S]*no shots please[\s\S]*as a scene of 3 shots[\s\S]*shot 3 of 3[\s\S]*shot 1 of 3[\s\S]*Continues an earlier clip[\s\S]*12\.2 s in 3 pieces[\s\S]*piece 3 of 3[\s\S]*piece 1 of 3[\s\S]*In reply to an earlier clip \("slower camera pan"\)[\s\S]*a long walk[\s\S]*2\.1 s at low quality[\s\S]*waves at dusk[\s\S]*5\.1 s at high quality/);
   await visitor.locator("#kept .kept-remove").first().click();
-  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 13);
+  await visitor.waitForFunction(() => document.querySelectorAll("#kept .image-card").length === 14);
   await visitor.keyboard.press("Escape");
   // The machine stopped as asked; started again, and the clip model taken
   // off the stand-in machine, for what follows.

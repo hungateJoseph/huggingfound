@@ -70,7 +70,7 @@ async function load() {
   state.idleMinutes = s.idleMinutes ?? 30;
   state.idleSet = Boolean(s.idleSet);
   state.maxSpend = s.maxSpend ?? 50;
-  state.presenceMinutes = s.presenceMinutes ?? 10;
+  state.presenceMinutes = s.presenceMinutes ?? 30;
   if (state.runpodKey !== s.runpodKey) state.others = null;
   state.runpodKey = s.runpodKey;
   state.registryAuth = s.registryAuth || "";
@@ -2268,7 +2268,7 @@ function renderImage(box, t) {
       <div class="quality clip-kind" id="clip-kind">
         <label><input type="radio" name="clipKind" value="short" ${clipKind === "short" ? "checked" : ""}> <b>Short clip</b> <span class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot: one continuous motion, as the model makes it</span></label>
         <label><input type="radio" name="clipKind" value="long" ${clipKind === "long" ? "checked" : ""}> <b>Long clip</b> <span class="muted">${spec.maxSeconds + 1} to ${longMax} seconds, made as pieces of at most ${spec.maxSeconds} s that each start where the last ended, then joined into one; a soft seam at each join</span></label>
-        ${canScene ? `<label><input type="radio" name="clipKind" value="scene" ${clipKind === "scene" ? "checked" : ""}> <b>Scene</b> <span class="muted">a sequence of events, ${sceneMin} to ${longMax} seconds: Claude lays it out as shots, each with its own description and length, shown here to change before anything is sent; the shots are made one after another, each starting where the last ended, then joined into one. The shots stand in for the High expansion</span></label>` : ""}
+        ${canScene ? `<label><input type="radio" name="clipKind" value="scene" ${clipKind === "scene" ? "checked" : ""}> <b>Scene</b> <span class="muted">a sequence of events, ${sceneMin} to ${longMax} seconds. Claude lays it out as shots, each with its own description and length, shown to change before anything is sent; the shots are made one after another, each starting where the last ended, then joined into one. The quality chosen below applies to every shot (its canvas and passes), so a scene at Low is the quick way to see the sequence; at High the shot list takes the place of the one-paragraph expansion, and nothing else changes</span></label>` : ""}
       </div>` : ""}
       <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${lengthRange(clipKind).min}" max="${lengthRange(clipKind).max}" step="1" value="${lengthRange(clipKind).value}"><small class="muted" id="seconds-help">${lengthHelp(clipKind)}</small></label>
       <div class="effort-title">Quality</div>
@@ -2285,7 +2285,7 @@ function renderImage(box, t) {
     ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">${t.startPicture === "required" ? "This model animates a picture: the clip begins from it." : "With a picture the clip begins from it; without one it comes from the words alone."}</small></label>` : ""}
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
-      <span class="go-buttons"><button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>${t.agent ? `<button class="ghost" id="queue-add" title="Starts as soon as the machine is free of the request under way, then the next after it; each is kept here and saved as it finishes">Add to queue</button>` : ""}</span>
+      <span class="go-buttons"><button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>${t.agent ? `<button class="ghost" id="queue-add" title="Starts as soon as the machine is free of the request under way, then the next after it; each is kept here and saved as it finishes">Add to queue</button>` : ""}${canScene ? `<button class="primary" id="scene-preview" hidden title="Claude lays the scene out as shots and shows them here, to read and change; nothing goes to the machine until you say so. This works while the machine is busy with something else">Preview Claude's scene setup</button>` : ""}</span>
     </div>
     ${t.agent && claudeAvailable() ? `<p class="tools-row suggest-row"><button class="ghost" id="suggest-go" title="Claude reads what you typed, and the starting picture if there is one, and writes the description these models follow best; you choose whether to use it">Suggest a better description</button></p>
     <div class="suggest" id="suggest" hidden></div>` : ""}
@@ -2451,7 +2451,42 @@ function renderImage(box, t) {
     sec.max = String(range.max);
     sec.value = String(range.value);
     box.querySelector("#seconds-help").textContent = lengthHelp(r.value);
+    showKindButtons();
     refreshEstimate();
+  });
+  // A scene goes by way of the preview: Generate and Add to queue make
+  // way for it, and come back for the other kinds.
+  function showKindButtons() {
+    const scene = canScene && box.querySelector("input[name=clipKind]:checked")?.value === "scene";
+    const go = box.querySelector("#image-go");
+    if (go) go.hidden = scene;
+    const add = box.querySelector("#queue-add");
+    if (add) add.hidden = scene;
+    const pv = box.querySelector("#scene-preview");
+    if (pv) pv.hidden = !scene;
+  }
+  showKindButtons();
+  box.querySelector("#scene-preview")?.addEventListener("click", async () => {
+    const prompt = $("#image-prompt").value.trim();
+    if (!prompt) return;
+    const item = makeItem(prompt);
+    if (!item.scene) return;
+    const btn = box.querySelector("#scene-preview");
+    btn.disabled = true;
+    let r;
+    try {
+      r = await withScene(item, { how: "choose" });
+    } finally {
+      btn.disabled = false;
+    }
+    if (!r.choice) return;
+    // Made now when the machine is free; otherwise it goes next.
+    if (r.choice === "run" && !rec.active) return run([item], { intro: r.notes });
+    item.notes = r.notes;
+    queue.push(item);
+    $("#image-prompt").value = "";
+    renderQueue();
+    drain();
   });
   for (const r of box.querySelectorAll("input[name=level]")) r.addEventListener("change", () => {
     try {
@@ -2471,14 +2506,24 @@ function renderImage(box, t) {
   // The window as it stands now: this box while it is on show, or the one
   // drawn in its place for the same model; nothing once the model is closed.
   const liveBox = () => {
-    for (const log of document.querySelectorAll("#image-log")) if (log.dataset.repo === t.repo && log.isConnected) return log.parentElement;
-    return null;
+    let found = null;
+    for (const log of document.querySelectorAll("#image-log")) if (log.dataset.repo === t.repo && log.isConnected) found = log.parentElement;
+    return found;
   };
   const setBusy = (b, on) => {
     const go = b.querySelector("#image-go");
     if (go) go.disabled = on;
     const qGo = b.querySelector("#queue-go");
     if (qGo) qGo.disabled = on;
+    // A scene preview on show: while the machine works, the way on is the
+    // queue; free again, the scene can be made now.
+    const sceneGo = b.querySelector("#scene-go");
+    if (sceneGo) sceneGo.hidden = on;
+    const sceneQueue = b.querySelector("#scene-queue");
+    if (sceneQueue) {
+      sceneQueue.textContent = `Add to queue${on ? " (runs after the request under way)" : ""}`;
+      sceneQueue.className = on ? "primary" : "ghost";
+    }
     // While the machine works: the way to stop it there by hand, which
     // fails the request so it can be asked again. Nothing stops by itself.
     let abort = b.querySelector("#image-abort");
@@ -2641,7 +2686,11 @@ function renderImage(box, t) {
   // words and length, shown first to change, add to or cut. What is in the
   // rows is what goes, shot by shot, with nobody reading it again. With no
   // shots, the words go as one long clip of equal pieces.
-  async function withScene(item) {
+  // `how` "send" is a scene item on its way (Try again on one): the
+  // buttons send the shots or the plain words. "choose" is the preview,
+  // which can be read while the machine works on something else: the
+  // buttons then make the scene now, add it to the queue, or drop it.
+  async function withScene(item, { how = "send" } = {}) {
     const el = box.querySelector("#suggest");
     const level = item.level ?? "medium";
     const asPlain = (line) => {
@@ -2656,27 +2705,56 @@ function renderImage(box, t) {
       item.estimate = { base: each.base * pieces, seconds: each.seconds * pieces };
       return [`${line} ${pieces > 1 ? `Made as a long clip of ${pieces} equal pieces from your words instead.` : "Made as one clip from your words instead."}`];
     };
-    if (!claudeAvailable() || !el) return asPlain("No Anthropic key for Claude to lay out the shots.");
+    const done = (notes, choice = null) => (how === "choose" ? { notes, choice } : notes);
+    if (!claudeAvailable() || !el) return done(asPlain("No Anthropic key for Claude to lay out the shots."));
     el.hidden = false;
     el.innerHTML = `<p class="muted small">Claude is laying the scene out as shots; they show here first, to change before anything is sent.</p>`;
     const got = await sceneShots(item.prompt, item.sceneSeconds, spec, t.repo, item.negative, await startingPictureFor(item, t.repo));
-    if (!got.shots.length) {
-      el.hidden = true;
-      return asPlain(`Claude laid out no shots (${got.why}).`);
-    }
+    const finals = how === "choose" ? `<button class="primary" id="scene-go" ${rec.active ? "hidden" : ""}>Generate this scene</button><button class="${rec.active ? "primary" : "ghost"}" id="scene-queue">Add to queue${rec.active ? " (runs after the request under way)" : ""}</button><button class="ghost" id="scene-discard">Discard</button>` : `<button class="primary" id="shots-send">Send these shots</button><button class="ghost" id="shots-mine">Send my words as one long clip</button>`;
     return new Promise((resolve) => {
+      // The final buttons: `take()` settles the item from what is on
+      // show, or says there is nothing to send yet.
+      const wire = (take) => {
+        const finish = (choice) => {
+          const notes = take();
+          if (notes === null) return;
+          el.hidden = true;
+          resolve(done(notes, choice));
+        };
+        el.querySelector("#shots-send")?.addEventListener("click", () => finish(null));
+        el.querySelector("#scene-go")?.addEventListener("click", () => finish("run"));
+        el.querySelector("#scene-queue")?.addEventListener("click", () => finish("queue"));
+        el.querySelector("#shots-mine")?.addEventListener("click", () => {
+          el.hidden = true;
+          resolve(done(asPlain("Sending your words as typed.")));
+        });
+        el.querySelector("#scene-discard")?.addEventListener("click", () => {
+          el.hidden = true;
+          resolve(done([], null));
+        });
+      };
+      if (!got.shots.length) {
+        const notes = asPlain(`Claude laid out no shots (${got.why}).`);
+        if (how !== "choose") {
+          el.hidden = true;
+          return resolve(notes);
+        }
+        el.innerHTML = `<p class="muted small"><b>No shots from Claude</b> (${esc(got.why)}). Your words can go as ${item.pieces > 1 ? `one long clip of ${item.pieces} equal pieces` : "one clip"} instead.</p><p class="tools-row">${finals}</p>`;
+        return wire(() => notes);
+      }
       el.innerHTML = `<p class="muted small"><b>The scene as shots.</b> Each is made on its own, starting from the last frame of the one before, from the words in its row as they stand here, unreviewed. Change, add or remove shots; each runs ${spec.minSeconds} to ${spec.maxSeconds} seconds, and the one after a cut should repeat who and where, since the model sees only its own words and one frame.</p>
         <ol class="shots" id="shots"></ol>
         <p class="tools-row"><button class="ghost" id="shot-add">Add a shot</button></p>
         <p class="muted small" id="shots-total"></p>
-        <p class="tools-row"><button class="primary" id="shots-send">Send these shots</button><button class="ghost" id="shots-mine">Send my words as one long clip</button></p>`;
+        <p class="tools-row">${finals}</p>`;
       const list = el.querySelector("#shots");
       const read = () => [...list.querySelectorAll("li")].map((li) => ({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds)), text: li.querySelector(".shot-text").value.trim() })).filter((s) => s.text);
       const total = () => {
         const shots = read();
         const secs = shots.reduce((a, s) => a + framesFor(s.seconds, spec) / spec.fps, 0);
         const est = shots.reduce((a, s) => a + clipEstimate(spec, level, s.seconds, t.repo).seconds, 0);
-        el.querySelector("#shots-total").textContent = shots.length ? `${shots.length} shot${shots.length === 1 ? "" : "s"}, ${secs.toFixed(1)} s in all, about ${shortDuration(est)}${price ? ` and ${money((price * est) / 3600)} of machine time` : ""}.` : "No shots: add one, or send your words as one long clip.";
+        const lv = spec.levels[level] ?? spec.levels.medium;
+        el.querySelector("#shots-total").textContent = shots.length ? `${shots.length} shot${shots.length === 1 ? "" : "s"}, ${secs.toFixed(1)} s in all at ${level} quality (${lv.width} by ${lv.height}, ${lv.steps} passes each), about ${shortDuration(est)}${price ? ` and ${money((price * est) / 3600)} of machine time` : ""}. A lower quality above makes every shot quicker.` : "No shots: add one, or send your words as one long clip.";
       };
       const addRow = (shot) => {
         const li = document.createElement("li");
@@ -2696,10 +2774,9 @@ function renderImage(box, t) {
         list.lastElementChild.querySelector(".shot-text").focus();
         total();
       });
-      el.querySelector("#shots-send").addEventListener("click", () => {
+      wire(() => {
         const shots = read();
-        if (!shots.length) return;
-        el.hidden = true;
+        if (!shots.length) return null;
         item.shots = shots.map((s) => ({ seconds: framesFor(s.seconds, spec) / spec.fps, frames: framesFor(s.seconds, spec), text: s.text }));
         item.shotsEdited = shots.length !== got.shots.length || shots.some((s, i) => s.text !== got.shots[i].text || s.seconds !== Math.min(spec.maxSeconds, Math.max(spec.minSeconds, got.shots[i].seconds)));
         item.pieces = item.shots.length;
@@ -2709,11 +2786,7 @@ function renderImage(box, t) {
         item.settings = `${sum.toFixed(1)} s as a scene of ${item.pieces} shots at ${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} steps`;
         item.each = `${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} steps`;
         item.estimate = { base: ests.reduce((a, e) => a + e.base, 0), seconds: ests.reduce((a, e) => a + e.seconds, 0) };
-        resolve([]);
-      });
-      el.querySelector("#shots-mine").addEventListener("click", () => {
-        el.hidden = true;
-        resolve(asPlain("Sending your words as typed."));
+        return [];
       });
     });
   }
@@ -3402,9 +3475,15 @@ async function followJob(agent, id, onLine = () => {}, started = Date.now(), { p
   // answered: the line that shows the wait is alive.
   let lastWord = "Asked";
   let lastOk = Date.now();
+  // When the machine last reported a different step: a percentage that
+  // stands still while the polls come back is the machine's pace, not a
+  // page that stopped asking, and the line says so.
+  let lastProgress = null;
+  let progressAt = Date.now();
   const status = () => {
     const quiet = Date.now() - lastOk;
-    onStatus(`${lastWord} · ${shortDuration((Date.now() - started) / 1000)} in${quiet > 15e3 ? ` · no answer from the machine for ${Math.round(quiet / 1000)} s` : ""}`);
+    const still = Date.now() - progressAt;
+    onStatus(`${lastWord} · ${shortDuration((Date.now() - started) / 1000)} in${quiet > 15e3 ? ` · no answer from the machine for ${Math.round(quiet / 1000)} s` : lastProgress != null && still > 60e3 ? ` · the machine has reported ${Math.round(lastProgress * 100)}% for ${shortDuration(still / 1000)}` : ""}`);
   };
   for (;;) {
     await new Promise((r) => setTimeout(r, 1500));
@@ -3436,6 +3515,10 @@ async function followJob(agent, id, onLine = () => {}, started = Date.now(), { p
       continue;
     }
     if (!genStarted && ["generating", "completed"].includes(job.status)) genStarted = Date.now();
+    if (job.progress != null && job.progress !== lastProgress) {
+      lastProgress = job.progress;
+      progressAt = Date.now();
+    }
     const word = { loading: "Loading the model into the GPU (the first picture with a model takes longer)", queued: "Waiting for the GPU", generating: job.progress ? `Generating, ${Math.round(job.progress * 100)}%` : "Generating" }[job.status];
     if (word) {
       lastWord = { loading: "Loading the model", queued: "Waiting for the GPU", generating: job.progress ? `Generating, ${Math.round(job.progress * 100)}%` : "Generating, first step" }[job.status];
@@ -3498,7 +3581,7 @@ function b64ToBlob(b64, type) {
 // tried once more with patience, since a machine from before sends a
 // finished clip, tens of megabytes, along with the status.
 async function pollJob(agent, id) {
-  const ask = (ms) => fetch(`${agent}/jobs/${id}?lean=1`, { headers: agentHeaders(), signal: AbortSignal.timeout(ms) });
+  const ask = (ms) => fetch(`${agent}/jobs/${id}?lean=1`, { headers: agentHeaders(), cache: "no-store", signal: AbortSignal.timeout(ms) });
   let poll;
   try {
     poll = await ask(10000);
@@ -3929,7 +4012,7 @@ function renderRental() {
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
       ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
-      ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>` : ""}</div>` : ""}
+      ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.retrying ? ` <b>Start is asked again every minute for ${Math.max(1, Math.ceil((startRetry.until - Date.now()) / 60e3))} more minutes${startRetry.tries ? ` (${startRetry.tries} so far)` : ""}; this can be left as it is.</b>` : state.rentError.noGpu && state.rentError.action === "start" ? " Start was asked again every minute for half an hour without luck." : ""}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>${state.rentError.retrying ? `<button class="ghost" id="rent-stop-retry">Stop asking</button>` : ""}` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
         ${r.status === "EXITED" || r.status === "ERROR" ? `<button class="primary" id="rent-start">Start</button>` : ""}
@@ -3944,7 +4027,7 @@ function renderRental() {
       </label>
       <label class="field">
         <span>Ask whether I am still here after this many minutes without a click or key</span>
-        <input type="number" id="rent-presence" min="1" max="240" step="1" value="${Math.max(1, Math.round(state.presenceMinutes ?? 10))}">
+        <input type="number" id="rent-presence" min="1" max="240" step="1" value="${Math.max(1, Math.round(state.presenceMinutes ?? 30))}">
         <small class="muted">While the machine runs, even during a download or a picture. With no answer in a short countdown the machine stops; its models stay.</small>
       </label>
       <label class="field">
@@ -3961,6 +4044,11 @@ function renderRental() {
     loadOthers(panel);
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-replace")?.addEventListener("click", replaceMachine);
+    panel.querySelector("#rent-stop-retry")?.addEventListener("click", () => {
+      stopRetryingStart();
+      if (state.rentError) state.rentError.retrying = false;
+      renderRental();
+    });
     panel.querySelector("#rent-raise-cap")?.addEventListener("click", async () => {
       const cap = (r.maxSpend ?? state.maxSpend ?? 50) + 25;
       try {
@@ -4119,14 +4207,62 @@ async function loadRegistries(panel) {
   });
 }
 
+// A stopped machine whose host has no free card: Start is asked again
+// every minute for a while, by itself, since a card often frees within
+// minutes; the way out meanwhile is a fresh machine of the same size.
+const startRetry = { timer: null, tries: 0, until: 0 };
+const START_RETRY_MS = 30 * 60e3;
+function stopRetryingStart() {
+  clearTimeout(startRetry.timer);
+  startRetry.timer = null;
+  startRetry.until = 0;
+}
+function retryStartLater() {
+  clearTimeout(startRetry.timer);
+  if (Date.now() >= startRetry.until) {
+    startRetry.timer = null;
+    if (state.rentError?.retrying) {
+      state.rentError.retrying = false;
+      renderRental();
+    }
+    return;
+  }
+  startRetry.timer = setTimeout(async () => {
+    startRetry.tries++;
+    try {
+      state.rental = await api.post("/api/rent/start", {});
+    } catch (err) {
+      if (err.body?.noGpu && Date.now() < startRetry.until) {
+        state.rentError = { action: "start", message: err.message, noGpu: true, retrying: true };
+        renderRental();
+        return retryStartLater();
+      }
+      state.rentError = { action: "start", message: err.message, noGpu: Boolean(err.body?.noGpu), retrying: false };
+      renderRental();
+      return;
+    }
+    stopRetryingStart();
+    state.rentError = null;
+    await load();
+    notice(`The host had a free card again, on try ${startRetry.tries}: the rented GPU is starting, and the hourly charge runs from now.`, "ok");
+    if (state.open) openModel(state.open);
+  }, 60e3);
+}
 async function rentAction(action, question) {
   if (question && !confirm(question)) return;
+  stopRetryingStart();
   try {
     state.rental = await api.post(`/api/rent/${action}`, {});
   } catch (err) {
     // Said in the panel, not in a browser alert; a stopped machine whose
     // host has no free card gets the way out: a fresh machine of the same size.
     state.rentError = { action, message: err.message, noGpu: Boolean(err.body?.noGpu) };
+    if (action === "start" && err.body?.noGpu) {
+      startRetry.until = Date.now() + START_RETRY_MS;
+      startRetry.tries = 0;
+      state.rentError.retrying = true;
+      retryStartLater();
+    }
     renderRental();
     if ($("#settings").hidden) {
       $("#settings").hidden = false;
@@ -4729,7 +4865,7 @@ function addReply(card, entry, onReply) {
 function safeguardText(pricePerHour) {
   const idle = state.idleSet ? state.idleMinutes ?? 30 : pricePerHour >= 2 ? 10 : 30;
   const cap = state.maxSpend ?? 50;
-  const guards = [`when nobody answers the still-there check this page shows after ${Math.round(state.presenceMinutes ?? 10)} minutes without a click`, idle ? `after ${idle} minutes without a chat, picture or download` : "", cap ? `once today's machines have cost ${money(cap)}` : ""].filter(Boolean);
+  const guards = [`when nobody answers the still-there check this page shows after ${Math.round(state.presenceMinutes ?? 30)} minutes without a click`, idle ? `after ${idle} minutes without a chat, picture or download` : "", cap ? `once today's machines have cost ${money(cap)}` : ""].filter(Boolean);
   const day = pricePerHour >= 3 ? ` Left running, it would cost about ${money(pricePerHour * 24)} a day.` : "";
   return `RunPod bills your account while it runs.${day} It stops by itself ${guards.join(", or ") || "only when you stop it"}${guards.length ? ", whichever comes first" : ""}, and the machine itself stops when the site has not seen it used; you can stop or delete it from the bar at any time. Both limits are in Settings.`;
 }
@@ -4834,6 +4970,7 @@ async function loadOthers(panel) {
 // Deletes the machine, then opens renting with the same size chosen, so
 // the old one is gone before the new one is ordered.
 async function replaceMachine() {
+  stopRetryingStart();
   const gb = state.rental?.gb;
   const diskGb = state.rental?.diskGb;
   if (!confirm(`Delete this machine${state.rental?.status === "RUNNING" ? ", which is running," : ""} and rent a fresh ${gb ? `${gb} GB ` : ""}one? Its models download again on the new machine.`)) return;
@@ -5089,7 +5226,7 @@ for (const ev of ["pointerdown", "keydown"]) {
 const presence = { shown: false, deadline: 0, timer: null };
 const PRESENCE_CHECK_MS = 5000;
 function presenceMs() {
-  return (state.presenceMinutes ?? 10) * 60e3;
+  return (state.presenceMinutes ?? 30) * 60e3;
 }
 function machineBilling() {
   const r = state.rental;
@@ -5132,6 +5269,13 @@ async function stopForAbsence() {
   try {
     state.rental = await api.post("/api/rent/stop", { reason: "away", minutes });
   } catch (err) {
+    // At work on a request, from this window or another: it stays up, and
+    // the check starts over from now.
+    if (err.body?.busy) {
+      state.lastTouch = Date.now();
+      notice("The rented GPU is working on a request, so it stays up; the still-there check comes again once it is idle.", "ok");
+      return;
+    }
     notice(`Could not stop the rented GPU: ${err.message}. The machine's own idle watch and the spend cap still apply.`, "bad");
     return;
   }

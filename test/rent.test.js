@@ -507,13 +507,21 @@ test("a machine whose agent refuses the site's secret is reported as refusing, n
 });
 
 test("stopping ends the charge and frees the chat server; starting brings both back", async () => {
-  // A stop from the page's still-there check says so.
+  // A stop from the page's still-there check never lands on a machine at
+  // work: the request it is on (from this window or another) finishes first.
+  agent.state.busy = true;
+  const refused = await post("/api/rent/stop", { reason: "away", minutes: 10 });
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), { error: "The machine is working on a request, so it stays up; the still-there check never stops one mid-request. It stops when idle, or from the bar.", busy: true });
+  assert.deepEqual(runpod.state.actions, [], "not stopped");
+  agent.state.busy = false;
+  // Idle, a stop from the check says so.
   const stopped = await (await post("/api/rent/stop", { reason: "away", minutes: 10 })).json();
   assert.equal(stopped.rented, true);
   assert.equal(stopped.status, "EXITED");
   assert.equal(stopped.stopReason, "away:10");
   assert.deepEqual(runpod.state.actions, [`${stopped.id}:stop`]);
-  assert.equal((await json("/api/state")).presenceMinutes, 10, "the still-there check defaults to ten minutes");
+  assert.equal((await json("/api/state")).presenceMinutes, 30, "the still-there check defaults to half an hour");
   assert.equal((await post("/api/settings", { RUNPOD_PRESENCE_MINUTES: 0.05 })).status, 400, "no shorter than six seconds");
   let s = await json("/api/state");
   assert.equal(s.chatServer, null, "chat models go back to this computer while it is stopped");
@@ -856,7 +864,7 @@ test("what today's machines cost is counted across stops, starts and a restart o
   await rental.remove();
 });
 
-test("a dear machine gets a short idle time unless one is set, and the price travels to the machine's own watch", async () => {
+test("half an hour idle whatever the card costs, unless one is set, and the minutes travel to the machine's own watch", async () => {
   const file = path.join(home, "pricey.env");
   writeEnv(file, { RUNPOD_API_KEY: KEY });
   const rental = createRental({ env: () => readEnv(file), save: (u) => writeEnv(file, u), base: runpod.base, proxyUrl: () => ollama.url, imageCheck: async () => true, statusTtl: 0 });
@@ -870,9 +878,9 @@ test("a dear machine gets a short idle time unless one is set, and the price tra
   } finally {
     a100.availability = was;
   }
-  assert.equal(runpod.state.created.at(-1).env.HF_IDLE_MINUTES, "10", "an H100 at $2.69 an hour: ten minutes on the machine too");
-  assert.equal(rental.idleMinutes(), 10);
-  assert.equal((await rental.status({ probe: false })).idleMinutes, 10);
+  assert.equal(runpod.state.created.at(-1).env.HF_IDLE_MINUTES, "30", "an H100 at $2.69 an hour: half an hour on the machine too");
+  assert.equal(rental.idleMinutes(), 30);
+  assert.equal((await rental.status({ probe: false })).idleMinutes, 30);
   writeEnv(file, { RUNPOD_IDLE_MINUTES: "45" });
   assert.equal(rental.idleMinutes(), 45, "a setting wins");
   await rental.remove();

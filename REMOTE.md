@@ -87,10 +87,18 @@ The machine takes two to four minutes to start. Meanwhile:
   it awake, so tick **Stop the GPU when this finishes** under a download,
   or **Stop the rented GPU after this picture** in the try box, to end the
   bill the moment the work is done rather than after an idle wait.
-- The page asks **whether you are still there** after 10 minutes without a
+- The page asks **whether you are still there** after 30 minutes without a
   click or key while the machine runs, downloads included, and stops it
-  when nobody answers. The minutes are in Settings; keep them short on a
-  dear machine.
+  when nobody answers. The minutes are in Settings. That stop is refused
+  by the site (409, `busy`) while the machine is at work on a request,
+  asked from this window or any other: a working machine is never stopped
+  by the check; the page stands down and asks again later. The idle stop
+  defaults to 30 minutes whatever the card costs, and skips a busy
+  machine as before.
+- A stopped machine whose host has **no free card** ("No free GPU on this
+  machine's host"): the page asks Start again every minute for half an
+  hour by itself, says so in the bar with the count, and offers Stop
+  asking and Replace the machine meanwhile.
 - A **spend cap** stops the machine once the day's machines have cost the
   amount you set ($50 unless changed), counted across stops, starts and
   replaced machines from midnight UTC.
@@ -238,11 +246,17 @@ The machine takes two to four minutes to start. Meanwhile:
   Anthropic key there is a third, Scene: Claude lays the words out as
   shots (review mode "scene": the length asked and the model's one-shot
   range go to it; it answers "Shot N (T s): ..." lines, cut at rest, each
-  repeating who and where), shown as editable rows (length and words, add
-  and remove) before anything is sent; what is in the rows goes to the
-  model shot by shot, unreviewed, each shot from the last frame of the one
-  before, then joined as "T s as a scene of N shots". No Shot lines: the
-  words go as a plain long clip of equal pieces. A machine from before joining
+  repeating who and where). A scene goes by way of "Preview Claude's
+  scene setup", which stands in for Generate and Add to queue: the shots
+  show as editable rows (length and words, add and remove), then
+  "Generate this scene", "Add to queue" or "Discard". The preview works
+  while the machine is busy with something else (the next request can be
+  prepared, picture and all, and read over meanwhile); then only the queue
+  is offered, and the scene runs next by itself. What is in the rows goes
+  to the model shot by shot, unreviewed, each shot from the last frame of
+  the one before, then joined as "T s as a scene of N shots". No Shot
+  lines: the preview says so and the words can go as a plain long clip of
+  equal pieces. Scene only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
 - A reply to a clip can continue it instead of changing it: the next clip
   starts from this one's last frame (the kept frame, or one read from the

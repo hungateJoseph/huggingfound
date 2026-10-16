@@ -248,7 +248,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   // never stops it. Unset, half an hour on a cheap machine and ten minutes
   // on one costing PRICEY dollars an hour or more, where half an hour
   // forgotten is real money.
-  const idleDefault = (price) => (price >= PRICEY ? 10 : 30);
+  // Half an hour, whatever the card costs: a dear machine mid-clip is worth
+  // more than the minutes saved, and the idle watch never stops a working one.
+  const idleDefault = () => 30;
   const idleMinutes = () => {
     const raw = env().RUNPOD_IDLE_MINUTES;
     if (raw === undefined || raw === "") return idleDefault(pricePerHour());
@@ -716,6 +718,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     async stop({ reason = "" } = {}) {
       const id = podId();
       if (!id) throw new RentError("Nothing is rented.", 404);
+      // The page's still-there check stops a machine nobody is watching;
+      // one at work on a request (asked from this window or another) is
+      // not that machine, and stays up until the request is done.
+      if (reason.startsWith("away") && (await machineBusy()) === true) {
+        const e = new RentError("The machine is working on a request, so it stays up; the still-there check never stops one mid-request. It stops when idle, or from the bar.", 409);
+        e.busy = true;
+        throw e;
+      }
       if (reason) save({ RUNPOD_LAST_STOP: reason });
       try {
         await request("POST", `/pods/${encodeURIComponent(id)}/action`, { action: "stop" });
