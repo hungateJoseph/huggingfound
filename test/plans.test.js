@@ -174,7 +174,7 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.deepEqual(twinned.twin, { id: "Lightricks/LTX-2.5-Diffusers", name: "LTX-2.5-Diffusers" });
   assert.match(twinned.reason, /The same model in the layout the rented GPU runs is LTX-2.5-Diffusers/);
   // A gated folder model runs with a token, fetched by the machine with it; an image-to-video model wants a starting picture.
-  const ltxD = { ...summarize({ id: "Lightricks/LTX-2.5-Diffusers", pipeline_tag: "image-to-video", library_name: "diffusers", tags: ["diffusers", "image-to-video", "text-to-video"], gated: "auto" }), files: [{ name: "model_index.json", gb: 0 }, { name: "transformer/diffusion_pytorch_model.safetensors", gb: 39 }] };
+  const ltxD = { ...summarize({ id: "Lightricks/LTX-2.5-Diffusers", pipeline_tag: "image-to-video", library_name: "diffusers", tags: ["diffusers", "image-to-video", "text-to-video"], gated: "auto" }), files: [{ name: "model_index.json", gb: 0 }, { name: "modular_model_index.json", gb: 0 }, { name: "transformer/diffusion_pytorch_model.safetensors", gb: 39 }, { name: "text_encoder/model.safetensors", gb: 24 }, { name: "connectors/model.safetensors", gb: 6 }, { name: "vae/diffusion_pytorch_model.safetensors", gb: 1.5 }, { name: "transformer_full/diffusion_pytorch_model.safetensors", gb: 110 }, { name: "prompt_enhancer/model.safetensors", gb: 10 }, { name: "latent_upsampler/model.safetensors", gb: 1 }, { name: "diffusion_decoder/model.safetensors", gb: 0.8 }, { name: "ltx-2.5-22b-distilled-lora-450-bf16.safetensors", gb: 9.7 }] };
   assert.equal(buildPlan({ model: ltxD, files: ltxD.files, machine, detected: gpu, hasToken: false }).gated, true);
   const gatedOk = buildPlan({ model: ltxD, files: ltxD.files, machine, detected: gpu, hasToken: true });
   assert.equal(gatedOk.runnable, true);
@@ -183,6 +183,22 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.equal(gatedOk.tryWith.startPicture, "optional", "it also takes words alone, so the picture is optional");
   assert.equal(buildPlan({ model: { ...ltxD, tags: ["diffusers", "image-to-video"] }, files: ltxD.files, machine, detected: gpu, hasToken: true }).tryWith.startPicture, "required");
   assert.equal(gatedOk.qualities.max.height, 704, "clip sizes are multiples of 32");
+  // LTX-2.5: the pipeline's own components only (the full transformer, the
+  // prompt enhancer, the upsamplers and the LoRA stay on the Hub), placed
+  // whole on a card; clips with sound at 24 fps in 8n + 1 frames, eight
+  // passes whatever the level, so the levels differ by canvas.
+  assert.equal(gatedOk.file.gb, 70.5, "the distilled transformer, the text encoder, the connectors and the VAE");
+  assert.equal(gatedOk.file.modular, true, "the repository carries a modular index");
+  assert.equal(gatedOk.tierGb.toFixed(1), "81.1", "but the plain pipeline loads, whole on one card, never in turns");
+  assert.match(buildPlan({ model: ltxD, files: ltxD.files, machine: { ...machine, gpuGb: 141 }, detected: gpu, hasToken: true }).fit.text, /^Fits the server's 141 GB \(70\.5 GB\)/);
+  assert.match(buildPlan({ model: ltxD, files: ltxD.files, machine: { ...machine, gpuGb: 80 }, detected: gpu, hasToken: true }).fit.text, /Loads at 8 bits on the server's 80 GB/);
+  assert.deepEqual([gatedOk.video.fps, gatedOk.video.minSeconds, gatedOk.video.maxSeconds, gatedOk.video.defaultSeconds, gatedOk.video.frameStep, gatedOk.video.frameAdd, gatedOk.video.sound, gatedOk.video.cfg], [24, 2, 10, 5, 8, 1, true, 3]);
+  assert.deepEqual([gatedOk.video.levels.low.width, gatedOk.video.levels.low.height, gatedOk.video.levels.low.steps, gatedOk.video.levels.medium.width, gatedOk.video.levels.medium.steps, gatedOk.video.levels.high.steps, gatedOk.video.levels.high.expand], [768, 512, 8, 1280, 8, 8, true]);
+  assert.match(gatedOk.video.levels.low.text, /eight-pass schedule/);
+  assert.deepEqual([gatedOk.qualities.fast.frames, gatedOk.qualities.default.frames, gatedOk.qualities.max.frames, gatedOk.qualities.default.fps], [121, 121, 241, 24]);
+  for (const q of Object.values(gatedOk.qualities)) assert.equal((q.frames - 1) % 8, 0, "a frame count the video VAE decodes");
+  assert.deepEqual([framesFor(5, gatedOk.video), framesFor(2, gatedOk.video), framesFor(10, gatedOk.video)], [121, 49, 241]);
+  assert.match(gatedOk.qualities.default.text, /5-second clip with sound at 720p/);
   // The fit follows the worker's ladder: whole, 8-bit, 4-bit, or not at all; the recommended size has room at 8 bits.
   const big = { ...summarize({ id: "MiniMaxAI/MiniMax-H3", pipeline_tag: "image-text-to-video", library_name: "minimax-h3", tags: ["video"] }), files: [{ name: "model_index.json", gb: 0 }, { name: "transformer/model.safetensors", gb: 62 }, { name: "text_encoder/model.safetensors", gb: 62 }, { name: "vae/model.safetensors", gb: 10 }, { name: "FL2VA/transformer/model.safetensors", gb: 134 }] };
   const on = (gpuGb) => buildPlan({ model: big, files: big.files, machine: { ...machine, remote: true, gpuGb, comfortableGb: gpuGb * 0.9 }, detected: gpu, hasToken: false });

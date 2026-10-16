@@ -102,7 +102,10 @@ export function describe(model, categories) {
   if (categories.includes("coding")) parts.push("trained for code");
   if (categories.includes("math")) parts.push("tuned for math and reasoning");
   if (categories.includes("vision")) parts.push("can look at images");
-  if (categories.includes("images")) parts.push("generates images from text");
+  if (categories.includes("images")) {
+    const video = /video/.test(model.pipeline_tag ?? "") || (model.tags ?? []).some((t) => /video/.test(String(t)));
+    parts.push(video ? `generates video clips from ${(model.tags ?? []).some((t) => /image-to-video/.test(String(t))) || /image-to-video/.test(model.pipeline_tag ?? "") ? "text or a picture" : "text"}${(model.tags ?? []).some((t) => /audio|ltx-2|minimax-h3/i.test(String(t))) || /ltx-2|minimax-h3/i.test(model.id) ? ", with sound" : ""}` : "generates images from text");
+  }
   if (categories.includes("speech")) parts.push("transcribes speech");
   if (categories.length === 1 && categories[0] === "chat") parts.push("general chat and writing");
   return parts.join(", ") || "General purpose";

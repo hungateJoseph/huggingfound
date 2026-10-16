@@ -152,6 +152,8 @@ test("the files a diffusers folder needs: index, configs, one copy of each weigh
     { name: "FL2VA/transformer/model-00001-of-00002.safetensors", gb: 60 }, { name: "scripts/run.py", gb: 0 },
     // MiniMax-H3's reference-to-video partition, which the try box never uses.
     { name: "transformer_ref/config.json", gb: 0 }, { name: "transformer_ref/diffusion_pytorch_model.safetensors", gb: 62 },
+    // LTX-2.5's full transformer beside the distilled one, its prompt enhancer and the pieces of its two-stage workflows.
+    { name: "transformer_full/diffusion_pytorch_model.safetensors", gb: 110 }, { name: "prompt_enhancer/model.safetensors", gb: 10 }, { name: "latent_upsampler/model.safetensors", gb: 1 }, { name: "temporal_latent_upsampler/model.safetensors", gb: 1 }, { name: "diffusion_decoder/model.safetensors", gb: 0.8 },
     // A tokenizer's merges are part of the model; a text file at the top is notes.
     { name: "tokenizer/merges.txt", gb: 0 }, { name: "NOTICE.txt", gb: 0 },
   ];

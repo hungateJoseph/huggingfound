@@ -168,11 +168,18 @@ def load_folder(model_dir, dtype, weights):
     n, first, total = gpu_memory()
     common = {"torch_dtype": dtype, "local_files_only": True, "trust_remote_code": True}
     with open(os.path.join(model_dir, "model_index.json"), encoding="utf-8") as f:
-        cls = str(json.load(f).get("_class_name", ""))
+        index = json.load(f)
+    cls = str(index.get("_class_name", ""))
     # The newer "modular" pipelines (MiniMax-H3 among them) load through
     # their own class and take their inputs by name.
     if "Modular" in cls:
         return load_modular(model_dir, dtype, weights, n, first, total)
+    # Components the index names whose folders were left on the Hub (LTX-2.5's
+    # prompt-enhancing Gemma, which the app has Claude for): passed as absent,
+    # which the pipeline takes for its optional ones, rather than looked for.
+    for name, spec in index.items():
+        if isinstance(spec, list) and spec and spec[0] and not os.path.isdir(os.path.join(model_dir, name)):
+            common[name] = None
     if n and weights * 1.15 < first:
         pipe = DiffusionPipeline.from_pretrained(model_dir, **common)
         pipe.to("cuda")
@@ -590,6 +597,76 @@ def write_clip(frames, fps, audio=None, rate=None):
                 os.remove(p)
 
 
+# ---- LTX-2 ---------------------------------------------------------------------------
+# Lightricks' LTX-2 and 2.5 make clips with sound through a plain pipeline:
+# 8n + 1 frames at 24 fps on a canvas of multiples of 32, the soundtrack
+# as a tensor beside the frames with the vocoder's rate. LTX-2.5's
+# repository ships its distilled transformer as the one that loads: that
+# runs a fixed schedule of eight sigmas, unguided and without a negative
+# prompt, whatever step count is asked.
+
+
+def ltx_distilled():
+    d = str(state.get("dir") or "").lower()
+    return "ltx-2.5" in d or "ltx2.5" in d or "distill" in d
+
+
+def ltx_rate(pipe):
+    with contextlib.suppress(Exception):
+        return int(pipe.vocoder.config.output_sampling_rate)
+    return None
+
+
+def ltx_twin(pipe):
+    """The image-to-video pipeline over the loaded one's components, made once."""
+    if state.get("twin_of") is pipe and state.get("twin") is not None:
+        return state["twin"]
+    from diffusers import LTX2ImageToVideoPipeline
+
+    twin = LTX2ImageToVideoPipeline.from_pipe(pipe)
+    with contextlib.suppress(Exception):
+        twin.set_progress_bar_config(disable=True)
+    state["twin"], state["twin_of"] = twin, pipe
+    return twin
+
+
+def fit_ltx_request(kwargs, params, fps, image=None):
+    """Puts a request within what LTX-2 makes and returns the step count
+    the progress line should expect."""
+    notes = []
+    grain = 32
+    w, h = int(kwargs.get("width") or 1280), int(kwargs.get("height") or 704)
+    if image is not None and getattr(image, "width", 0) and getattr(image, "height", 0):
+        # A starting picture is stretched onto the canvas, so the canvas
+        # keeps the preset's area but follows the picture's shape.
+        area, ratio = w * h, image.width / image.height
+        w, h = math.sqrt(area * ratio), math.sqrt(area / ratio)
+    w, h = max(grain, round(w / grain) * grain), max(grain, round(h / grain) * grain)
+    if (w, h) != (kwargs.get("width"), kwargs.get("height")):
+        notes.append(f"canvas {kwargs.get('width')} by {kwargs.get('height')} to {w} by {h}" + (", the picture's shape" if image is not None else ""))
+        kwargs["width"], kwargs["height"] = w, h
+    if "num_frames" in params:
+        frames = int(kwargs.get("num_frames") or 121)
+        snapped = max(9, ((frames - 1 + 4) // 8) * 8 + 1)
+        if snapped != frames:
+            notes.append(f"{frames} frames to {snapped} ({snapped / fps:.1f} s at {fps} fps)")
+        kwargs["num_frames"] = snapped
+    if "frame_rate" in params:
+        kwargs["frame_rate"] = float(fps)
+    steps = int(kwargs.get("num_inference_steps") or 30)
+    if ltx_distilled() and "sigmas" in params:
+        from diffusers.pipelines.ltx2.utils import DISTILLED_SIGMA_VALUES
+
+        kwargs.pop("num_inference_steps", None)
+        kwargs.pop("negative_prompt", None)
+        kwargs["sigmas"] = list(DISTILLED_SIGMA_VALUES)
+        kwargs["guidance_scale"] = 1.0
+        steps = len(DISTILLED_SIGMA_VALUES)
+    if notes:
+        say({"progress": 0, "note": f"within what this model makes: {', '.join(notes)}"})
+    return steps
+
+
 def step_counter(pipe, steps):
     """Progress for a pipeline without a step callback: a hook on the
     denoiser that reports each forward pass as a step. Returns the hook to
@@ -618,6 +695,7 @@ def generate(req):
         raise ValueError("no model is loaded")
     kind = state["kind"]
     params = accepted(pipe)
+    ltx2 = type(pipe).__name__.startswith("LTX2")
     steps = int(req.get("steps") or 28)
     kwargs = {"prompt": req.get("prompt", ""), "num_inference_steps": steps}
     if "negative_prompt" in params and req.get("negative"):
@@ -655,6 +733,12 @@ def generate(req):
             kwargs["image"] = image
             if "strength" in params:
                 kwargs["strength"] = float(req.get("strength") or 0.55)
+        elif ltx2:
+            # LTX-2 animates a picture through its image-to-video pipeline,
+            # which shares every component with the loaded one.
+            pipe = ltx_twin(pipe)
+            params = accepted(pipe)
+            kwargs["image"] = image
         else:
             # The loaded pipeline draws from words only; its image-to-image
             # twin shares the weights, so nothing is loaded twice.
@@ -681,6 +765,9 @@ def generate(req):
 
     fps = int(req.get("fps") or 16)
     audio = rate = None
+    if ltx2:
+        fps = int(req.get("fps") or 24)
+        steps = fit_ltx_request(kwargs, params, fps, image if init else None)
     with torch.inference_mode():
         if state.get("modular"):
             fps, changed = fit_modular_request(pipe, kwargs, kind, fps)
@@ -701,6 +788,9 @@ def generate(req):
             result.images = [first_image(images_out)] if images_out is not None else None
         else:
             result = pipe(**kwargs)
+            if ltx2:
+                audio = getattr(result, "audio", None)
+                rate = ltx_rate(pipe)
 
     if getattr(result, "frames", None) is not None:
         frames = result.frames[0]

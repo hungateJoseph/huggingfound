@@ -83,6 +83,9 @@ test("describe and paramSize read the name", () => {
   assert.equal(describe({ id: "x/Qwen2.5-Coder-7B" }, ["coding"]), "7B parameters, trained for code");
   assert.equal(describe({ id: "x/thing" }, ["chat"]), "general chat and writing");
   assert.equal(describe({ id: "x/thing" }, []), "General purpose");
+  assert.equal(describe({ id: "Lightricks/LTX-2.5-Diffusers", pipeline_tag: "text-to-video", tags: ["image-to-video", "text-to-video"] }, ["images"]), "generates video clips from text or a picture, with sound");
+  assert.equal(describe({ id: "Wan-AI/Wan2.2-T2V-A14B-Diffusers", pipeline_tag: "text-to-video", tags: ["text-to-video"] }, ["images"]), "14B parameters, generates video clips from text");
+  assert.equal(describe({ id: "x/sd15", pipeline_tag: "text-to-image", tags: [] }, ["images"]), "generates images from text");
 });
 
 test("adult models are flagged and land in the NSFW buckets as well as their own", () => {

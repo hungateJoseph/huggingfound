@@ -275,6 +275,32 @@ The machine takes two to four minutes to start. Meanwhile:
   (`pictureUnseen`), and says so above the rows and in the log. Scene
   only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
+- LTX-2 and LTX-2.5 (Lightricks, gated: the LTX-2.x Community License
+  accepted on the model page and a read token in Settings) are a video
+  family of their own: `/ltx-2/i` in plans.js gives 24 fps, 2 to 10 s,
+  8n + 1 frames, sound, cfg 3, levels 768×512 / 1280×704 at eight passes
+  (the distilled schedule is fixed, so the levels differ by canvas and the
+  High expansion), presets of 121 and 241 frames. The repository carries a
+  modular index too, but model_index.json names the plain LTX2Pipeline,
+  so the plan treats it as whole-on-card (`modular` false for LTX,
+  recommended size gb × 1.15). hf.js `repoFiles` leaves `transformer_full`
+  (110 GB), `prompt_enhancer` (Gemma, 10 GB), `latent_upsampler`,
+  `temporal_latent_upsampler` and `diffusion_decoder` on the Hub, as it
+  did MiniMax's `transformer_ref`, so the download is about 71 GB
+  (distilled transformer 38, Gemma 4 text encoder 24, connectors 6, VAEs,
+  vocoder, duration head). worker.py `load_folder` passes `None` for any
+  component the index names whose folder was not fetched (the enhancer);
+  `generate` detects an `LTX2*` pipeline: `fit_ltx_request` snaps the
+  canvas to multiples of 32 (a starting picture's shape at the preset's
+  area), frames to 8n + 1, passes `frame_rate`, and for a distilled
+  transformer (LTX-2.5, or "distill" in the path) replaces the step count
+  with `DISTILLED_SIGMA_VALUES` unguided and without a negative prompt;
+  the soundtrack comes back as `result.audio` with the vocoder's
+  `output_sampling_rate`; a starting picture goes through
+  `LTX2ImageToVideoPipeline.from_pipe` (`ltx_twin`, made once; it needs
+  PyAV, now in the image). categorize.js `describe` says "generates video
+  clips from text or a picture, with sound" for video models. Image
+  version 12 (diffusers ≥ 0.41, transformers ≥ 5.5, av).
 - A clip made as pieces or shots (or any one of its pieces) is fixed shot
   by shot rather than made again whole: its reply box reads "Fix a shot"
   (the "change" mode routed to `fixClip`). Only the shots the complaint

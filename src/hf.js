@@ -254,8 +254,12 @@ export function repoFiles(files) {
     if (name.split("/").length > 2) continue;
     // MiniMax-H3 carries a second transformer partition for its
     // reference-to-video workflow, as big as the first; the try box makes
-    // clips from words or a picture, so that one stays behind.
-    if (dir === "transformer_ref") continue;
+    // clips from words or a picture, so that one stays behind. LTX-2.5
+    // ships its full transformer beside the distilled one the pipeline
+    // loads, a prompt-enhancing Gemma the app has Claude for, and the
+    // upsamplers and diffusion decoder of its two-stage workflows, none of
+    // which the pipeline in model_index.json names.
+    if (/^(transformer_ref|transformer_full|prompt_enhancer|latent_upsampler|temporal_latent_upsampler|diffusion_decoder)$/.test(dir)) continue;
     // Single-file checkpoints at the top level are the same model again.
     if (!dir && /\.(safetensors|bin|gguf)$/i.test(name)) continue;
     if (/\.bin$/i.test(name) && [...names].some((n) => n.startsWith(`${dir}/`) && /\.safetensors$/i.test(n))) continue;

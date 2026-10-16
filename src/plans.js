@@ -252,7 +252,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
 export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4 };
-export const AGENT_VERSION = 11;
+export const AGENT_VERSION = 12;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;
@@ -362,6 +362,12 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const repo = repoFiles(files);
   const video = /video/.test(model.pipeline ?? "") || (model.tags ?? []).some((t) => /video/.test(t));
   const what = video ? "clips" : "pictures";
+  // LTX-2 and 2.5 (Lightricks): clips with sound at 24 fps from a plain
+  // pipeline, 8n + 1 frames on a canvas of multiples of 32. The repository
+  // carries a modular index as well, but the pipeline that loads is the
+  // plain one, so the model is placed whole on the card, never in turns.
+  const ltx = /ltx-2/i.test(model.id);
+  const modular = Boolean(repo?.modular) && !ltx;
   if (!repo) {
     // The same model is often published twice: once as pieces for ComfyUI
     // and once in the folder the diffusers library loads. The folder runs.
@@ -385,11 +391,11 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
     return {
       runnable: false,
       needsGpu: true,
-      reason: `${model.name} runs only on a rented GPU: it is loaded by the diffusers library, which nothing on a laptop runs well${repo.gb ? `, and its ${repo.gb.toFixed(0)} GB of weights want a data-centre card${repo.gb > 60 ? (repo.modular ? " (its models take turns on a card smaller than all of them together)" : " (it loads at 8 bits on a card with room for about half of that, or in full precision across several cards)") : ""}` : ""}. Rent one by the hour and the machine fetches the model and makes ${what} there.`,
+      reason: `${model.name} runs only on a rented GPU: it is loaded by the diffusers library, which nothing on a laptop runs well${repo.gb ? `, and its ${repo.gb.toFixed(0)} GB of weights want a data-centre card${repo.gb > 60 ? (modular ? " (its models take turns on a card smaller than all of them together)" : ltx ? " (it wants a card with room for all of it at once)" : " (it loads at 8 bits on a card with room for about half of that, or in full precision across several cards)") : ""}` : ""}. Rent one by the hour and the machine fetches the model and makes ${what} there.`,
       steps: [],
       link: model.url,
       file: repo,
-      tierGb: recommendedGb(repo.gb, repo.modular),
+      tierGb: recommendedGb(repo.gb, modular, ltx),
       diskGb: diskFor(repo.gb),
     };
   }
@@ -398,7 +404,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   }
   const stale = staleMachine(model, detected.gpu, "pull-image-repo", "this family could run there");
   if (stale) return stale;
-  const fit = diffusersFit(repo.gb, machine, repo.modular);
+  const fit = diffusersFit(repo.gb, machine, modular);
   // Whole when every file is there: an agent that lists a folder's files
   // tells a download that stopped partway from a finished model.
   const have = detected.gpu.folders?.[model.id] ?? null;
@@ -409,7 +415,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
     if (room) return room;
   }
   const fast = /turbo|lightning|schnell|distill|hyper|rapid|fast|step/i.test(model.id);
-  const cfg = /flux/i.test(model.id) ? 3.5 : /qwen/i.test(model.id) ? 4 : 5;
+  const cfg = /flux/i.test(model.id) ? 3.5 : /qwen/i.test(model.id) ? 4 : ltx ? 3 : 5;
   // MiniMax-H3 makes clips with sound of 5 to 15 seconds at 24 fps, in
   // frame counts of 17n + 5 on a canvas of multiples of 32 with a 768
   // short edge; smaller canvases are its biggest speed lever.
@@ -424,11 +430,22 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   // the detailed shot these models do best with (by Claude, with a key).
   // A model draws no better above its trained canvas, so none goes higher.
   const levelText = { low: "a draft: a small canvas, 20 passes", medium: "the model's full canvas, 30 passes, its standard avoid list", high: "the full canvas, 50 passes, the avoid list, and your words expanded first into a detailed shot description" };
-  const videoSpec = video ? (minimax
+  // LTX-2.5's distilled transformer runs a fixed schedule of eight passes
+  // whatever is asked, so its levels differ by canvas and by the expansion.
+  const ltxText = { low: "a draft: 768 by 512, the model's eight-pass schedule", medium: "the model's 720p canvas (1280 by 704), eight passes, its standard avoid list", high: "720p, the avoid list, and your words expanded first into a detailed shot description" };
+  const videoSpec = video ? (ltx
+    ? { fps: 24, minSeconds: 2, maxSeconds: 10, defaultSeconds: 5, frameStep: 8, frameAdd: 1, sound: true, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 8, width: 768, height: 512, text: ltxText.low }, medium: { steps: 8, width: 1280, height: 704, text: ltxText.medium }, high: { steps: 8, width: 1280, height: 704, expand: true, text: ltxText.high } } }
+    : minimax
     ? { fps: 24, minSeconds: 5, maxSeconds: 15, defaultSeconds: 5, frameStep: 17, frameAdd: 5, sound: true, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 20, width: 960, height: 544, text: levelText.low }, medium: { steps: 30, width: 1344, height: 768, text: levelText.medium }, high: { steps: 50, width: 1344, height: 768, expand: true, text: levelText.high } } }
     : { fps: 16, minSeconds: 1, maxSeconds: 5, defaultSeconds: 3, frameStep: 4, frameAdd: 1, sound: false, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 20, width: 832, height: 480, text: levelText.low }, medium: { steps: 30, width: 1280, height: 704, text: levelText.medium }, high: { steps: 50, width: 1280, height: 704, expand: true, text: levelText.high } } }) : null;
   const qualities = withGpuSeconds(video
-    ? minimax
+    ? ltx
+      ? {
+          fast: { steps: 8, width: 768, height: 512, frames: 121, fps: 24, cfg, text: "a 5-second clip with sound at 768 by 512" },
+          default: { steps: 8, width: 1280, height: 704, frames: 121, fps: 24, cfg, text: "a 5-second clip with sound at 720p" },
+          max: { steps: 8, width: 1280, height: 704, frames: 241, fps: 24, cfg, text: "a 10-second clip with sound at 720p, many minutes" },
+        }
+      : minimax
       ? {
           fast: { steps: 20, width: 960, height: 544, frames: 124, fps: 24, cfg, text: "a 5-second clip with sound at 960 by 544" },
           default: { steps: 30, width: 1344, height: 768, frames: 124, fps: 24, cfg, text: "a 5-second clip with sound at 768p" },
@@ -455,7 +472,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const speed = { text: video ? "A short clip takes a few minutes on a data-centre card; the first one longer while the model loads." : "A picture takes some seconds to a minute on a data-centre card; the first one longer while the model loads.", seconds: null };
   // An image-to-video model animates a picture; a text-to-video one may take one as well.
   const startPicture = video ? (/image-to-video/.test(model.pipeline ?? "") && !(model.tags ?? []).includes("text-to-video") ? "required" : "optional") : null;
-  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, repo.modular), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
+  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, modular, ltx), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
 }
 
 // How a folder model sits on the rented machine's card or cards: whole,
@@ -484,8 +501,8 @@ export function diffusersFit(gb, machine, modular = false) {
 // when they do not all fit, so a card with room for most of it does. On a
 // two-card machine the worker puts its text encoder on the second card and
 // the rest whole on the first, which is the fast way for MiniMax-H3.
-function recommendedGb(gb, modular = false) {
-  return gb ? gb * (modular ? 0.7 : 0.6) : null;
+function recommendedGb(gb, modular = false, whole = false) {
+  return gb ? gb * (whole ? 1.15 : modular ? 0.7 : 0.6) : null;
 }
 
 // The disk a rented machine wants for a model: the model with a margin,
