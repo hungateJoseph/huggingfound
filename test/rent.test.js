@@ -1166,3 +1166,18 @@ test("a data centre where a machine never started its container is avoided by th
     await post("/api/rent/delete", {}).catch(() => {});
   }
 });
+
+test("the data centres to place away from can be set by hand, as ids, and read back from the status", async () => {
+  await post("/api/rent/delete", {}).catch(() => {});
+  assert.equal((await post("/api/settings", { RUNPOD_SLOW_DCS: "nonsense" })).status, 400);
+  assert.equal((await post("/api/settings", { RUNPOD_SLOW_DCS: "EUR-IS-4, US-KS-2" })).status, 200);
+  try {
+    const res = await post("/api/rent", { gb: 48, diskGb: 100 });
+    assert.equal(res.status, 200, await res.text());
+    assert.equal(runpod.state.created.at(-1).dataCenterIds, undefined, "every data centre with the card is to be avoided: no preference, the scheduler chooses");
+    assert.deepEqual((await json("/api/rent")).slowDataCenters, ["EUR-IS-4", "US-KS-2"]);
+  } finally {
+    await post("/api/rent/delete", {}).catch(() => {});
+    await post("/api/settings", { RUNPOD_SLOW_DCS: "" });
+  }
+});

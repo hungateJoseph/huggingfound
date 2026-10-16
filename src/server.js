@@ -52,7 +52,7 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "HF_TOKEN"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "RUNPOD_SLOW_DCS", "HF_TOKEN"]);
 // Models a person has hidden from search and Browse: ids, comma-separated.
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
@@ -506,6 +506,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         const value = String(body.RUNPOD_REGISTRY_AUTH ?? "").trim();
         if (value && !/^[\w-]{1,120}$/.test(value)) return send(res, 400, { error: "That does not look like a RunPod registry credential id" });
         updates.RUNPOD_REGISTRY_AUTH = value;
+      }
+      // Data centres to place the next rent away from, for a day each:
+      // RunPod's ids, with the time each was noted ("EUR-IS-4@<ms>"), or
+      // bare ids, taken as noted now; empty clears the list.
+      if ("RUNPOD_SLOW_DCS" in body) {
+        const items = String(body.RUNPOD_SLOW_DCS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        if (!items.every((s) => /^[A-Z]{2,3}-[A-Z]{2,4}-\d{1,2}(@\d{13})?$/.test(s))) return send(res, 400, { error: "Data centres are RunPod ids such as EUR-IS-4, comma-separated" });
+        updates.RUNPOD_SLOW_DCS = items.map((s) => (s.includes("@") ? s : `${s}@${Date.now()}`)).join(",");
       }
       if ("HIDDEN_MODELS" in body) {
         const ids = Array.isArray(body.HIDDEN_MODELS) ? body.HIDDEN_MODELS : String(body.HIDDEN_MODELS ?? "").split(",");
