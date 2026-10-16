@@ -572,6 +572,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       noteActivity();
     },
     idleMinutes,
+    machineBusy,
     maxSpend,
     // A download in progress keeps the machine awake however long it takes (within the hold limit).
     hold() {

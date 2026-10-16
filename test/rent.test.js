@@ -946,7 +946,7 @@ test("a download asked to stop the machine when it is over does so, unless anoth
   // A server of its own, whose budget of RunPod calls the tests above have not used.
   const ownEnv = path.join(home, "stopafter.env");
   writeEnv(ownEnv, { RUNPOD_API_KEY: KEY, RUNPOD_IDLE_MINUTES: "0" });
-  const own = createServer({ envFile: ownEnv, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, idleWatch: false });
+  const own = createServer({ envFile: ownEnv, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, idleWatch: false, doneStopDelayMs: 60 });
   await new Promise((resolve) => own.listen(0, "127.0.0.1", resolve));
   const ownBase = `http://127.0.0.1:${own.address().port}`;
   const get = (p) => fetch(ownBase + p);
@@ -978,7 +978,16 @@ test("a download asked to stop the machine when it is over does so, unless anoth
   assert.equal((await (await post(`/api/runs/${slow.id}/stop-after`, { on: true })).json()).stopAfter, true);
   assert.equal((await (await post(`/api/runs/${slow.id}/stop-after`, { on: false })).json()).stopAfter, false);
   assert.equal((await (await post(`/api/runs/${slow.id}/stop-after`, {})).json()).stopAfter, true);
+  // A request at work on the machine when the moment comes (a queue that
+  // started as the model arrived) keeps it up: the stop waits a little
+  // after the download and looks first.
+  agent.state.busy = true;
   await wait(slow.id);
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(runpod.state.pods[rented.id].status, "RUNNING", "busy a moment after the download: not stopped");
+  agent.state.busy = false;
+  const third = await (await post("/api/run", { kind: "pull-image-model", args: { repo: "stabilityai/stable-diffusion-xl-base-1.0", file: "sd_xl_base_1.0.safetensors" }, where: "rented", stopAfter: true })).json();
+  await wait(third.id);
   // The stand-in's own record, not the site's status, which spends the per-minute budget of RunPod calls.
   for (let i = 0; i < 80 && runpod.state.pods[rented.id].status === "RUNNING"; i++) await new Promise((r) => setTimeout(r, 25));
   const after = await json("/api/rent");

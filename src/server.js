@@ -57,7 +57,7 @@ const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDL
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
   // Calls to a rented machine's agent carry the secret it was started with.
   fetchImpl = agentFetch(fetchImpl);
   // A hosted copy does not know the visitor's computer; it describes a
@@ -87,7 +87,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   };
   // Marks a run so that, when it is over, the person's machine stops unless
   // another of their downloads is still going. Asked for from the page while
-  // the run goes; the flag can be taken back the same way.
+  // the run goes; the flag can be taken back the same way, up to the stop
+  // itself: the stop waits a little after the run, so that a queue which
+  // starts the moment the model is ready (or anything else at work on the
+  // machine by then) keeps it up, and so that the page can take the flag
+  // back on seeing that queue.
   const stopWhenDone = (ctx, run, on = true) => {
     const rental = ctx.rental;
     if (!rental || !run?.finished) return;
@@ -96,7 +100,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     run.stopAfterWatched = true;
     run.finished.then(async () => {
       if (!run.stopAfter) return;
+      await new Promise((r) => setTimeout(r, doneStopDelayMs));
+      if (!run.stopAfter) return;
       if (listRuns(ctx.user?.id ?? null).some((r) => r.status === "running" && r.id !== run.id)) return;
+      if ((await rental.machineBusy().catch(() => null)) === true) return;
       await rental.stop({ reason: "done" }).catch(() => {});
     });
   };

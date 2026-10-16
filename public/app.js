@@ -1009,13 +1009,22 @@ async function followStep(model, plan, index, id) {
   }
   li.querySelector(".refresh-step").onclick = () => openModel(model.id);
   // On the rented machine: end the bill the moment the download is over.
+  // Ticked unless it was unticked before, since a download left to itself
+  // is easily forgotten; a queue waiting for the model, or anything else
+  // at work on the machine a minute after, keeps it up all the same.
   if (plan.remote && state.rental?.rented && !li.querySelector(".stop-after")) {
     const tick = document.createElement("label");
     tick.className = "check stop-after";
-    tick.title = "The machine stops when this download finishes, unless another of yours is still going; its models stay on its disk";
-    tick.innerHTML = `<input type="checkbox"> Stop the GPU when this finishes${state.rental.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}`;
+    tick.title = "The machine stops a minute after this download finishes, unless another of yours is still going, a queue is waiting for the model, or a request is under way by then; its models stay on its disk. Your choice here is remembered.";
+    tick.innerHTML = `<input type="checkbox" ${stopAfterDownloadWanted() ? "checked" : ""}> Stop the GPU when this finishes${state.rental.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}`;
     (li.querySelector(".step-buttons") ?? btn.parentElement).appendChild(tick);
+    if (stopAfterDownloadWanted()) api.post(`/api/runs/${id}/stop-after`, { on: true }).catch(() => {});
     tick.querySelector("input").addEventListener("change", (e) => {
+      try {
+        localStorage.setItem("stopAfterDownload", e.target.checked ? "1" : "0");
+      } catch {
+        // no storage
+      }
       api.post(`/api/runs/${id}/stop-after`, { on: e.target.checked }).catch((err) => notice(`Could not set that: ${err.message}`, "bad"));
     });
   }
@@ -1035,9 +1044,17 @@ async function followStep(model, plan, index, id) {
     });
     bar.finish(result.status);
     li.classList.remove("running");
+    const stopWanted = Boolean(li.querySelector(".stop-after input")?.checked);
     li.querySelector(".stop-after")?.remove();
     if (result.status === "done") {
       step.done = true;
+      // Requests wait under this model: they start now that it is here,
+      // so the stop asked for is taken back; the queue's own box ends the bill.
+      const waiting = plan.remote && stopWanted ? queueItems(model.id).length : 0;
+      if (waiting) {
+        api.post(`/api/runs/${id}/stop-after`, { on: false }).catch(() => {});
+        log.textContent += `The machine stays up: ${waiting} request${waiting === 1 ? " waits" : "s wait"} in this model's queue and start${waiting === 1 ? "s" : ""} now. Tick "Stop the rented GPU when everything asked for here is made" under the queue to end the bill after them.\n`;
+      }
       li.classList.add("done");
       li.querySelector(".num").textContent = "✓";
       btn.textContent = "Done";
@@ -3238,6 +3255,16 @@ function renderImage(box, t) {
   }
 }
 
+// Whether a download on the rented machine stops it when done: yes unless
+// unticked once, which is remembered.
+function stopAfterDownloadWanted() {
+  try {
+    return localStorage.getItem("stopAfterDownload") !== "0";
+  } catch {
+    return true;
+  }
+}
+
 // Whether the queue waits for a click instead of starting by itself.
 function queueHeld() {
   try {
@@ -4038,7 +4065,7 @@ function renderRental() {
       <label class="field">
         <span>Stop after this many idle minutes</span>
         <input type="number" id="rent-idle" min="0" max="1440" step="1" value="${Number(r.idleMinutes ?? 30)}">
-        <small class="muted">Unset, 30 minutes on a cheap card and 10 on one costing $2 an hour or more. 0 keeps it running until you stop it, though the machine itself gives up after a day without the site. A download in progress keeps it awake, up to six hours; tick "Stop the GPU when this finishes" under the download to end the bill the moment it is done.</small>
+        <small class="muted">Unset, 30 minutes. 0 keeps it running until you stop it, though the machine itself gives up after a day without the site. A download in progress keeps it awake, up to six hours; "Stop the GPU when this finishes" under a download, ticked unless you untick it, ends the bill a minute after it is done.</small>
       </label>
       <label class="field">
         <span>Ask whether I am still here after this many minutes without a click or key</span>

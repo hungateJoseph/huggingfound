@@ -84,9 +84,14 @@ The machine takes two to four minutes to start. Meanwhile:
   download: 30 minutes on a cheap card, 10 on one costing $2 an hour or
   more, unless you set the minutes under the rented machine in Settings; 0
   keeps it running until you stop it. A download in progress always keeps
-  it awake, so tick **Stop the GPU when this finishes** under a download,
-  or **Stop the rented GPU after this picture** in the try box, to end the
-  bill the moment the work is done rather than after an idle wait.
+  it awake. **Stop the GPU when this finishes** under a download is ticked
+  unless you untick it once (remembered in the browser); the stop comes a
+  minute after the download and stands down when another of your
+  downloads is still going, when a request is at work on the machine by
+  then, or when the page sees requests waiting in that model's queue (it
+  takes the flag back and says so in the step's log). **Stop the rented
+  GPU after this picture** in the try box ends the bill the moment the
+  work is done rather than after an idle wait.
 - The page asks **whether you are still there** after 30 minutes without a
   click or key while the machine runs, downloads included, and stops it
   when nobody answers. The minutes are in Settings. That stop is refused

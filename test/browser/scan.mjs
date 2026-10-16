@@ -1043,6 +1043,9 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   // Two polls bring the stand-in machine to RUNNING; the page's own poll would take longer.
   await visitor.request.get(`${hostedBase}/api/rent`);
   await visitor.request.get(`${hostedBase}/api/rent`);
+  // This download is over in a blink: the default stop-when-done is tried
+  // on the slower one below, and kept off here so the machine stays up.
+  await visitor.evaluate(() => localStorage.setItem("stopAfterDownload", "0"));
   acceptDialogs = true;
   await visitor.click("#steps .step .go");
   // A running step says the work goes on without the window, with a way out and a way to stay, and a Refresh that reattaches.
@@ -1089,8 +1092,18 @@ await step("hosted: an image model is downloaded onto the rented GPU and picture
   const titles = await visitor.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
   assert.equal(titles.length, 1);
   assert.match(titles[0], /Download the model on the rented GPU/);
+  // Stop-when-done is ticked by default under a download on the rented
+  // machine; unticked once, that is remembered (and the scan needs the
+  // machine up).
+  await visitor.evaluate(() => localStorage.removeItem("stopAfterDownload"));
+  rentedAgent.state.slowMs = 150;
   acceptDialogs = true;
   await visitor.click("#steps .step .go");
+  await visitor.waitForSelector("#steps .step .stop-after input");
+  assert.equal(await visitor.isChecked("#steps .step .stop-after input"), true, "ticked by default");
+  await visitor.uncheck("#steps .step .stop-after input");
+  assert.equal(await visitor.evaluate(() => localStorage.getItem("stopAfterDownload")), "0", "unticked once, remembered");
+  rentedAgent.state.slowMs = undefined;
   await visitor.waitForSelector("#steps .step.done", { timeout: 15000 });
   acceptDialogs = false;
   assert.ok(rentedAgent.state.downloads.some((d) => /stable-diffusion-v1-5/.test(d.file)));
