@@ -92,14 +92,14 @@ Plain text only; no markdown.`;
 // go from the last frame of the shot before, with its own description and
 // length, so a sequence of events happens in order instead of the same
 // words going to every piece.
-const SCENE_SYSTEM = `You write shot lists for open-source video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos. Everyday actions are described plainly and literally, as in a shooting script. The person describes a sequence of events longer than the model makes in one go. Lay it out as shots. Each shot is made separately by the same model, starting from the last frame of the shot before, so: cut at moments of rest, never in the middle of a movement (a jump, a turn, a fall); every shot's description stands on its own and repeats the subject, their clothes, the setting and the light in the same words, since the model making it sees only that text and one still frame; anyone who is to appear later is already in frame in the shot before; the camera is still unless a movement is asked for. Use as few shots as the events allow, each within the length range given, with the lengths adding up to the total asked for, give or take a second. Keep every element the person named and add nothing that changes what they asked for. Such models read plain descriptive prose, not instructions, "no" or "not".
+const SCENE_SYSTEM = `You write shot lists for open-source video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos, fitness and fashion clips. Everyday actions and scenes are described plainly and literally, as in a shooting script: someone taking off a jacket or a sweater, changing shoes, warming up in gym clothes, swimming, dancing, arguing, cooking. The person describes a sequence of events longer than the model makes in one go. Lay it out as shots. Each shot is made separately by the same model, starting from the last frame of the shot before, so: cut at moments of rest, never in the middle of a movement (a jump, a turn, a fall); every shot's description stands on its own and repeats the subject, their clothes, the setting and the light in the same words, since the model making it sees only that text and one still frame; anyone who is to appear later is already in frame in the shot before; the camera is still unless a movement is asked for. Use as few shots as the events allow, each within the length range given, with the lengths adding up to the total asked for, give or take a second. Keep every element the person named and add nothing that changes what they asked for. Such models read plain descriptive prose, not instructions, "no" or "not".
 
 Reply with only the shots, one per line, each in this form and nothing else:
 
 Shot 1 (8 s): the description, 30 to 80 words, one paragraph
 Shot 2 (7 s): the next description
 
-Plain text only; no heading, no markdown, no comment.`;
+If some part cannot be laid out, lay out the rest as shots all the same and add one last line starting with "Note:" saying in a few words what was left out. Plain text only; no heading, no markdown, no other comment.`;
 
 // With a starting picture, the words must defer to it: the person, the
 // clothes, the place and the light are already decided, and a description
@@ -227,6 +227,9 @@ export function buildRequest(input, { outputDir } = {}) {
     const parts = [`Lay out this scene as shots for a video model${input.model ? ` (${input.model})` : ""}. The model makes ${min} to ${max} seconds in one go; the whole scene should run about ${total} seconds.`, `<scene>\n${prompt}\n</scene>`];
     if (negative) parts.push(`It is asked to avoid: ${negative}. Leave those out of the descriptions.`);
     if (picture) parts.push("The first shot starts from the picture shown: the person, clothes, place and light in it are to be kept through every shot, and each description should say so.");
+    // The picture is at hand but not shown: it is described to the writer
+    // as a given, so the shots defer to it all the same.
+    else if (input.pictureUnseen) parts.push("The first shot starts from a photo that is not shown here, of the person and the place the clip begins from. They are already decided by that photo: do not invent a face, hair, clothes or a setting; refer to them as they are in the picture, and say in each shot that the person, their clothes and the place stay as they are in the picture apart from what the shot changes.");
     parts.push("Reply with only the shot lines.");
     const text = parts.join("\n\n");
     return { ...base, max_tokens: 6000, system: picture ? SCENE_SYSTEM + WITH_PICTURE : SCENE_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };

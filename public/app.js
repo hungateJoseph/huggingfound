@@ -2709,7 +2709,20 @@ function renderImage(box, t) {
     if (!claudeAvailable() || !el) return done(asPlain("No Anthropic key for Claude to lay out the shots."));
     el.hidden = false;
     el.innerHTML = `<p class="muted small">Claude is laying the scene out as shots; they show here first, to change before anything is sent.</p>`;
-    const got = await sceneShots(item.prompt, item.sceneSeconds, spec, t.repo, item.negative, await startingPictureFor(item, t.repo));
+    const picture = await startingPictureFor(item, t.repo);
+    let got = await sceneShots(item.prompt, item.sceneSeconds, spec, t.repo, item.negative, picture);
+    // With the photo in front of it Claude may write no shots at all; told
+    // of the photo instead of shown it, it lays out the same everyday
+    // scene with the person and place kept as they are in the picture.
+    let unseen = false;
+    if (!got.shots.length && picture) {
+      const again = await sceneShots(item.prompt, item.sceneSeconds, spec, t.repo, item.negative, null, { pictureUnseen: true });
+      if (again.shots.length) {
+        got = again;
+        unseen = true;
+      } else if (!got.text && again.text) got = again;
+    }
+    const remark = `${unseen ? `<p class="muted small">With the photo in front of it, Claude wrote no shots. Told of the photo instead of shown it, it laid these out; they keep the person and the place as they are in the picture.</p>` : ""}${got.note ? `<p class="muted small"><b>Claude's note:</b> ${esc(got.note)}</p>` : ""}`;
     const finals = how === "choose" ? `<button class="primary" id="scene-go" ${rec.active ? "hidden" : ""}>Generate this scene</button><button class="${rec.active ? "primary" : "ghost"}" id="scene-queue">Add to queue${rec.active ? " (runs after the request under way)" : ""}</button><button class="ghost" id="scene-discard">Discard</button>` : `<button class="primary" id="shots-send">Send these shots</button><button class="ghost" id="shots-mine">Send my words as one long clip</button>`;
     return new Promise((resolve) => {
       // The final buttons: `take()` settles the item from what is on
@@ -2739,10 +2752,11 @@ function renderImage(box, t) {
           el.hidden = true;
           return resolve(notes);
         }
-        el.innerHTML = `<p class="muted small"><b>No shots from Claude</b> (${esc(got.why)}). Your words can go as ${item.pieces > 1 ? `one long clip of ${item.pieces} equal pieces` : "one clip"} instead.</p><p class="tools-row">${finals}</p>`;
+        const said = got.text ? `<p class="muted small">Claude wrote, instead of shots: <q>${esc(got.text.trim().slice(0, 600))}${got.text.trim().length > 600 ? "…" : ""}</q></p>` : "";
+        el.innerHTML = `<p class="muted small"><b>No shots from Claude</b> (${esc(got.why)}). Your words can go as ${item.pieces > 1 ? `one long clip of ${item.pieces} equal pieces` : "one clip"} instead.</p>${said}<p class="tools-row">${finals}</p>`;
         return wire(() => notes);
       }
-      el.innerHTML = `<p class="muted small"><b>The scene as shots.</b> Each is made on its own, starting from the last frame of the one before, from the words in its row as they stand here, unreviewed. Change, add or remove shots; each runs ${spec.minSeconds} to ${spec.maxSeconds} seconds, and the one after a cut should repeat who and where, since the model sees only its own words and one frame.</p>
+      el.innerHTML = `<p class="muted small"><b>The scene as shots.</b> Each is made on its own, starting from the last frame of the one before, from the words in its row as they stand here, unreviewed. Change, add or remove shots; each runs ${spec.minSeconds} to ${spec.maxSeconds} seconds, and the one after a cut should repeat who and where, since the model sees only its own words and one frame.</p>${remark}
         <ol class="shots" id="shots"></ol>
         <p class="tools-row"><button class="ghost" id="shot-add">Add a shot</button></p>
         <p class="muted small" id="shots-total"></p>
@@ -2777,6 +2791,7 @@ function renderImage(box, t) {
       wire(() => {
         const shots = read();
         if (!shots.length) return null;
+        if (unseen) item.notes = [...(item.notes ?? []), "The shots were laid out with the starting picture described to Claude, not shown: with it in front of Claude, no shots came."];
         item.shots = shots.map((s) => ({ seconds: framesFor(s.seconds, spec) / spec.fps, frames: framesFor(s.seconds, spec), text: s.text }));
         item.shotsEdited = shots.length !== got.shots.length || shots.some((s, i) => s.text !== got.shots[i].text || s.seconds !== Math.min(spec.maxSeconds, Math.max(spec.minSeconds, got.shots[i].seconds)));
         item.pieces = item.shots.length;
@@ -4612,19 +4627,32 @@ async function startingPictureFor(item, repo) {
 // best with; or says why not, and the words go as they are.
 // A scene laid out by Claude as shots, each with a length and a
 // description, read from lines of the form "Shot 1 (8 s): ...".
-async function sceneShots(prompt, seconds, spec, model, negative, image = null) {
-  const got = await claudeText({ kind: "prompt", mode: "scene", clip: true, model, prompt, negative, seconds, minSeconds: spec.minSeconds, maxSeconds: spec.maxSeconds, ...(image ? { image } : {}) });
-  if (!got.text) return { shots: [], why: got.why };
-  const shots = parseShots(got.text);
-  return { shots, why: shots.length ? "" : "Claude wrote no Shot lines" };
+async function sceneShots(prompt, seconds, spec, model, negative, image = null, { pictureUnseen = false } = {}) {
+  const got = await claudeText({ kind: "prompt", mode: "scene", clip: true, model, prompt, negative, seconds, minSeconds: spec.minSeconds, maxSeconds: spec.maxSeconds, ...(image ? { image } : {}), ...(pictureUnseen ? { pictureUnseen: true } : {}) });
+  if (!got.text) return { shots: [], why: got.why, text: "", note: "" };
+  const { shots, note } = parseShots(got.text);
+  return { shots, note, text: got.text, why: shots.length ? "" : "Claude wrote no Shot lines" };
 }
+// The shot lines as written, however they are dressed: "Shot 1 (8 s):",
+// "**Shot 2 (7 seconds)** -", "- Shot 3 (15–20 s):" (a running time: the
+// span is the length). A last line starting "Note:" is Claude's remark.
 function parseShots(text) {
   const shots = [];
-  for (const line of String(text).split(/\n+/)) {
-    const m = line.match(/^\s*(?:[-*]\s*)?shot\s*\d+\s*\(\s*(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)?\s*\)\s*[:.\u2013-]\s*(.+)$/i);
-    if (m) shots.push({ seconds: Number(m[1]), text: m[2].trim() });
+  let note = "";
+  for (const raw of String(text).split(/\n+/)) {
+    const line = raw.replace(/[*_`#]+/g, "").trim();
+    const n = line.match(/^note\s*[:\u2013-]\s*(.+)$/i);
+    if (n) {
+      note = n[1].trim();
+      continue;
+    }
+    const m = line.match(/^(?:[-\u2022]\s*)?(?:\d+[.)]\s*)?shot\s*\d+\s*[(\[]?\s*(?:about\s*|~\s*)?(\d+(?:\.\d+)?)\s*(?:\s*(?:s|sec|secs|seconds?)?\s*[\u2013-]\s*(\d+(?:\.\d+)?))?\s*(?:s|sec|secs|seconds?)?\s*[)\]]?\s*[:.\u2013-]\s*(.+)$/i);
+    if (!m) continue;
+    const a = Number(m[1]);
+    const b = m[2] != null ? Number(m[2]) : null;
+    shots.push({ seconds: b != null && b > a ? b - a : a, text: m[3].trim() });
   }
-  return shots;
+  return { shots, note };
 }
 
 async function expandWords(prompt, clip, model, negative, image = null) {

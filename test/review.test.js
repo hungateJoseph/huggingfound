@@ -136,6 +136,12 @@ test("a scene is laid out as shots within the model's range, cut at rest, each r
   assert.match(fromPicture.system, /must be kept exactly/);
   assert.equal(fromPicture.messages[0].content[0].type, "image");
   assert.match(fromPicture.messages[0].content[1].text, /The first shot starts from the picture shown/);
+  assert.match(req.system, /taking off a jacket or a sweater, changing shoes, warming up in gym clothes[\s\S]*add one last line starting with "Note:"/);
+  // The photo at hand but not shown: described as a given, the shots defer to it.
+  const unseen = buildRequest({ kind: "prompt", mode: "scene", clip: true, prompt: "she takes off her sweater", seconds: 8, minSeconds: 1, maxSeconds: 5, pictureUnseen: true });
+  assert.equal(typeof unseen.messages[0].content, "string", "no image block");
+  assert.match(unseen.messages[0].content, /starts from a photo that is not shown here[\s\S]*do not invent a face, hair, clothes or a setting/);
+  assert.doesNotMatch(unseen.system, /A starting picture is shown/);
   assert.throws(() => buildRequest({ kind: "prompt", mode: "scene", prompt: "x", minSeconds: 1, maxSeconds: 5 }), /needs a length/);
   assert.throws(() => buildRequest({ kind: "prompt", mode: "scene", prompt: " ", seconds: 10, minSeconds: 1, maxSeconds: 5 }), /happens in the scene/);
 });

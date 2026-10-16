@@ -261,8 +261,14 @@ The machine takes two to four minutes to start. Meanwhile:
   is offered, and the scene runs next by itself. What is in the rows goes
   to the model shot by shot, unreviewed, each shot from the last frame of
   the one before, then joined as "T s as a scene of N shots". No Shot
-  lines: the preview says so and the words can go as a plain long clip of
-  equal pieces. Scene only shows with an Anthropic key saved or entered. A machine from before joining
+  lines: the preview says so, shows what Claude wrote instead, and the
+  words can go as a plain long clip of equal pieces. The lines are read
+  however they are dressed (bold, bullets, "seconds", a running-time
+  range) and a closing "Note:" line is shown as Claude's note. With a
+  starting photo in front of it Claude may write no shots; the page then
+  asks once more with the photo described rather than shown
+  (`pictureUnseen`), and says so above the rows and in the log. Scene
+  only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
 - A reply to a clip can continue it instead of changing it: the next clip
   starts from this one's last frame (the kept frame, or one read from the

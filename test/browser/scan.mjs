@@ -68,7 +68,11 @@ const reviewer = {
     // cannot be laid out comes back without Shot lines.
     if (input.mode === "scene") {
       if (/no shots please/.test(input.prompt)) onText("I cannot lay this one out as shots.");
-      else onText("Shot 1 (4 s): a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still\nShot 2 (3 s): the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, sunny back garden\nShot 3 (5 s): the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence");
+      // Shown a photo of the person, no shots; told of it instead, the shots keep them as in the picture.
+      else if (/shy with the picture/.test(input.prompt) && input.image) onText("I would rather not describe this particular person from the photo.");
+      else if (/shy with the picture/.test(input.prompt)) onText(`Shot 1 (4 s): the woman as in the picture, in the same clothes and place, pulls her sweater up and over her head, camera still${input.pictureUnseen ? ", the picture's setting kept" : ""}\nShot 2 (4 s): the same woman as in the picture folds the sweater and sets it down, the place unchanged\nNote: the person and place are taken as they are in the picture.`);
+      // The lines as a model dresses them: bold, a bullet, "seconds", a range as a running time, and a closing note.
+      else onText("Shot 1 (4 s): a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still\n**Shot 2 (3 seconds):** the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, sunny back garden\n- Shot 3 (7–12 s) – the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence\nNote: the father is in frame from the first shot.");
       return { declined: false, model: "claude-opus-5", note: "" };
     }
     // The next shot: what happens next, as the scene goes on.
@@ -1506,7 +1510,8 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.waitForSelector("#shots li");
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).seconds, reviewed.at(-1).minSeconds, reviewed.at(-1).maxSeconds, reviewed.at(-1).clip], ["scene", 12, 1, 5, true], "Claude is told the length and the model's shot range");
   assert.equal(await visitor.locator("#shots li").count(), 3);
-  assert.deepEqual(await visitor.$$eval("#shots .shot-seconds", (els) => els.map((e) => e.value)), ["4", "3", "5"]);
+  assert.deepEqual(await visitor.$$eval("#shots .shot-seconds", (els) => els.map((e) => e.value)), ["4", "3", "5"], "bold, bulleted and running-time lines are read all the same");
+  assert.match(await visitor.locator("#suggest").innerText(), /Claude's note: the father is in frame from the first shot\./);
   assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 12\.2 s in all at low quality \(832 by 480, 20 passes each\), about [\s\S]*A lower quality above makes every shot quicker\./);
   assert.equal(await visitor.locator("#scene-go").isHidden(), true, "busy: the scene cannot be made now");
   assert.equal(await visitor.locator("#scene-queue").innerText(), "Add to queue (runs after the request under way)");
@@ -1542,7 +1547,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.fill("#image-prompt", "no shots please");
   await visitor.click("#scene-preview");
   await visitor.waitForSelector("#scene-go:not([hidden])");
-  assert.match(await visitor.locator("#suggest").innerText(), /No shots from Claude \(Claude wrote no Shot lines\)\. Your words can go as one clip instead\./);
+  assert.match(await visitor.locator("#suggest").innerText(), /No shots from Claude \(Claude wrote no Shot lines\)\. Your words can go as one clip instead\.[\s\S]*Claude wrote, instead of shots: I cannot lay this one out as shots\./);
   assert.equal(await visitor.locator("#scene-queue").innerText(), "Add to queue", "free now: the scene can be made at once or queued");
   await visitor.click("#scene-go");
   await visitor.waitForFunction(() => /Claude laid out no shots \(Claude wrote no Shot lines\)\. Made as one clip from your words instead\./.test(document.querySelector("#image-log")?.textContent ?? ""), null, { timeout: 20000 });
@@ -1557,6 +1562,21 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.equal(await visitor.locator("#suggest").isHidden(), true);
   assert.equal(rentedAgent.state.jobs.length, jobsBeforeDiscard);
   assert.equal(await visitor.locator("#queue-list li").count(), 0);
+  // A photo of the person: shown it, Claude writes no shots; told of it
+  // instead, it lays the scene out with the person kept as in the picture.
+  await visitor.setInputFiles("#video-start", { name: "her.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64") });
+  await visitor.fill("#video-seconds", "8");
+  await visitor.fill("#image-prompt", "shy with the picture: she takes off her sweater and folds it");
+  const shyBefore = reviewed.length;
+  await visitor.click("#scene-preview");
+  await visitor.waitForSelector("#shots li");
+  assert.equal(reviewed.length - shyBefore, 2, "asked twice: with the photo, then with the photo described");
+  assert.deepEqual([Boolean(reviewed.at(-2).image), reviewed.at(-2).pictureUnseen ?? false, reviewed.at(-1).image ?? null, reviewed.at(-1).pictureUnseen], [true, false, null, true]);
+  assert.match(await visitor.locator("#suggest").innerText(), /With the photo in front of it, Claude wrote no shots\. Told of the photo instead of shown it, it laid these out; they keep the person and the place as they are in the picture\.[\s\S]*Claude's note: the person and place are taken as they are in the picture\./);
+  assert.equal(await visitor.locator("#shots li").count(), 2);
+  assert.match(await visitor.locator("#shots li:nth-child(1) .shot-text").inputValue(), /the picture's setting kept$/);
+  await visitor.click("#scene-discard");
+  await visitor.setInputFiles("#video-start", []);
   await visitor.click("#clip-kind input[value=short]");
   await visitor.fill("#video-seconds", "3");
   await visitor.fill("#image-prompt", "");
