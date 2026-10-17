@@ -182,7 +182,11 @@ def load_folder(model_dir, dtype, weights):
     # fails on "no file named model.safetensors". Said in the log, with any
     # folder that is there but holds no weights, so a failed load names its cause.
     absent = [name for name, spec in index.items() if isinstance(spec, list) and spec and spec[0] and not os.path.isdir(os.path.join(model_dir, name))]
-    hollow = [name for name, spec in index.items() if isinstance(spec, list) and spec and spec[0] and name not in absent and spec[0] in ("diffusers", "transformers") and not any(f.endswith((".safetensors", ".bin", ".ckpt", ".pt")) for f in os.listdir(os.path.join(model_dir, name)))]
+    # A scheduler, a tokenizer or a processor is configuration alone; any
+    # other component's folder should hold weights.
+    configured = ("Scheduler", "Tokenizer", "Processor", "FeatureExtractor")
+    weightfile = (".safetensors", ".bin", ".ckpt", ".pt", ".pth", ".gguf", ".msgpack")
+    hollow = [name for name, spec in index.items() if isinstance(spec, list) and len(spec) > 1 and spec[0] and name not in absent and not any(w in str(spec[1]) for w in configured) and not any(f.endswith(weightfile) for f in os.listdir(os.path.join(model_dir, name)))]
     if absent or hollow:
         say({"progress": 0, "note": f"components the index names: {', '.join(k for k, v in index.items() if isinstance(v, list))}" + (f"; left on the Hub, not loaded: {', '.join(absent)}" if absent else "") + (f"; folders without weights: {', '.join(hollow)}" if hollow else "")})
     if absent:

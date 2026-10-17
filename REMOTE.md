@@ -310,7 +310,9 @@ The machine takes two to four minutes to start. Meanwhile:
   the on-disk model_index.json (a `model_index.json.hub` copy kept), says
   in the load note which components the index names, which are left on
   the Hub and which folders hold no weights, and refuses a folder without
-  weights with "run the download again". Image version 13. The repository
+  weights with "run the download again" (model components only: a
+  scheduler, tokenizer, processor or feature extractor is configuration
+  alone, which the first cut of the check got wrong; image 14). Image version 13. The repository
   also carries the transformer sharded two ways (four parts and eight, 38
   GB each) and the connectors as one file and as two parts: hf.js
   `withoutSpareShards` (in `hub.model`) reads each such folder's
