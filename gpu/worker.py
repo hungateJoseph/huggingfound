@@ -71,6 +71,7 @@ def unload():
     state["key"] = None
     state["kind"] = None
     state["adapters"] = []
+    state["loras"] = []
     state["modular"] = False
     state["workflow"] = None
     gc.collect()
@@ -90,6 +91,12 @@ def load(req):
     key = json.dumps([model_dir or single, adapters], sort_keys=True)
     if state.get("key") == key and state["pipe"] is not None:
         return {"ok": True, "kind": state["kind"], "already": True}
+    # The same modular model with other LoRAs (or none): swapped on the
+    # loaded transformer rather than loading 130 GB again.
+    if state["pipe"] is not None and state.get("modular") and state.get("dir") == model_dir and model_dir and all((a.get("kind") or "lora") == "lora" for a in list(adapters) + list(state.get("adapters") or [])):
+        swap_loras(state["pipe"], adapters, dtype_of(state["pipe"]))
+        state.update(adapters=adapters, key=key)
+        return {"ok": True, "kind": state["kind"], "already": True, "mode": state.get("mode"), "note": MODE_NOTES.get(state.get("mode"), "")}
     unload()
     dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
     if single:
@@ -294,6 +301,9 @@ def apply_adapter(pipe, adapter, dtype):
     folder, name = os.path.split(path)
     scale = float(adapter.get("scale") or (0.8 if kind == "lora" else 0.6))
     if kind == "lora":
+        if state.get("modular") or not hasattr(pipe, "load_lora_weights"):
+            apply_transformer_lora(pipe, path, scale)
+            return
         pipe.load_lora_weights(folder, weight_name=name, adapter_name="addon")
         pipe.set_adapters(["addon"], adapter_weights=[scale])
         return
@@ -315,6 +325,98 @@ def apply_adapter(pipe, adapter, dtype):
         lfolder, lname = os.path.split(str(lora))
         pipe.load_lora_weights(lfolder, weight_name=lname, adapter_name="faceid")
         pipe.set_adapters(["faceid"], adapter_weights=[0.7])
+
+
+# ---- LoRAs on a video model's transformer ------------------------------------------
+# A LoRA trained with ai-toolkit (the MiniMax-H3 extension) names its
+# modules as ComfyUI does, "diffusion_model.blocks.N.attn.qkv_proj" and so
+# on; the transformer the library loads names them "transformer_blocks.N.
+# attn.to_q" with the three projections apart. The tensors are renamed,
+# the fused projection split in three, and the adapter set on the
+# transformer itself, which takes LoRAs whatever pipeline wraps it.
+LORA_RENAMES = (
+    (".attn.out_proj", ".attn.to_out.0"),
+    (".mlp.fc1", ".ff.net.0.proj"),
+    (".mlp.fc2", ".ff.net.2"),
+)
+
+
+def dtype_of(pipe):
+    import torch
+
+    with contextlib.suppress(Exception):
+        return next(pipe.transformer.parameters()).dtype
+    return torch.bfloat16
+
+
+def convert_video_lora(sd):
+    """A LoRA state dict in the transformer's own names, with how many
+    tensors were left as they were (none, when the file is already so)."""
+    import torch
+
+    out = {}
+    foreign = 0
+    for key, value in sd.items():
+        k = key
+        if k.startswith("diffusion_model."):
+            k = k[len("diffusion_model.") :]
+        if k.startswith("blocks."):
+            k = "transformer_blocks." + k[len("blocks.") :]
+        if k.startswith("token_refiner.blocks."):
+            k = "token_refiner.refiner_blocks." + k[len("token_refiner.blocks.") :]
+        for a, b in LORA_RENAMES:
+            k = k.replace(a, b)
+        k = k.replace(".lora_down.weight", ".lora_A.weight").replace(".lora_up.weight", ".lora_B.weight")
+        if ".attn.qkv_proj." in k:
+            if ".lora_A." in k:
+                for part in ("to_q", "to_k", "to_v"):
+                    out[k.replace("qkv_proj", part)] = value
+            elif ".lora_B." in k:
+                for part, piece in zip(("to_q", "to_k", "to_v"), torch.chunk(value, 3, dim=0)):
+                    out[k.replace("qkv_proj", part)] = piece.contiguous()
+            else:
+                foreign += 1
+            continue
+        if not (".lora_A." in k or ".lora_B." in k or k.endswith(".alpha")):
+            foreign += 1
+            continue
+        out[k] = value
+    return out, foreign
+
+
+def apply_transformer_lora(pipe, path, scale, name="addon"):
+    import torch
+    from safetensors.torch import load_file
+
+    transformer = getattr(pipe, "transformer", None)
+    if transformer is None or not hasattr(transformer, "load_lora_adapter"):
+        raise ValueError("this model's transformer takes no LoRA")
+    sd, foreign = convert_video_lora(load_file(path))
+    if not sd:
+        raise ValueError("the LoRA file holds no tensors in a layout this model's transformer takes")
+    known = {n for n, _ in transformer.named_modules()}
+    wanted = {k.rsplit(".lora_", 1)[0] for k in sd if ".lora_" in k}
+    missing = sorted(m for m in wanted if m not in known)
+    if missing:
+        raise ValueError(f"the LoRA names {len(missing)} of {len(wanted)} modules this model does not have ({', '.join(missing[:3])}…); it was made for another model or layout")
+    device = next(transformer.parameters()).device
+    sd = {k: v.to(device=device, dtype=next(transformer.parameters()).dtype) for k, v in sd.items()}
+    transformer.load_lora_adapter(sd, adapter_name=name, prefix=None)
+    transformer.set_adapters([name], weights=[scale])
+    state.setdefault("loras", []).append(name)
+    say({"progress": 0, "note": f"LoRA {os.path.basename(path)} on the transformer at strength {scale:g}: {len(wanted)} modules{f', {foreign} tensors not of a LoRA left aside' if foreign else ''}"})
+
+
+def swap_loras(pipe, adapters, dtype):
+    """The LoRAs on a loaded transformer replaced by these, without a reload."""
+    transformer = getattr(pipe, "transformer", None)
+    names = state.get("loras") or []
+    if transformer is not None and names:
+        with contextlib.suppress(Exception):
+            transformer.delete_adapters(names)
+    state["loras"] = []
+    for adapter in adapters:
+        apply_adapter(pipe, adapter, dtype)
 
 
 def face_embeds(pipe, image, adapter, dtype):
@@ -566,7 +668,9 @@ def fit_modular_request(pipe, kwargs, kind, fps):
         frames = asked
         lo, hi = facts.get("lo"), facts.get("hi")
         chunk, keep = int(facts.get("chunk") or 0), int(facts.get("keep") or 0)
-        if lo:
+        # A LoRA trained on shorter clips than the model's own floor (the
+        # orbit LoRA, 73 frames) is taken at its word.
+        if lo and not state.get("loras"):
             frames = max(frames, math.ceil(lo * fps))
         if chunk > 0:
             while frames % chunk != keep:
@@ -794,6 +898,11 @@ def generate(req):
         else:
             kwargs["ip_adapter_image"] = reference
 
+    # A picture the clip ends on, for a keyframe workflow (MiniMax-H3's
+    # fl2va): an orbit LoRA ends where it began, on the same picture.
+    last_init = req.get("lastInit")
+    if last_init and "last_image" in params:
+        kwargs["last_image"] = Image.open(io.BytesIO(base64.b64decode(last_init))).convert("RGB")
     init = req.get("init")
     if init:
         image = Image.open(io.BytesIO(base64.b64decode(init))).convert("RGB")

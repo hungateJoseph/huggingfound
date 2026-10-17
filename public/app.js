@@ -2272,11 +2272,15 @@ function renderImage(box, t) {
   const addon = t.engine === "addon";
   const bases = addon ? t.bases ?? [] : [];
   const variants = addon ? t.variants ?? [] : [];
+  const videoLora = addon && t.addonKind === "video-lora";
+  const baseName = videoLora ? String(t.base ?? "").split("/").pop() : "";
+  const scale0 = videoLora ? String(t.strength ?? 1) : t.addonKind === "lora" ? "0.8" : "0.6";
   const addonHtml = addon ? `<div class="addon-setup">
-      ${bases.length ? `<label class="field"><span>Base model on the rented GPU</span><select id="addon-base">${bases.map((b, i) => `<option value="${i}">${esc(b.label)}${b.xl ? " · SDXL" : " · SD 1.5"}</option>`).join("")}</select></label>` : `<div class="notice warn">No base model is on the rented GPU yet. Open a Stable Diffusion 1.5 or SDXL model from the Easy to set up list, download it on the rented GPU, then come back here.</div>`}
-      <label class="field"><span>Variant</span><select id="addon-variant">${variants.map((v, i) => `<option value="${i}">${esc(v.label)}${v.gb ? `, ${v.gb.toFixed(2)} GB` : ""}</option>`).join("")}</select><small class="muted">Pick the variant made for the base's family: SD 1.5 variants for SD 1.5 bases, SDXL for SDXL.</small></label>
+      ${bases.length ? `<label class="field"><span>${videoLora ? "Applied to" : "Base model on the rented GPU"}</span><select id="addon-base">${bases.map((b, i) => `<option value="${i}">${esc(b.label)}${videoLora ? " · on the rented GPU" : b.xl ? " · SDXL" : " · SD 1.5"}</option>`).join("")}</select></label>` : `<div class="notice warn">${videoLora ? `${esc(baseName)} is not on the rented GPU yet. Open ${esc(baseName)}, download it on the rented GPU, then come back here: this LoRA is applied to it.` : "No base model is on the rented GPU yet. Open a Stable Diffusion 1.5 or SDXL model from the Easy to set up list, download it on the rented GPU, then come back here."}</div>`}
+      <label class="field"><span>Variant</span><select id="addon-variant">${variants.map((v, i) => `<option value="${i}">${esc(v.label)}${v.gb ? `, ${v.gb.toFixed(2)} GB` : ""}</option>`).join("")}</select>${videoLora ? "" : `<small class="muted">Pick the variant made for the base's family: SD 1.5 variants for SD 1.5 bases, SDXL for SDXL.</small>`}</label>
       ${t.addonKind === "ip-adapter" ? `<label class="field"><span>Reference picture</span><input type="file" id="addon-ref" accept="image/*"><small class="muted">${variants.some((v) => v.faceid) ? "A clear photo of the face to keep." : "The picture whose subject or style to carry over."}</small></label>` : ""}
-      <label class="field"><span>Strength <output id="addon-scale-out">${t.addonKind === "lora" ? "0.8" : "0.6"}</output></span><input type="range" id="addon-scale" min="0.1" max="1.5" step="0.05" value="${t.addonKind === "lora" ? "0.8" : "0.6"}"></label>
+      <label class="field"><span>Strength <output id="addon-scale-out">${scale0}</output></span><input type="range" id="addon-scale" min="0.1" max="1.5" step="0.05" value="${scale0}"></label>
+      ${videoLora && t.triggerPrompt ? `<p class="muted small"><b>Its words.</b> This LoRA was trained with the description below, which is filled in for you; keep it, and add to it if you must.</p>` : ""}
     </div>` : "";
   const save = autosaveSettings();
   const what = video ? "clip" : "picture";
@@ -2300,6 +2304,7 @@ function renderImage(box, t) {
     ${addonHtml}
     ${settingsHtml}
     ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">${t.startPicture === "required" ? "This model animates a picture: the clip begins from it." : "With a picture the clip begins from it; without one it comes from the words alone."}</small></label>` : ""}
+    ${video && t.lastPicture ? `<label class="field"><span>Last picture</span><select id="video-last"><option value="same" ${t.lastPicture === "same" ? "selected" : ""}>the same picture: the clip ends where it began</option><option value="none" ${t.lastPicture === "none" ? "selected" : ""}>none: the clip ends where the model takes it</option><option value="file">another picture</option></select><input type="file" id="video-last-file" accept="image/*" hidden><small class="muted">${t.lastPicture === "same" ? "This LoRA was trained to come back to its starting frame, a full orbit; keep the same picture unless you want it to end elsewhere." : "The model can be given a frame to end on."}</small></label>` : ""}
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
       <span class="go-buttons"><button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>${t.agent ? `<button class="ghost" id="queue-add" title="Starts as soon as the machine is free of the request under way, then the next after it; each is kept here and saved as it finishes">Add to queue</button>` : ""}${canScene ? `<button class="primary" id="scene-preview" hidden title="Claude lays the scene out as shots and shows them here, to read and change; nothing goes to the machine until you say so. This works while the machine is busy with something else">Preview Claude's scene setup</button>` : ""}</span>
@@ -2330,6 +2335,11 @@ function renderImage(box, t) {
     notice("The image model was unloaded from memory.", "ok");
   });
   box.querySelector("#addon-scale")?.addEventListener("input", (e) => (box.querySelector("#addon-scale-out").value = e.target.value));
+  box.querySelector("#video-last")?.addEventListener("change", (e) => {
+    const file = box.querySelector("#video-last-file");
+    if (file) file.hidden = e.target.value !== "file";
+  });
+  if (videoLora && t.triggerPrompt && !box.querySelector("#image-prompt").value.trim()) box.querySelector("#image-prompt").value = t.triggerPrompt;
   // Claude suggests a better description for what was typed, with the
   // starting picture in front of it when there is one: the words these
   // models follow, the unwanted moved to the avoid list, the motion spelt
@@ -3104,7 +3114,22 @@ function renderImage(box, t) {
       extra.init = await readAsDataUrl(src.blob);
       extra.strength = item.strength ?? 0.4;
     }
-    if (addon) {
+    if (addon && videoLora) {
+      const base = bases[Number(box.querySelector("#addon-base")?.value ?? -1)];
+      if (!base) throw new Error(`${baseName} is not on the rented GPU yet; open it and download it there first`);
+      const variant = variants[Number(box.querySelector("#addon-variant").value)];
+      if (t.startPicture === "required" && !extra.init) throw new Error("this LoRA needs a starting picture");
+      const ending = box.querySelector("#video-last")?.value ?? "none";
+      let lastInit = null;
+      if (ending === "same") lastInit = extra.init ?? null;
+      else if (ending === "file") {
+        const f = box.querySelector("#video-last-file")?.files[0];
+        if (!f) throw new Error("pick the last picture, or choose the same picture");
+        lastInit = await readAsDataUrl(f);
+      }
+      target = { repo: base.repo, file: base.file };
+      extra = { ...extra, addon: { kind: "lora", repo: t.repo, file: variant.file, lora: null, scale: Number(box.querySelector("#addon-scale").value) }, ...(lastInit ? { lastInit } : {}) };
+    } else if (addon) {
       const base = bases[Number(box.querySelector("#addon-base")?.value ?? -1)];
       if (!base) throw new Error("no base model on the rented GPU yet");
       const variant = variants[Number(box.querySelector("#addon-variant").value)];
@@ -3619,7 +3644,7 @@ async function resetAgent(agent, jobId, onLine) {
 }
 
 // Hands one job to the machine and returns its id.
-async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false, seed = null }, onLine = () => {}) {
+async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false, seed = null, lastInit = null }, onLine = () => {}) {
   const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
   // An add-on on an SDXL base draws at SDXL's size.
   const width = addon && xl ? 1024 : (q.width ?? q.size);
@@ -3633,6 +3658,7 @@ async function submitJob(agent, { repo, file, prompt, negative, quality, init = 
   if (video) {
     body.frames = q.frames;
     body.fps = q.fps;
+    if (lastInit) body.lastInit = lastInit;
   }
   if (init) {
     body.init = init;
@@ -4203,7 +4229,7 @@ function renderRental() {
       ${capNote}${stuck}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
-      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
+      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.retrying ? ` <b>Start is asked again every minute for ${Math.max(1, Math.ceil((startRetry.until - Date.now()) / 60e3))} more minutes${startRetry.tries ? ` (${startRetry.tries} so far)` : ""}; this can be left as it is.</b>` : state.rentError.noGpu && state.rentError.action === "start" ? " Start was asked again every minute for half an hour without luck." : ""}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>${state.rentError.retrying ? `<button class="ghost" id="rent-stop-retry">Stop asking</button>` : ""}` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}

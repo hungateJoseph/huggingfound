@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CATEGORIES, categorize, describe, paramSize } from "../src/categorize.js";
+import { CATEGORIES, categorize, describe, paramSize, videoLoraBase } from "../src/categorize.js";
 
 const gguf = (id, extra = {}) => ({ id, pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf"], ...extra });
 
@@ -100,6 +100,14 @@ test("adult models are flagged and land in the NSFW buckets as well as their own
   const plain = categorize(gguf("bartowski/Qwen2.5-7B-Instruct-GGUF"));
   assert.equal(plain.adult, false);
   assert.ok(!plain.categories.some((c) => c.startsWith("nsfw")));
+});
+
+test("a LoRA made for a video model the rented GPU runs is an add-on for it, not a loose part", () => {
+  const orbit = categorize({ id: "pablodawson/MiniMax-H3-360-Orbit-LoRA", pipeline_tag: "image-text-to-video", library_name: "minimax-h3", tags: ["lora", "minimax-h3", "image-to-video", "first-last-frame", "orbit"] });
+  assert.deepEqual(orbit.categories, ["images"]);
+  assert.equal(orbit.runner.id, "diffusers");
+  assert.equal(videoLoraBase({ id: "x/some-lora", tags: ["lora"], cardData: { base_model: "MiniMaxAI/MiniMax-H3" } }), "MiniMaxAI/MiniMax-H3", "the card's base model counts too");
+  assert.equal(videoLoraBase({ id: "y/detail-tweaker-lora", tags: ["lora"] }), null);
 });
 
 test("parts of a model are not offered as models", () => {

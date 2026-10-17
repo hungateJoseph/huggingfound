@@ -300,6 +300,33 @@ The machine takes two to four minutes to start. Meanwhile:
   `state.dataCenters[gpuId]`, default US-KS-2 and EUR-IS-4 for every card;
   `state.refusePlacement` refuses a create that names data centres; a pod
   lands in the first preferred data centre.
+- LoRAs for MiniMax-H3 (image 17), for pablodawson/MiniMax-H3-360-Orbit-LoRA
+  and its kind: categorize.js `videoLoraBase(model)` (a LoRA by name or
+  tag whose tags or card name MiniMax-H3) lets such a repository through
+  the "pieces of a model" rule as an image-family add-on for the diffusers
+  runner; hf.js summaries carry `baseModel` and `triggerPrompt`
+  (cardData.base_model / instance_prompt). plans.js `addonVariants(files,
+  videoBase)` gives kind "video-lora" with the .safetensors weights (sample
+  media left out); `addonPlan` takes as base only `<base>/model_index.json`
+  on the rented GPU, returns a `video` spec (MiniMax's, from three seconds:
+  the orbit LoRA was trained on 73 frames) and `tryWith {kind: "video",
+  engine: "addon", addonKind: "video-lora", base, startPicture: "required"
+  for first-last/orbit tags, lastPicture: "same", triggerPrompt, strength
+  1}`. Page: the add-on box names the base ("Applied to MiniMax-H3"), the
+  LoRA's words are filled into the prompt, a "Last picture" select (the
+  same picture / none / another) sits under the starting picture, and the
+  request goes to the base with `addon {kind: "lora", repo, file, scale}`
+  and `lastInit`. Agent: `/jobs` takes `lastInit` like `init`. Worker:
+  `apply_transformer_lora` renames ai-toolkit/ComfyUI keys
+  (`diffusion_model.blocks.N.attn.qkv_proj|out_proj`, `mlp.fc1|fc2`,
+  `token_refiner.blocks.N`) to the library's (`transformer_blocks.N.attn.
+  to_q/to_k/to_v` with the fused projection split in three, `to_out.0`,
+  `ff.net.0.proj`, `ff.net.2`, `token_refiner.refiner_blocks.N`), refuses
+  a file naming modules the transformer lacks, and sets the adapter on the
+  transformer (`load_lora_adapter` + `set_adapters`); `swap_loras` changes
+  LoRAs on a loaded modular model without a reload; `last_image` goes to
+  the fl2va workflow; with a LoRA on, the model's five-second floor is not
+  enforced. Untested on hardware: the orbit LoRA end to end.
 - LTX-2.5, fourth try (image 16): image 15 ran out of memory "while pass
   1" on a request from a starting picture: the worker's log showed the
   image-to-video pipeline failing in the transformer's feed-forward with

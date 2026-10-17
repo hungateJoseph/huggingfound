@@ -37,7 +37,7 @@ rl.on("line", (line) => {
   }
   if (req.op === "generate") {
     if (!loaded) return say({ ok: false, error: "ValueError: no model is loaded" });
-    if (process.env.FAKE_WORKER_LOG) fs.appendFileSync(process.env.FAKE_WORKER_LOG, JSON.stringify({ ...req, init: req.init ? `${req.init.length} chars` : null, ipImage: req.ipImage ? `${req.ipImage.length} chars` : null }) + "\n");
+    if (process.env.FAKE_WORKER_LOG) fs.appendFileSync(process.env.FAKE_WORKER_LOG, JSON.stringify({ ...req, init: req.init ? `${req.init.length} chars` : null, lastInit: req.lastInit ? `${req.lastInit.length} chars` : null, ipImage: req.ipImage ? `${req.ipImage.length} chars` : null }) + "\n");
     if ((loaded.adapters ?? []).some((a) => a.kind !== "lora") && !req.ipImage) return say({ ok: false, error: "ValueError: this add-on needs a reference picture" });
     if (/fail please/.test(req.prompt)) return say({ ok: false, error: "RuntimeError: the model choked" });
     // Out of memory drops the model, as worker.py does; "quietly" is the

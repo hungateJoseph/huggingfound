@@ -196,6 +196,9 @@ export function summarize(m) {
     createdAt: m.createdAt ?? null,
     gated: Boolean(m.gated),
     tags: (m.tags ?? []).filter((t) => !t.includes(":")).slice(0, 12),
+    // An add-on's card names the model it was made for and the words that call it up.
+    baseModel: m.cardData?.base_model ? [].concat(m.cardData.base_model).map(String) : null,
+    triggerPrompt: typeof m.cardData?.instance_prompt === "string" ? m.cardData.instance_prompt.trim().slice(0, 2000) : null,
     categories,
     runner,
     gguf,

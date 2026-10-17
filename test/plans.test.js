@@ -321,3 +321,28 @@ test("a model bigger than the rented machine's disk is stopped before the downlo
   assert.equal(diskFor(134.2), 160);
   assert.equal(diskFor(3), 50);
 });
+
+test("a LoRA for MiniMax-H3 is applied on the rented GPU to MiniMax-H3 there: a clip from a picture, ending on the same picture, with the LoRA's own words", () => {
+  const files = [{ name: "README.md", gb: 0 }, { name: "media/hero.mp4", gb: 0.008 }, { name: "minimax_h3_flf2v_lora_v1.safetensors", gb: 0.14 }];
+  const model = { ...summarize({ id: "pablodawson/MiniMax-H3-360-Orbit-LoRA", pipeline_tag: "image-text-to-video", library_name: "minimax-h3", tags: ["lora", "minimax-h3", "image-to-video", "first-last-frame", "flf2v", "orbit", "360"], cardData: { base_model: "MiniMaxAI/MiniMax-H3", instance_prompt: "One frozen instant. Only the camera moves. In a continuous 360 orbit." } }), files };
+  assert.deepEqual([model.baseModel, model.triggerPrompt], [["MiniMaxAI/MiniMax-H3"], "One frozen instant. Only the camera moves. In a continuous 360 orbit."]);
+  const without = buildPlan({ model, files, machine, detected: nothing(), hasToken: false });
+  assert.equal(without.runnable, false);
+  assert.match(without.reason, /a LoRA for MiniMax-H3: it changes how that video model moves[\s\S]*to MiniMax-H3 downloaded there/);
+  const bare = buildPlan({ model, files, machine, detected: { ...nothing(), gpu: { url: "http://agent", running: true, version: 17, files: ["x/sdxl-base/model_index.json"], addons: [] } }, hasToken: false });
+  assert.equal(bare.runnable, true);
+  assert.deepEqual(bare.tryWith.bases, [], "an SDXL folder is no base for it");
+  assert.match(bare.speed.text, /Needs MiniMax-H3 on the rented GPU first/);
+  const gpu = { ...nothing(), gpu: { url: "http://agent", running: true, version: 17, files: ["MiniMaxAI/MiniMax-H3/model_index.json", "x/sdxl-base/model_index.json"], addons: [] } };
+  const plan = buildPlan({ model, files, machine, detected: gpu, hasToken: false });
+  assert.equal(plan.runnable, true);
+  assert.equal(plan.steps[0].kind, "pull-addon");
+  assert.deepEqual(plan.steps[0].args.files, ["minimax_h3_flf2v_lora_v1.safetensors"], "the weights alone; the sample clips stay on the Hub");
+  assert.deepEqual([plan.tryWith.kind, plan.tryWith.engine, plan.tryWith.addonKind, plan.tryWith.base, plan.tryWith.startPicture, plan.tryWith.lastPicture, plan.tryWith.strength], ["video", "addon", "video-lora", "MiniMaxAI/MiniMax-H3", "required", "same", 1]);
+  assert.deepEqual(plan.tryWith.bases, [{ repo: "MiniMaxAI/MiniMax-H3", file: "model_index.json", xl: false, label: "MiniMax-H3" }]);
+  assert.deepEqual(plan.tryWith.variants.map((v) => [v.file, v.label]), [["minimax_h3_flf2v_lora_v1.safetensors", "minimax h3 flf2v lora v1"]]);
+  assert.equal(plan.tryWith.triggerPrompt, "One frozen instant. Only the camera moves. In a continuous 360 orbit.");
+  assert.deepEqual([plan.video.fps, plan.video.minSeconds, plan.video.defaultSeconds, plan.video.maxSeconds, plan.video.frameStep, plan.video.frameAdd, plan.video.sound], [24, 3, 3, 15, 17, 5, true], "MiniMax-H3's clips, from the three seconds the LoRA was trained on");
+  assert.equal(framesFor(3, plan.video), 73, "the LoRA's 73 frames");
+  assert.match(plan.speed.text, /Applied to MiniMax-H3 on the rented GPU\./);
+});

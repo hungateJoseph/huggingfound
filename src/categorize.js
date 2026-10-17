@@ -30,15 +30,17 @@ export function categorize(model) {
   const cats = [];
 
   // Pieces of a model (a text encoder, a VAE, a LoRA, a vision projector)
-  // are not something to run on their own.
-  if (/text.?encoder|\bvae\b|\blora\b|mmproj|\bembeddings?\b|controlnet/i.test(model.id)) {
+  // are not something to run on their own. A LoRA made for a video family
+  // the rented GPU runs (MiniMax-H3) is the exception: it is applied there
+  // to that model, so it is offered as an add-on.
+  if (/text.?encoder|\bvae\b|\blora\b|mmproj|\bembeddings?\b|controlnet/i.test(model.id) && !videoLoraBase(model)) {
     return { categories: [], runner: null, gguf, adult: false };
   }
 
   // A repository that bundles a text encoder GGUF next to an image model
   // gets a "conversational" tag on the Hub. It is still an image model;
   // handing that encoder to Ollama as a chat model is a mistake.
-  const imageLike = /^(text-to-image|image-to-image|image-editing|inpainting)$/.test(pipeline) || /video/.test(pipeline) || tags.has("flux") || tags.has("diffusers");
+  const imageLike = /^(text-to-image|image-to-image|image-editing|inpainting)$/.test(pipeline) || /video/.test(pipeline) || tags.has("flux") || tags.has("diffusers") || Boolean(videoLoraBase(model));
   if (pipeline === "text-to-image" || (imageLike && !/text-generation/.test(pipeline))) {
     cats.push("images");
   } else if (pipeline === "automatic-speech-recognition") {
@@ -58,6 +60,16 @@ export function categorize(model) {
   const runner = runnerFor(model, cats, gguf);
   if (runner && runner.easy) cats.unshift("easy");
   return { categories: cats, runner, gguf, adult };
+}
+
+// The video model a LoRA was trained for, when it is one the rented GPU
+// runs, as its repository on the Hub; from the card's base model or tags.
+export function videoLoraBase(model) {
+  const tags = (model.tags ?? []).map((t) => String(t).toLowerCase());
+  const bases = [].concat(model.cardData?.base_model ?? model.baseModel ?? []).map((b) => String(b).toLowerCase());
+  if (!(/\blora\b/i.test(model.id) || tags.includes("lora"))) return null;
+  if (tags.includes("minimax-h3") || bases.some((b) => b.includes("minimax-h3")) || /minimax-?h3/i.test(model.id)) return "MiniMaxAI/MiniMax-H3";
+  return null;
 }
 
 // Which local runner can take this model, if any.

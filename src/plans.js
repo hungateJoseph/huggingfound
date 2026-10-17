@@ -3,6 +3,7 @@ import { fitFor, platformName } from "./machine.js";
 import { imageSettings } from "./runners.js";
 import { estimate, measuredText } from "./speed.js";
 import { isAddon } from "./quality.js";
+import { videoLoraBase } from "./categorize.js";
 
 // Turns "I want to try this model" into the ordered steps this computer
 // needs, with the ones already done marked so the page can skip them.
@@ -252,7 +253,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
 export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4 };
-export const AGENT_VERSION = 16;
+export const AGENT_VERSION = 17;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;
@@ -270,9 +271,17 @@ function staleMachine(model, gpu, kind, what) {
 // model that is already there: the machine fetches the add-on's files and
 // its Python side loads the base with the add-on on top. An IP-Adapter
 // steers the picture with a reference image; a LoRA changes the style.
-export function addonVariants(files) {
+export function addonVariants(files, videoBase = null) {
   const names = files.map((f) => f.name);
   const weights = files.filter((f) => /\.(bin|safetensors)$/i.test(f.name) && !/image_encoder/i.test(f.name) && !/\.safetensors\.index\.json$/i.test(f.name));
+  // A LoRA for a video model: its weights, applied to that model's transformer.
+  if (videoBase) {
+    const variants = weights.filter((f) => /\.safetensors$/i.test(f.name) && !/^(media|images?|assets?|examples?|samples?)\//i.test(f.name)).map((f) => {
+      const stem = f.name.replace(/\.safetensors$/i, "");
+      return { file: f.name, lora: null, xl: false, gb: f.gb ?? 0, label: stem.split("/").pop().replace(/[-_]/g, " "), faceid: false };
+    });
+    return { kind: "video-lora", variants, encoders: [] };
+  }
   const ip = weights.filter((f) => /ip[-_]?adapter/i.test(f.name) && !/_lora\.safetensors$/i.test(f.name));
   const kind = ip.length ? "ip-adapter" : "lora";
   const pool = kind === "ip-adapter" ? ip : weights.filter((f) => /lora|lycoris/i.test(f.name) || /\.safetensors$/i.test(f.name));
@@ -293,8 +302,10 @@ export function addonVariants(files) {
 }
 
 function addonPlan({ model, files, detected }) {
-  const { kind, variants, encoders } = addonVariants(files);
-  const what = kind === "ip-adapter" ? "an IP-Adapter: it steers a base model's picture with a reference image (a face, a style, a subject)" : "a LoRA: it changes how a base model draws";
+  const videoBase = videoLoraBase(model);
+  const { kind, variants, encoders } = addonVariants(files, videoBase);
+  const baseName = videoBase ? videoBase.split("/").pop() : null;
+  const what = kind === "video-lora" ? `a LoRA for ${baseName}: it changes how that video model moves, frames or styles a clip` : kind === "ip-adapter" ? "an IP-Adapter: it steers a base model's picture with a reference image (a face, a style, a subject)" : "a LoRA: it changes how a base model draws";
   if (!variants.length) {
     return { runnable: false, addon: true, reason: `${model.name} is an add-on with no weights HuggingFound recognises. It makes nothing by itself.`, steps: [], link: model.url };
   }
@@ -303,7 +314,7 @@ function addonPlan({ model, files, detected }) {
       runnable: false,
       addon: true,
       needsGpu: true,
-      reason: `${model.name} is ${what}. Add-ons are applied on a rented GPU, to a Stable Diffusion 1.5 or SDXL model downloaded there. Rent one by the hour and the machine does the rest.`,
+      reason: `${model.name} is ${what}. Add-ons are applied on a rented GPU, to ${kind === "video-lora" ? `${baseName} downloaded there` : "a Stable Diffusion 1.5 or SDXL model downloaded there"}. Rent one by the hour and the machine does the rest.`,
       steps: [],
       link: model.url,
     };
@@ -314,9 +325,10 @@ function addonPlan({ model, files, detected }) {
   const have = new Set(detected.gpu.addons ?? []);
   const done = download.every((f) => have.has(`${model.id}/${f}`));
   const gb = variants.reduce((t, v) => t + v.gb, 0) + encoders.reduce((t, n) => t + (files.find((f) => f.name === n)?.gb ?? 0), 0);
-  // Bases: the checkpoints and Stable Diffusion folders already on the machine.
+  // Bases: the checkpoints and Stable Diffusion folders already on the
+  // machine; for a video LoRA, the one model it was made for, when there.
   const bases = (detected.gpu.files ?? [])
-    .filter((key) => /\.(safetensors|ckpt)$/i.test(key) || key.endsWith("/model_index.json"))
+    .filter((key) => (kind === "video-lora" ? key === `${videoBase}/model_index.json` : /\.(safetensors|ckpt)$/i.test(key) || key.endsWith("/model_index.json")))
     .map((key) => {
       const i = key.indexOf("/", key.indexOf("/") + 1);
       const repo = key.slice(0, i);
@@ -331,25 +343,33 @@ function addonPlan({ model, files, detected }) {
     done,
     command: `download ${download.length} files of ${model.id} onto the rented GPU`,
   }];
-  const qualities = {
+  const qualities = kind === "video-lora" ? withGpuSeconds(MINIMAX_QUALITIES(5), 134) : {
     fast: { steps: 15, size: 512, cfg: 6, text: "fewer steps" },
     default: { steps: 25, size: 512, cfg: 6, text: "the standard settings" },
     max: { steps: 40, size: 512, cfg: 6, text: "more steps" },
   };
+  // A video LoRA's clips: the base's lengths and canvases, from three
+  // seconds (the orbit LoRA was trained on 73 frames). One trained on a
+  // first and last frame (an orbit back to its start) wants a starting
+  // picture and ends on it unless another is given.
+  const tags = (model.tags ?? []).map((t) => String(t).toLowerCase());
+  const firstLast = kind === "video-lora" && tags.some((t) => /flf2v|first-last|orbit|360/.test(t));
+  const video = kind === "video-lora" ? { ...minimaxSpec(134, 5), minSeconds: 3, defaultSeconds: 3 } : null;
   return {
     runnable: true,
     runner: "addon",
     addon: true,
     file: { name: `${variants.length} variant${variants.length === 1 ? "" : "s"}`, gb: gb || null, variants: variants.length },
     fit: { level: "good", text: `${what.split(":")[0]}` },
-    speed: { text: bases.length ? `Applied to a base model on the rented GPU; ${bases.length} there now.` : "Needs a Stable Diffusion 1.5 or SDXL model on the rented GPU first: download one there from the Easy to set up list.", seconds: null },
+    speed: { text: bases.length ? `Applied to ${kind === "video-lora" ? baseName : "a base model"} on the rented GPU${kind === "video-lora" ? "" : `; ${bases.length} there now`}.` : kind === "video-lora" ? `Needs ${baseName} on the rented GPU first: open it and download it there.` : "Needs a Stable Diffusion 1.5 or SDXL model on the rented GPU first: download one there from the Easy to set up list.", seconds: null },
     measured: "",
     steps,
     qualities,
+    ...(video ? { video } : {}),
     fast: false,
     style: null,
     remote: detected.gpu.url,
-    tryWith: { kind: "image", engine: "addon", addonKind: kind, repo: model.id, agent: detected.gpu.url, variants, bases },
+    tryWith: { kind: kind === "video-lora" ? "video" : "image", engine: "addon", addonKind: kind, repo: model.id, agent: detected.gpu.url, variants, bases, ...(kind === "video-lora" ? { base: videoBase, startPicture: firstLast ? "required" : "optional", lastPicture: firstLast ? "same" : "none", triggerPrompt: model.triggerPrompt ?? null, strength: 1 } : {}) },
     remove: download.map((f) => ({ kind: "gpu-addon", repo: model.id, file: f })),
   };
 }
@@ -429,14 +449,14 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   // with. High adds passes, and has the description expanded first into
   // the detailed shot these models do best with (by Claude, with a key).
   // A model draws no better above its trained canvas, so none goes higher.
-  const levelText = { low: "a draft: a small canvas, 20 passes", medium: "the model's full canvas, 30 passes, its standard avoid list", high: "the full canvas, 50 passes, the avoid list, and your words expanded first into a detailed shot description" };
+  const levelText = LEVEL_TEXT;
   // LTX-2.5's distilled transformer runs a fixed schedule of eight passes
   // whatever is asked, so its levels differ by canvas and by the expansion.
   const ltxText = { low: "a draft: 768 by 512, the model's eight-pass schedule", medium: "the model's 720p canvas (1280 by 704), eight passes, its standard avoid list", high: "720p, the avoid list, and your words expanded first into a detailed shot description" };
   const videoSpec = video ? (ltx
     ? { fps: 24, minSeconds: 2, maxSeconds: 10, defaultSeconds: 5, frameStep: 8, frameAdd: 1, sound: true, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 8, width: 768, height: 512, text: ltxText.low }, medium: { steps: 8, width: 1280, height: 704, text: ltxText.medium }, high: { steps: 8, width: 1280, height: 704, expand: true, text: ltxText.high } } }
     : minimax
-    ? { fps: 24, minSeconds: 5, maxSeconds: 15, defaultSeconds: 5, frameStep: 17, frameAdd: 5, sound: true, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 20, width: 960, height: 544, text: levelText.low }, medium: { steps: 30, width: 1344, height: 768, text: levelText.medium }, high: { steps: 50, width: 1344, height: 768, expand: true, text: levelText.high } } }
+    ? minimaxSpec(repo.gb, cfg)
     : { fps: 16, minSeconds: 1, maxSeconds: 5, defaultSeconds: 3, frameStep: 4, frameAdd: 1, sound: false, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 20, width: 832, height: 480, text: levelText.low }, medium: { steps: 30, width: 1280, height: 704, text: levelText.medium }, high: { steps: 50, width: 1280, height: 704, expand: true, text: levelText.high } } }) : null;
   const qualities = withGpuSeconds(video
     ? ltx
@@ -446,11 +466,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
           max: { steps: 8, width: 1280, height: 704, frames: 241, fps: 24, cfg, text: "a 10-second clip with sound at 720p, many minutes" },
         }
       : minimax
-      ? {
-          fast: { steps: 20, width: 960, height: 544, frames: 124, fps: 24, cfg, text: "a 5-second clip with sound at 960 by 544" },
-          default: { steps: 30, width: 1344, height: 768, frames: 124, fps: 24, cfg, text: "a 5-second clip with sound at 768p" },
-          max: { steps: 40, width: 1344, height: 768, frames: 243, fps: 24, cfg, text: "a 10-second clip with sound at 768p, many minutes" },
-        }
+      ? MINIMAX_QUALITIES(cfg)
       : {
         fast: { steps: 20, width: 832, height: 480, frames: 33, fps: 16, cfg, text: "a 2-second clip at 480p" },
         default: { steps: 30, width: 832, height: 480, frames: 49, fps: 16, cfg, text: "a 3-second clip at 480p" },
@@ -494,6 +510,19 @@ export function diffusersFit(gb, machine, modular = false) {
   if (gb * 0.35 <= room) return { level: "tight", text: `Loads at 4 bits on ${where} (${gb.toFixed(1)} GB in full precision); lower quality and slower, a bigger size would do better` };
   return { level: "no", text: `Too big for ${where} even at 4 bits (${gb.toFixed(1)} GB); it would stream from the machine's memory, very slowly, or needs a bigger size` };
 }
+
+const LEVEL_TEXT = { low: "a draft: a small canvas, 20 passes", medium: "the model's full canvas, 30 passes, its standard avoid list", high: "the full canvas, 50 passes, the avoid list, and your words expanded first into a detailed shot description" };
+// MiniMax-H3 makes clips with sound of 5 to 15 seconds at 24 fps, in
+// frame counts of 17n + 5 on a canvas of multiples of 32 with a 768
+// short edge; smaller canvases are its biggest speed lever.
+function minimaxSpec(gb, cfg) {
+  return { fps: 24, minSeconds: 5, maxSeconds: 15, defaultSeconds: 5, frameStep: 17, frameAdd: 5, sound: true, cfg, heavy: heavyFactor(gb), avoid: VIDEO_AVOID, levels: { low: { steps: 20, width: 960, height: 544, text: LEVEL_TEXT.low }, medium: { steps: 30, width: 1344, height: 768, text: LEVEL_TEXT.medium }, high: { steps: 50, width: 1344, height: 768, expand: true, text: LEVEL_TEXT.high } } };
+}
+const MINIMAX_QUALITIES = (cfg) => ({
+  fast: { steps: 20, width: 960, height: 544, frames: 124, fps: 24, cfg, text: "a 5-second clip with sound at 960 by 544" },
+  default: { steps: 30, width: 1344, height: 768, frames: 124, fps: 24, cfg, text: "a 5-second clip with sound at 768p" },
+  max: { steps: 40, width: 1344, height: 768, frames: 243, fps: 24, cfg, text: "a 10-second clip with sound at 768p, many minutes" },
+});
 
 // The size to recommend for a folder model: room for it at 8 bits with
 // margin, which is where quality is still close to full precision. A
