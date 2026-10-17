@@ -692,7 +692,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const machineIdle = raw === undefined || raw === "" || !(Number(raw) >= 0) ? idleDefault(offer.pricePerHour ?? 0) : Math.round(Number(raw));
       // A secret of this machine's own: its agent answers nobody without it.
       const secret = crypto.randomBytes(24).toString("hex");
-      const podEnv = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h", HF_IDLE_MINUTES: String(machineIdle), HF_AGENT_TOKEN: secret };
+      // The disk's size goes along: the machine cannot read it off a volume that is a quota on a larger pool.
+      const podEnv = { OLLAMA_HOST: "0.0.0.0", OLLAMA_KEEP_ALIVE: "1h", HF_IDLE_MINUTES: String(machineIdle), HF_AGENT_TOKEN: secret, HF_DISK_GB: String(disk) };
       const allowed = origins.filter((o) => /^https?:\/\/[\w.-]+(?::\d+|:\*)?$/.test(String(o)));
       if (allowed.length) {
         podEnv.OLLAMA_ORIGINS = allowed.join(",");

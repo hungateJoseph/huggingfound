@@ -253,7 +253,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
 export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4 };
-export const AGENT_VERSION = 17;
+export const AGENT_VERSION = 18;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;
@@ -548,11 +548,20 @@ export function diskFor(gb) {
 function diskRoom(gpu, model, needGb) {
   if (!(needGb > 0)) return null;
   const rented = gpu.rented ?? null;
-  const free = gpu.diskFreeGb ?? rented?.diskGb ?? null;
+  let free = gpu.diskFreeGb ?? rented?.diskGb ?? null;
+  let total = gpu.diskTotalGb ?? rented?.diskGb ?? null;
+  // A machine from before it knew its disk's size (image 18) reads the
+  // pool its volume is a quota on (a petabyte, with hundreds of terabytes
+  // free): numbers far past the disk rented are set aside for the disk's
+  // size less what the models on it weigh.
+  const pooled = rented?.diskGb && total != null && total > rented.diskGb * 2 && (gpu.version ?? 0) < 18;
+  if (pooled) {
+    total = rented.diskGb;
+    free = Math.max(0, total - (gpu.diskUsedGb ?? 0));
+  }
   if (free == null) return null;
   // Free space is exact; a disk's size alone leaves the file system's share unknown.
   if (needGb + (gpu.diskFreeGb != null ? 0.5 : needGb * 0.03 + 1) <= free) return null;
-  const total = gpu.diskTotalGb ?? rented?.diskGb ?? null;
   const used = total != null ? Math.max(0, total - free) : 0;
   const diskGb = rented?.diskGb ?? (total != null ? Math.round(total) : null);
   const growTo = Math.max((diskGb ?? 0) + 10, Math.ceil((used + needGb * 1.1 + 10) / 10) * 10);

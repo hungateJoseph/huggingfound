@@ -84,7 +84,7 @@ function idleWatch() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "17";
+const VERSION = "18";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -637,10 +637,46 @@ const downloading = new Set();
 setInterval(idleWatch, IDLE_CHECK_MS).unref();
 
 // Room on the models disk, in GB; null where the system cannot say.
+// The room on the machine's disk. The volume RunPod gives a pod is a
+// quota on a far larger pool, and asking the filesystem reports the pool
+// (a petabyte, with hundreds of terabytes free); the pod's own size comes
+// from the site as HF_DISK_GB, and what is used is counted under the
+// folders the agent writes to, so a download is refused before the quota
+// kills it midway, as one did at 90 GB of MiniMax-H3.
+const DISK_GB = Number(process.env.HF_DISK_GB) || 0;
+function usedGb() {
+  let bytes = 0;
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.isFile()) {
+        try {
+          bytes += fs.statSync(full).size;
+        } catch {
+          // gone meanwhile
+        }
+      }
+    }
+  };
+  for (const d of new Set([MODELS_DIR, ADDONS_DIR, process.env.HF_HOME, path.join(MODELS_DIR, "..")].filter(Boolean))) walk(d);
+  return bytes / 1024 ** 3;
+}
 function diskSpace() {
   try {
     const s = fs.statfsSync(MODELS_DIR);
-    return { freeGb: (s.bavail * s.bsize) / 1024 ** 3, totalGb: (s.blocks * s.bsize) / 1024 ** 3 };
+    const pool = { freeGb: (s.bavail * s.bsize) / 1024 ** 3, totalGb: (s.blocks * s.bsize) / 1024 ** 3 };
+    if (DISK_GB && pool.totalGb > DISK_GB * 2) {
+      const used = usedGb();
+      return { freeGb: Math.max(0, Math.min(pool.freeGb, DISK_GB - used)), totalGb: DISK_GB, usedGb: used, quota: true };
+    }
+    return pool;
   } catch {
     return null;
   }
@@ -649,6 +685,11 @@ function diskSpace() {
 // A download that will not fit, said before it dies midway: a full disk
 // once killed the agent with a half-written file, and the site saw only
 // a machine that stopped answering.
+// A write refused for want of room: no space (28), or the volume's quota
+// reached (122), which Node names only by number.
+function outOfRoom(err) {
+  return err?.code === "ENOSPC" || err?.code === "EDQUOT" || err?.errno === -122 || err?.errno === -28 || /error -122|error -28|EDQUOT|ENOSPC/.test(String(err?.message ?? ""));
+}
 function diskFull(needGb, what) {
   const d = diskSpace();
   const room = d ? `${d.freeGb.toFixed(1)} GB free of its ${d.totalGb.toFixed(0)} GB disk` : "no room left on its disk";
@@ -811,7 +852,7 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
           }
         } catch (err) {
           // A connection that drops before the announced size is the usual cause.
-          throw err?.code === "ENOSPC" ? err : total && received < total ? early() : err;
+          throw outOfRoom(err) ? err : total && received < total ? early() : err;
         }
         await Promise.race([new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve()))), writeFailed]);
       } catch (err) {
@@ -843,7 +884,7 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
       if (total && received !== total) throw early();
     } catch (err) {
       fs.rmSync(tmp, { force: true });
-      throw err?.code === "ENOSPC" ? diskFull(total / 1024 ** 3, file) : err;
+      throw outOfRoom(err) ? diskFull(total / 1024 ** 3, file) : err;
     }
     fs.renameSync(tmp, dest);
     write({ status: "success" });
@@ -1003,7 +1044,7 @@ const server = http.createServer(async (req, res) => {
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
       const loaded = sd.file ? rel(sd.file) : py.dir ? (py.dir.endsWith(".safetensors") || py.dir.endsWith(".ckpt") ? rel(py.dir) : `${rel(py.dir)}/${INDEX}`) : null;
       const room = diskSpace();
-      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, busy: busy(), idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null });
+      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, diskUsedGb: room?.usedGb != null ? Math.round(room.usedGb * 10) / 10 : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, busy: busy(), idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
     // The image server's recent output and the Python side's, for a look

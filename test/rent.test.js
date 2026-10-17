@@ -388,12 +388,14 @@ test("a machine from before a feature is told apart by its agent's version, and 
   assert.equal((await json("/api/model?id=John6666/pony-realism-v23-sdxl")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=Qwen/Qwen-Image")).plan.staleMachine, true);
   assert.equal((await json("/api/model?id=second-state/stable-diffusion-v1-5-GGUF")).plan.runnable, true, "a single-file model still runs on the old machine");
-  assert.equal((await json("/api/rent")).agentCurrent, 17, "the status says which version is current");
+  assert.equal((await json("/api/rent")).agentCurrent, 18, "the status says which version is current");
   agent.state.version = 9;
   assert.equal((await json("/api/model?id=h94/IP-Adapter-FaceID")).plan.runnable, true);
 });
 
 test("a gated folder model runs on the machine with the person's Hugging Face token, and a pieces repository points at its diffusers twin", async () => {
+  // The machine is on the current image again: an older one reads its disk as the pool's.
+  agent.state.version = undefined;
   const LTX = "Lightricks/LTX-2.5";
   const TWIN = "Lightricks/LTX-2.5-Diffusers";
   const token = `hf_${"x".repeat(30)}`;

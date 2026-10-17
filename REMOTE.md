@@ -300,6 +300,18 @@ The machine takes two to four minutes to start. Meanwhile:
   `state.dataCenters[gpuId]`, default US-KS-2 and EUR-IS-4 for every card;
   `state.refusePlacement` refuses a create that names data centres; a pod
   lands in the first preferred data centre.
+- Disk room (image 18): a MiniMax-H3 download died at file 30 with
+  "Unknown system error -122" (EDQUOT: the pod's 90 GB volume is a quota
+  on a larger pool). The agent's statfs of the models folder reports the
+  pool (1.2 PB, 374 TB free), so the plan's room check passed. The rent
+  now sends `HF_DISK_GB`; the agent's `diskSpace()` returns the quota
+  (size from the env, used from a walk of its folders) when the pool it
+  reads is more than twice that, `/health` adds `diskUsedGb`, and
+  `outOfRoom(err)` maps EDQUOT/-122 beside ENOSPC to the "grow the disk"
+  message. On the site, `withGpu` sums the models' sizes into
+  `gpu.diskUsedGb`, and `diskRoom` sets aside a total more than twice the
+  rented disk (an older agent) for the rented size less what is on it, so
+  the plan offers "Grow the disk to 160 GB" before the download.
 - LoRAs for MiniMax-H3 (image 17), for pablodawson/MiniMax-H3-360-Orbit-LoRA
   and its kind: categorize.js `videoLoraBase(model)` (a LoRA by name or
   tag whose tags or card name MiniMax-H3) lets such a repository through

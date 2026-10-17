@@ -36,7 +36,7 @@ before(async () => {
   fs.writeFileSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part"), "half");
   agent = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], {
     // The Python side is played by a Node script that speaks the same protocol.
-    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js") },
+    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js"), HF_DISK_GB: "50" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let errors = "";
@@ -84,10 +84,15 @@ test("it answers health, and only the allowed origins may call it from a page", 
   }
   const h = await (await get("/health")).json();
   assert.ok(h.diskFreeGb > 0 && h.diskTotalGb >= h.diskFreeGb, "the room on the models disk");
+  // The disk is a 50 GB quota on this computer's far larger disk: the room is the quota less what the agent's folders hold.
+  assert.equal(h.diskTotalGb, 50, "the size the site gave, not the pool's");
+  assert.ok(typeof h.diskUsedGb === "number" && h.diskUsedGb >= 0 && h.diskUsedGb < 1, "what is on it so far");
+  assert.ok(h.diskFreeGb <= 50 && h.diskFreeGb > 49, "the quota less that");
   assert.ok(!fs.existsSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part")), "a half-written part from before the restart is swept at startup");
   delete h.diskFreeGb;
   delete h.diskTotalGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "17", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  delete h.diskUsedGb;
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "18", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);

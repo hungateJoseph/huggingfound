@@ -1093,10 +1093,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     let running = false;
     let health = null;
     let tasks = [];
+    let usedGb = null;
     try {
       let models;
       [models, addons, health, tasks] = await Promise.all([agentModelList(agent, fetchImpl), agentAddons(agent, fetchImpl), agentHealth(agent, fetchImpl), agentTasks(agent, fetchImpl)]);
       files = models.map((m) => `${m.repo}/${m.file}`);
+      // What the models on it weigh, for a disk whose free space the machine
+      // cannot read (a quota on a larger pool): an older agent says nothing of it.
+      usedGb = models.reduce((t, m) => t + (Number(m.gb) || 0), 0);
       // A diffusers folder's own files, where the agent lists them: the plan
       // tells a whole model from a download that stopped partway.
       for (const m of models) if (Array.isArray(m.files)) folders[m.repo] = m.files;
@@ -1104,7 +1108,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     } catch {
       // not up yet, or stopped
     }
-    return { ...detected, gpu: { url: agent, running, files, folders, addons, tasks, version: Number(health?.version) || (running ? 1 : null), diskFreeGb: health?.diskFreeGb ?? null, diskTotalGb: health?.diskTotalGb ?? null, rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
+    return { ...detected, gpu: { url: agent, running, files, folders, addons, tasks, version: Number(health?.version) || (running ? 1 : null), diskFreeGb: health?.diskFreeGb ?? null, diskTotalGb: health?.diskTotalGb ?? null, diskUsedGb: health?.diskUsedGb ?? usedGb, rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
   }
 
   // When the chat server is the rented machine, the plan can say whether it
