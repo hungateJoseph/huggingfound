@@ -59,6 +59,7 @@ ENV PATH=/opt/node/bin:/opt/huggingfound/bin:$PATH \
     OLLAMA_HOST=0.0.0.0 \
     HF_AGENT_PORT=7860 \
     HF_MODELS_DIR=/root/.ollama/huggingfound/models \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     SD_SERVER=/opt/huggingfound/bin/sd-server
 
 EXPOSE 11434 7860

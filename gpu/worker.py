@@ -128,12 +128,29 @@ def load(req):
         with contextlib.suppress(Exception):
             if hasattr(pipe.vae, flag):
                 setattr(pipe.vae, flag, True)
-    state.update(pipe=pipe, dir=model_dir or single, key=key, kind=kind, offloaded=mode == "offload", adapters=adapters, mode=mode, phase=None)
+    # LTX-2's parts take the card in turn: the text encoder and connectors
+    # (30 GB) go back to the machine's memory once the words are read, so
+    # the passes have the card's memory for the clip; a first clip from a
+    # picture at 121 frames ran a 141 GB card out with everything resident.
+    if mode == "gpu" and type(pipe).__name__.startswith("LTX2") and torch.cuda.is_available():
+        try:
+            pipe.enable_model_cpu_offload()
+            mode = "staged"
+        except Exception as err:  # noqa: BLE001
+            say({"progress": 0, "note": f"the parts could not be staged ({type(err).__name__}: {str(err)[:160]}); all on the card"})
+    state.update(pipe=pipe, dir=model_dir or single, key=key, kind=kind, offloaded=mode == "offload", adapters=adapters, mode=mode, phase=None, weightsGb=round(weights, 1))
+    # What the model's parts weigh in memory, at which precision: the
+    # answer to "where did the card's memory go" when a clip does not fit.
+    sizes = component_sizes(pipe)
+    if sizes:
+        state["onCard"] = sum(gb for _, gb, _ in sizes)
+        say({"progress": 0, "note": f"the model in memory: {', '.join(f'{name} {gb:.1f} GB {dt}' for name, gb, dt in sizes)}; {state['onCard']:.1f} GB in all"})
     return {"ok": True, "kind": kind, "mode": mode, "note": MODE_NOTES.get(mode, ""), "offloaded": mode == "offload", "weightsGb": round(weights, 1), "vramGb": round(vram, 1), "gpus": torch.cuda.device_count() if torch.cuda.is_available() else 0}
 
 
 MODE_NOTES = {
     "gpu": "",
+    "staged": "Its parts take the card in turn: the words are read, then the passes run, then the frames are decoded, so the card's memory goes to the clip.",
     "multi-gpu": "Spread across the machine's cards.",
     "two-cards": "Spread over the machine's two cards: the words are read on the second, and every pass runs whole on the first, with nothing swapped from the machine's memory.",
     "8-bit": "Loaded at 8 bits to fit the card: a little lower quality than full precision.",
@@ -141,6 +158,24 @@ MODE_NOTES = {
     "offload": "Bigger than the card: streamed through it from the machine's memory, slowly.",
     "turns": "Bigger than the card: its models take turns on it, each moved in from the machine's memory as its step comes.",
 }
+
+
+def component_sizes(pipe):
+    """Each component with weights: its name, gigabytes and precision."""
+    import torch
+
+    out = []
+    with contextlib.suppress(Exception):
+        for name, m in pipe.components.items():
+            if not isinstance(m, torch.nn.Module):
+                continue
+            params = list(m.parameters())
+            if not params:
+                continue
+            gb = sum(p.numel() * p.element_size() for p in params) / 1024**3
+            dtypes = sorted({str(p.dtype).replace("torch.", "") for p in params})
+            out.append((name, gb, "/".join(dtypes)))
+    return out
 
 
 def gpu_memory():
@@ -657,6 +692,8 @@ def ltx_twin(pipe):
     twin = LTX2ImageToVideoPipeline.from_pipe(pipe)
     with contextlib.suppress(Exception):
         twin.set_progress_bar_config(disable=True)
+    if state.get("mode") == "staged":
+        twin.enable_model_cpu_offload()
     state["twin"], state["twin_of"] = twin, pipe
     return twin
 
@@ -944,7 +981,12 @@ def main():
             unloaded = False
             if "out of memory" in msg.lower():
                 phase = state.get("phase")
-                msg = f"the GPU ran out of memory for this model at this size{f' while {phase}' if phase else ''}; try a smaller picture, fewer frames, or a bigger card"
+                numbers = ""
+                with contextlib.suppress(Exception):
+                    import torch
+
+                    numbers = f" (the model's parts weigh {state.get('onCard', 0):.0f} GB, {torch.cuda.memory_allocated() / 1024**3:.0f} GB was in use on the card, the most at any point {torch.cuda.max_memory_allocated() / 1024**3:.0f} GB)"
+                msg = f"the GPU ran out of memory for this model at this size{f' while {phase}' if phase else ''}{numbers}; try a smaller picture, fewer frames, or a bigger card"
                 unload()
                 unloaded = True
             else:

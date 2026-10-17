@@ -300,6 +300,17 @@ The machine takes two to four minutes to start. Meanwhile:
   `state.dataCenters[gpuId]`, default US-KS-2 and EUR-IS-4 for every card;
   `state.refusePlacement` refuses a create that names data centres; a pod
   lands in the first preferred data centre.
+- LTX-2.5, fourth try (image 16): image 15 ran out of memory "while pass
+  1" on a request from a starting picture: the worker's log showed the
+  image-to-video pipeline failing in the transformer's feed-forward with
+  138.6 GB allocated against 65 GB of weights, the rest unaccounted for.
+  The worker now says on load what each component weighs and at which
+  precision ("the model in memory: text_encoder 24.1 GB bfloat16, …"),
+  puts the parts' weight, the memory in use and the peak into an
+  out-of-memory message, and stages LTX-2 pipelines through the card with
+  `enable_model_cpu_offload()` (mode "staged"; the image-to-video twin is
+  staged too), so only the transformer stays resident during the passes.
+  The image sets PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True.
 - LTX-2.5, third try (image 15): the model loaded and the GPU ran out of
   memory generating a 121-frame clip at 768 by 512 on a 141 GB card with
   65 GB of weights. The traceback was lost with the machine; the numbers
