@@ -388,6 +388,12 @@ def apply_transformer_lora(pipe, path, scale, name="addon"):
     import torch
     from safetensors.torch import load_file
 
+    # The library sets LoRAs through peft; an image without it says so plainly.
+    try:
+        import peft  # noqa: F401
+    except ImportError as err:
+        raise ValueError("this machine image lacks the peft library that LoRAs need; a machine on the current image has it") from err
+
     transformer = getattr(pipe, "transformer", None)
     if transformer is None or not hasattr(transformer, "load_lora_adapter"):
         raise ValueError("this model's transformer takes no LoRA")

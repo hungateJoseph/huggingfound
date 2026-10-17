@@ -335,11 +335,15 @@ test("a LoRA for MiniMax-H3 is applied on the rented GPU to MiniMax-H3 there: a 
   const without = buildPlan({ model, files, machine, detected: nothing(), hasToken: false });
   assert.equal(without.runnable, false);
   assert.match(without.reason, /a LoRA for MiniMax-H3: it changes how that video model moves[\s\S]*to MiniMax-H3 downloaded there/);
-  const bare = buildPlan({ model, files, machine, detected: { ...nothing(), gpu: { url: "http://agent", running: true, version: 17, files: ["x/sdxl-base/model_index.json"], addons: [] } }, hasToken: false });
+  // A machine from before the library LoRAs are set with was in the image.
+  const older = buildPlan({ model, files, machine, detected: { ...nothing(), gpu: { url: "http://agent", running: true, version: 18, files: ["MiniMaxAI/MiniMax-H3/model_index.json"], addons: [] } }, hasToken: false });
+  assert.equal(older.staleMachine, true);
+  assert.match(older.reason, /older HuggingFound image \(version 18\) from before LoRAs could be set there/);
+  const bare = buildPlan({ model, files, machine, detected: { ...nothing(), gpu: { url: "http://agent", running: true, version: 19, files: ["x/sdxl-base/model_index.json"], addons: [] } }, hasToken: false });
   assert.equal(bare.runnable, true);
   assert.deepEqual(bare.tryWith.bases, [], "an SDXL folder is no base for it");
   assert.match(bare.speed.text, /Needs MiniMax-H3 on the rented GPU first/);
-  const gpu = { ...nothing(), gpu: { url: "http://agent", running: true, version: 17, files: ["MiniMaxAI/MiniMax-H3/model_index.json", "x/sdxl-base/model_index.json"], addons: [] } };
+  const gpu = { ...nothing(), gpu: { url: "http://agent", running: true, version: 19, files: ["MiniMaxAI/MiniMax-H3/model_index.json", "x/sdxl-base/model_index.json"], addons: [] } };
   const plan = buildPlan({ model, files, machine, detected: gpu, hasToken: false });
   assert.equal(plan.runnable, true);
   assert.equal(plan.steps[0].kind, "pull-addon");

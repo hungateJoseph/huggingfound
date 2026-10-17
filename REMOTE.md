@@ -300,6 +300,12 @@ The machine takes two to four minutes to start. Meanwhile:
   `state.dataCenters[gpuId]`, default US-KS-2 and EUR-IS-4 for every card;
   `state.refusePlacement` refuses a create that names data centres; a pod
   lands in the first preferred data centre.
+- Image 19: the image never had `peft`, which diffusers sets every LoRA
+  through, so the orbit LoRA (and any SD LoRA) failed with
+  ModuleNotFoundError on the machine. peft is in the Dockerfile and its
+  import checked at build; `apply_transformer_lora` says plainly when it
+  is missing; `AGENT_NEEDS["pull-lora"] = 19`, so a LoRA add-on's plan on
+  an older machine asks for a replacement (IP-Adapters keep needing 4).
 - Disk room (image 18): a MiniMax-H3 download died at file 30 with
   "Unknown system error -122" (EDQUOT: the pod's 90 GB volume is a quota
   on a larger pool). The agent's statfs of the models folder reports the

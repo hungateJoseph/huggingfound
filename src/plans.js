@@ -252,8 +252,8 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // The agent on a rented machine grows with the app; a machine rented
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
-export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4 };
-export const AGENT_VERSION = 18;
+export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4, "pull-lora": 19 };
+export const AGENT_VERSION = 19;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;
@@ -319,7 +319,8 @@ function addonPlan({ model, files, detected }) {
       link: model.url,
     };
   }
-  const stale = staleMachine(model, detected.gpu, "pull-addon", "add-ons could be applied there");
+  // A LoRA is set through the peft library, which machines before image 19 lacked.
+  const stale = staleMachine(model, detected.gpu, kind === "ip-adapter" ? "pull-addon" : "pull-lora", kind === "ip-adapter" ? "add-ons could be applied there" : "LoRAs could be set there");
   if (stale) return stale;
   const download = [...variants.map((v) => v.file), ...variants.map((v) => v.lora).filter(Boolean), ...encoders];
   const have = new Set(detected.gpu.addons ?? []);

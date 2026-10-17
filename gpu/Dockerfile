@@ -35,8 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 RUN python3 -m venv /opt/huggingfound/py \
  && /opt/huggingfound/py/bin/pip install --no-cache-dir --upgrade pip \
  && /opt/huggingfound/py/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu124 \
- && /opt/huggingfound/py/bin/pip install --no-cache-dir "diffusers>=0.41.0" "transformers>=5.5" accelerate safetensors sentencepiece protobuf pillow imageio imageio-ffmpeg av ftfy gguf bitsandbytes \
- && /opt/huggingfound/py/bin/python3 -c "import torch, diffusers, transformers; print(torch.__version__, diffusers.__version__, transformers.__version__)"
+ && /opt/huggingfound/py/bin/pip install --no-cache-dir "diffusers>=0.41.0" "transformers>=5.5" accelerate peft safetensors sentencepiece protobuf pillow imageio imageio-ffmpeg av ftfy gguf bitsandbytes \
+ && /opt/huggingfound/py/bin/python3 -c "import torch, diffusers, transformers, peft, av; print(torch.__version__, diffusers.__version__, transformers.__version__, peft.__version__)"
 # Face embeddings for the FaceID adapters. Built from source, so a failure
 # here must not sink the whole image; the worker says so at run time instead.
 RUN /opt/huggingfound/py/bin/pip install --no-cache-dir insightface onnxruntime-gpu opencv-python-headless \
