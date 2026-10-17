@@ -276,6 +276,9 @@ export function repoFiles(files) {
   const names = new Set(files.map((f) => f.name));
   if (!names.has("model_index.json")) return null;
   const keep = [];
+  // MiniMax-H3's reference-to-video partition: fetched apart, by choice,
+  // for clips made from reference pictures.
+  const reference = [];
   let gb = 0;
   const skipName = /\.(md|png|jpg|jpeg|gif|webp|mp4|py|ipynb|gitattributes|msgpack|h5|onnx|pt|pth|ckpt)$/i;
   for (const f of files) {
@@ -296,7 +299,11 @@ export function repoFiles(files) {
     // loads, a prompt-enhancing Gemma the app has Claude for, and the
     // upsamplers and diffusion decoder of its two-stage workflows, none of
     // which the pipeline in model_index.json names.
-    if (/^(transformer_ref|transformer_full|prompt_enhancer|latent_upsampler|temporal_latent_upsampler|diffusion_decoder)$/.test(dir)) continue;
+    if (dir === "transformer_ref") {
+      reference.push({ from: name, to: name, gb: f.gb ?? 0 });
+      continue;
+    }
+    if (/^(transformer_full|prompt_enhancer|latent_upsampler|temporal_latent_upsampler|diffusion_decoder)$/.test(dir)) continue;
     // Single-file checkpoints at the top level are the same model again.
     if (!dir && /\.(safetensors|bin|gguf)$/i.test(name)) continue;
     if (/\.bin$/i.test(name) && [...names].some((n) => n.startsWith(`${dir}/`) && /\.safetensors$/i.test(n))) continue;
@@ -313,7 +320,7 @@ export function repoFiles(files) {
   const list = keep.filter((f) => (seen.has(f.to) ? false : seen.add(f.to)));
   // A modular pipeline (MiniMax-H3) is loaded whole in full precision, its
   // models taking turns on the card when they do not all fit at once.
-  return { name: "diffusers folder", repo: true, files: list, gb: gb || null, modular: names.has("modular_model_index.json") };
+  return { name: "diffusers folder", repo: true, files: list, gb: gb || null, modular: names.has("modular_model_index.json"), ...(reference.length ? { reference: { files: reference, gb: reference.reduce((a, f) => a + (f.gb || 0), 0) } } : {}) };
 }
 
 // The quantization suffix Ollama wants after `hf.co/user/repo:`.

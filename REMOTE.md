@@ -300,6 +300,29 @@ The machine takes two to four minutes to start. Meanwhile:
   `state.dataCenters[gpuId]`, default US-KS-2 and EUR-IS-4 for every card;
   `state.refusePlacement` refuses a create that names data centres; a pod
   lands in the first preferred data centre.
+- Reference pictures and queued pictures (image 20). MiniMax-H3's ref2va
+  workflow takes up to nine `MiniMaxH3ImageReference`s (people and things
+  the clip is to show) and no keyframes; it runs on `transformer_ref`,
+  the 62 GB partition the model's download leaves out. hf.js `repoFiles`
+  lists that partition apart as `reference {files, gb}`; the folder plan
+  adds an optional second step ("Download its reference-to-video part")
+  and `tryWith.references` (true when the folder holds it, false when
+  not) with `referenceGb`. The video box shows a "Reference pictures"
+  multi-file input when the part is there, else a line with "Download it"
+  (runs the optional step). Items carry `refFiles` and an `id`;
+  `requestArgs` sends `references` (data URLs) and logs "From N reference
+  pictures"; `submitJob` → agent `/jobs` (`references`, nine at most,
+  validated like `init`) → worker: `load` takes `workflow` (the agent asks
+  for "ref2va" when references come; the load key includes it, so the
+  model is loaded again when switching), `load_modular(…, wanted_workflow)`
+  refuses an unknown one, and `generate` builds the references, dropping a
+  starting picture with a note. Results carry `refs`; captions say "from N
+  reference pictures". Queue: pictures picked for queued requests are kept
+  in the browser's database ("pictures" store, database version 2, by the
+  item's id: start picture and references as blobs); `rememberQueue` saves
+  them, the window restores them on open and drains, `ready()` waits for
+  them, Remove and a finished result forget them. The queue line names the
+  start picture and the count of references.
 - Image 19: the image never had `peft`, which diffusers sets every LoRA
   through, so the orbit LoRA (and any SD LoRA) failed with
   ModuleNotFoundError on the machine. peft is in the Dockerfile and its

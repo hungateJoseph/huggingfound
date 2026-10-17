@@ -141,7 +141,14 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   // MiniMax-H3 makes 5 to 15 seconds with sound at 24 fps, 17n + 5 frames on multiples of 32.
   const mm = { ...summarize({ id: "MiniMaxAI/MiniMax-H3", pipeline_tag: "image-text-to-video", library_name: "minimax-h3", tags: ["diffusers", "text-to-video"] }), files: [{ name: "model_index.json", gb: 0 }, { name: "modular_model_index.json", gb: 0 }, { name: "transformer/diffusion_pytorch_model.safetensors", gb: 62 }, { name: "text_encoder/model.safetensors", gb: 62 }, { name: "transformer_ref/diffusion_pytorch_model.safetensors", gb: 62 }] };
   const h3 = buildPlan({ model: mm, files: mm.files, machine: { ...machine, gpuGb: 141 }, detected: gpu, hasToken: false });
-  assert.equal(h3.file.gb, 124, "the reference partition is not fetched");
+  assert.equal(h3.file.gb, 124, "the reference partition is not fetched with the model");
+  // The reference-to-video part is a step of its own, optional, and the window knows whether it is there.
+  assert.equal(h3.steps.length, 2);
+  assert.deepEqual([h3.steps[1].kind, h3.steps[1].optional, h3.steps[1].args.files, h3.steps[1].args.gb, h3.steps[1].done], ["pull-image-repo", true, ["transformer_ref/diffusion_pytorch_model.safetensors"], 62, false]);
+  assert.match(h3.steps[1].title, /^Download its reference-to-video part \(62\.0 GB\), for clips from reference pictures/);
+  assert.deepEqual([h3.tryWith.references, h3.tryWith.referenceGb], [false, 62]);
+  const withRef = buildPlan({ model: mm, files: mm.files, machine: { ...machine, gpuGb: 141 }, detected: { ...gpu, gpu: { ...gpu.gpu, files: ["MiniMaxAI/MiniMax-H3/model_index.json"], folders: { "MiniMaxAI/MiniMax-H3": ["model_index.json", "modular_model_index.json", "transformer/diffusion_pytorch_model.safetensors", "text_encoder/model.safetensors", "transformer_ref/diffusion_pytorch_model.safetensors"] } } }, hasToken: false });
+  assert.deepEqual([withRef.steps[0].done, withRef.steps[1].done, withRef.tryWith.references], [true, true, true]);
   assert.equal(h3.file.modular, true);
   assert.equal(h3.tierGb.toFixed(1), "86.8", "a modular pipeline wants a card with room for most of it, not a second card");
   assert.equal(h3.fit.level, "tight");

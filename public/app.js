@@ -2304,6 +2304,7 @@ function renderImage(box, t) {
     ${addonHtml}
     ${settingsHtml}
     ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">${t.startPicture === "required" ? "This model animates a picture: the clip begins from it." : "With a picture the clip begins from it; without one it comes from the words alone."}</small></label>` : ""}
+    ${video && t.references === true ? `<label class="field"><span>Reference pictures (optional, up to 9)</span><input type="file" id="video-refs" accept="image/*" multiple><small class="muted">Photos of the people and things the clip is to show, several at once: the model makes the clip from them and the words. With references, the starting picture is not used.</small></label>` : video && t.references === false ? `<p class="muted small ref-note"><span>Clips from reference pictures (three people together, say) need the model's reference part on the machine, ${t.referenceGb ? `${t.referenceGb.toFixed(0)} GB` : "a second transformer"} more.</span> <button class="ghost" id="get-refs">Download it</button></p>` : ""}
     ${video && t.lastPicture ? `<label class="field"><span>Last picture</span><select id="video-last"><option value="same" ${t.lastPicture === "same" ? "selected" : ""}>the same picture: the clip ends where it began</option><option value="none" ${t.lastPicture === "none" ? "selected" : ""}>none: the clip ends where the model takes it</option><option value="file">another picture</option></select><input type="file" id="video-last-file" accept="image/*" hidden><small class="muted">${t.lastPicture === "same" ? "This LoRA was trained to come back to its starting frame, a full orbit; keep the same picture unless you want it to end elsewhere." : "The model can be given a frame to end on."}</small></label>` : ""}
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
@@ -2580,8 +2581,9 @@ function renderImage(box, t) {
   const makeItem = (prompt) => {
     const c = chosen();
     const typed = $("#image-negative").value.trim();
-    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, pieces: c.pieces ?? 1, each: c.eachText ?? c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null, ...(c.kind === "scene" ? { scene: true, sceneSeconds: c.asked, shots: null } : {}) };
+    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, pieces: c.pieces ?? 1, each: c.eachText ?? c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null, refFiles: [...(box.querySelector("#video-refs")?.files ?? [])].slice(0, 9), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, ...(c.kind === "scene" ? { scene: true, sceneSeconds: c.asked, shots: null } : {}) };
   };
+  box.querySelector("#get-refs")?.addEventListener("click", () => runStep({ id: t.repo, name: t.repo.split("/").pop() }, state.plan, Math.max(0, (state.plan?.steps ?? []).findIndex((s) => s.optional))));
   // The queue: several requests, run one after another by one click. It is
   // kept in this browser under the model, so leaving the window or the page
   // loses none of it; a starting picture picked from the disk cannot be
@@ -2589,7 +2591,22 @@ function renderImage(box, t) {
   const queue = t.agent ? (rec.queue ??= queueItems(t.repo)) : [];
   // What can start now: a request whose starting picture was lost with the
   // page has to be picked again first.
-  const ready = () => queue.filter((it) => !(it.startName && !it.startFile));
+  const ready = () => queue.filter((it) => !(it.startName && !it.startFile) && !(it.refCount && !it.refFiles?.length));
+  // Pictures picked for queued requests are kept in this browser, so a
+  // window left or a page reloaded loses none of them; a request from
+  // before pictures were kept asks for its picture again.
+  if (queue.some((it) => it.id && ((it.startName && !it.startFile) || (it.refCount && !it.refFiles?.length)))) {
+    Promise.all(queue.map(async (it) => {
+      if (!it.id) return;
+      const pics = await loadPictures(it.id).catch(() => null);
+      if (!pics) return;
+      if (pics.start && !it.startFile) it.startFile = pics.start;
+      if (pics.refs?.length && !it.refFiles?.length) it.refFiles = pics.refs;
+    })).then(() => {
+      renderQueue();
+      if (!rec.active) drain(["The queue from before goes on, with its pictures."]);
+    });
+  }
   // The queue runs itself: what is in it starts as soon as the machine is
   // free of this model's work, with no click, so a list left here keeps a
   // rented GPU busy for as long as it lasts. Held, it waits for Start all.
@@ -2611,13 +2628,14 @@ function renderImage(box, t) {
     const held = queueHeld();
     wrap.hidden = !queue.length;
     const list = wrap.querySelector("#queue-list");
-    list.innerHTML = queue.map((item, i) => `<li>${esc(item.prompt)} <span class="muted small">${esc(item.settings)}${item.estimate ? `, about ${esc(shortDuration(item.estimate.seconds))}` : ""}${item.replyTo ? ` · a reply to an earlier ${item.paintOver ? "picture" : "clip"}` : ""}${item.startName && !item.startFile ? ` · the starting picture ${esc(item.startName)} has to be picked again` : ""}</span><button class="ghost queue-remove" data-i="${i}">Remove</button></li>`).join("");
+    list.innerHTML = queue.map((item, i) => `<li>${esc(item.prompt)} <span class="muted small">${esc(item.settings)}${item.estimate ? `, about ${esc(shortDuration(item.estimate.seconds))}` : ""}${item.refFiles?.length || item.refCount ? ` · ${item.refFiles?.length || item.refCount} reference picture${(item.refFiles?.length || item.refCount) === 1 ? "" : "s"}` : ""}${item.startFile ? ` · from ${esc(item.startFile.name)}` : ""}${item.replyTo ? ` · a reply to an earlier ${item.paintOver ? "picture" : "clip"}` : ""}${item.startName && !item.startFile ? ` · the starting picture ${esc(item.startName)} has to be picked again` : ""}</span><button class="ghost queue-remove" data-i="${i}">Remove</button></li>`).join("");
     for (const btn of list.querySelectorAll(".queue-remove")) btn.addEventListener("click", () => {
-      queue.splice(Number(btn.dataset.i), 1);
+      const [gone] = queue.splice(Number(btn.dataset.i), 1);
+      if (gone?.id) forgetPictures(gone.id);
       renderQueue();
     });
     const total = queue.reduce((a, item) => a + (item.estimate?.seconds ?? (item.quality ? tookSeconds(t.repo, item.quality) ?? qualities[item.quality]?.seconds ?? 0 : 0)), 0);
-    const waiting = held ? "Held: they start with Start all." : rec.active ? "They start by themselves when the request under way finishes." : ready().length ? "" : "They start once the starting picture is picked again.";
+    const waiting = held ? "Held: they start with Start all." : rec.active ? "They start by themselves when the request under way finishes." : ready().length ? "" : "They start once their pictures are picked again.";
     wrap.querySelector("#queue-estimate").textContent = queue.length ? `${queue.length} request${queue.length === 1 ? "" : "s"}${total ? `, about ${shortDuration(total)}${price ? ` and ${money((price * total) / 3600)} of machine time` : ""} in all` : ""}. ${waiting}`.trim() : "";
     const go = wrap.querySelector("#queue-go");
     go.hidden = !held;
@@ -3085,6 +3103,13 @@ function renderImage(box, t) {
         extra.strength = 0.9;
       }
     }
+    // Reference pictures: the people and things the clip is to show, for
+    // a model with a reference workflow; the clip comes from them and the
+    // words, not from a starting frame.
+    if (item.refFiles?.length) {
+      extra.references = await Promise.all(item.refFiles.map((f) => readAsDataUrl(f)));
+      say(`From ${item.refFiles.length} reference picture${item.refFiles.length === 1 ? "" : "s"} (${item.refFiles.map((f) => f.name).join(", ")}): the clip shows what is in them, as the words say.`);
+    }
     // The first shot made again for a fix starts from the photo the clip
     // was made from, kept with that shot.
     if (item.startInit) {
@@ -3168,9 +3193,11 @@ function renderImage(box, t) {
     const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
     // The seed the machine used, so a reply can keep to it; a machine from
     // before seeds were passed along says nothing, and that is remembered.
-    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null, shots: item.shots?.length ? item.shots : null, shotsEdited: Boolean(item.shotsEdited), fix: item.fix ?? null, startPicture: (item.startFile || item.startInit) && typeof args?.init === "string" ? args.init : null };
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null, shots: item.shots?.length ? item.shots : null, shotsEdited: Boolean(item.shotsEdited), fix: item.fix ?? null, startPicture: (item.startFile || item.startInit) && typeof args?.init === "string" ? args.init : null, refs: item.refFiles?.length ?? 0 };
     await keepResult(entry);
     rec.shown.add(entry.id);
+    // The pictures kept for a queued request are not needed once it is made.
+    if (item.id && !item.piece) forgetPictures(item.id);
     const name = `${kind === "video" ? "clip" : "image"}-${entry.id}.${kind === "video" ? "mp4" : "png"}`;
     const auto = autosaveSettings();
     if (auto.on) {
@@ -3644,7 +3671,7 @@ async function resetAgent(agent, jobId, onLine) {
 }
 
 // Hands one job to the machine and returns its id.
-async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false, seed = null, lastInit = null }, onLine = () => {}) {
+async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false, seed = null, lastInit = null, references = null }, onLine = () => {}) {
   const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
   // An add-on on an SDXL base draws at SDXL's size.
   const width = addon && xl ? 1024 : (q.width ?? q.size);
@@ -3659,6 +3686,7 @@ async function submitJob(agent, { repo, file, prompt, negative, quality, init = 
     body.frames = q.frames;
     body.fps = q.fps;
     if (lastInit) body.lastInit = lastInit;
+    if (references?.length) body.references = references;
   }
   if (init) {
     body.init = init;
@@ -4229,7 +4257,7 @@ function renderRental() {
       ${capNote}${stuck}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
-      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
+      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}${r.agentVersion < 20 ? ", clips from reference pictures on MiniMax-H3" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.retrying ? ` <b>Start is asked again every minute for ${Math.max(1, Math.ceil((startRetry.until - Date.now()) / 60e3))} more minutes${startRetry.tries ? ` (${startRetry.tries} so far)` : ""}; this can be left as it is.</b>` : state.rentError.noGpu && state.rentError.action === "start" ? " Start was asked again every minute for half an hour without luck." : ""}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>${state.rentError.retrying ? `<button class="ghost" id="rent-stop-retry">Stop asking</button>` : ""}` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
@@ -4605,26 +4633,31 @@ function keptDb() {
   return new Promise((resolve, reject) => {
     let req;
     try {
-      req = indexedDB.open("huggingfound-kept", 1);
+      req = indexedDB.open("huggingfound-kept", 2);
     } catch (err) {
       reject(err);
       return;
     }
     req.onupgradeneeded = () => {
-      const store = req.result.createObjectStore("results", { keyPath: "id" });
-      store.createIndex("model", "model", { unique: false });
+      const db = req.result;
+      if (!db.objectStoreNames.contains("results")) {
+        const store = db.createObjectStore("results", { keyPath: "id" });
+        store.createIndex("model", "model", { unique: false });
+      }
+      // Pictures picked for queued requests, by the request's id.
+      if (!db.objectStoreNames.contains("pictures")) db.createObjectStore("pictures", { keyPath: "id" });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
     req.onblocked = () => reject(new Error("blocked"));
   });
 }
-function keptOp(mode, run) {
+function keptOp(mode, run, store = "results") {
   return keptDb().then((db) => new Promise((resolve, reject) => {
-    const tx = db.transaction("results", mode);
+    const tx = db.transaction(store, mode);
     let out;
     try {
-      out = run(tx.objectStore("results"));
+      out = run(tx.objectStore(store));
     } catch (err) {
       reject(err);
       return;
@@ -4738,23 +4771,43 @@ function forgetPending(repo, id) {
 // or the page keeps it; a picked file cannot be kept, only its name.
 function queueItems(repo) {
   try {
-    return JSON.parse(localStorage.getItem(`queue:${repo}`) || "[]").map((item) => ({ ...item, startFile: null }));
+    return JSON.parse(localStorage.getItem(`queue:${repo}`) || "[]").map((item) => ({ ...item, startFile: null, refFiles: [] }));
   } catch {
     return [];
   }
 }
 function rememberQueue(repo, items) {
   try {
-    localStorage.setItem(`queue:${repo}`, JSON.stringify(items.map(({ startFile, ...rest }) => ({ ...rest, startName: startFile?.name ?? rest.startName ?? null }))));
+    localStorage.setItem(`queue:${repo}`, JSON.stringify(items.map(({ startFile, refFiles, ...rest }) => ({ ...rest, startName: startFile?.name ?? rest.startName ?? null, refCount: refFiles?.length || rest.refCount || 0 }))));
   } catch {
     // no storage
   }
+  // The pictures themselves, in this browser's store, by the request's id.
+  for (const it of items) if (it.id && (it.startFile || it.refFiles?.length) && !it.picturesKept) {
+    it.picturesKept = true;
+    savePictures(it.id, it.startFile ?? null, it.refFiles ?? []).catch(() => (it.picturesKept = false));
+  }
+}
+// Pictures picked for a queued request, kept apart from the request's
+// words in the browser's database, so a reload loses none of them.
+function savePictures(id, start, refs) {
+  const pack = (f) => ({ name: f.name, type: f.type, blob: f });
+  return keptOp("readwrite", (s) => s.put({ id, start: start ? pack(start) : null, refs: refs.map(pack) }), "pictures");
+}
+async function loadPictures(id) {
+  const row = await keptOp("readonly", (s) => s.get(id), "pictures");
+  if (!row) return null;
+  const unpack = (p) => new File([p.blob], p.name, { type: p.type });
+  return { start: row.start ? unpack(row.start) : null, refs: (row.refs ?? []).map(unpack) };
+}
+function forgetPictures(id) {
+  return keptOp("readwrite", (s) => s.delete(id), "pictures").catch(() => {});
 }
 
 // What a result is, in a line: what it answers, the words asked, what
 // Claude expanded them into, and the settings.
 function captionText(e) {
-  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.fix ? `${e.fix.scene ? "shot" : "piece"}${e.fix.redo.length === 1 ? "" : "s"} ${listText(e.fix.redo)} made again for it, the rest kept` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.shots ? `a scene of ${e.shots.length} shots laid out by Claude${e.shotsEdited ? " and edited" : ""}: ${e.shots.map((s, i) => `${i + 1} (${Number(s.seconds).toFixed(1)} s) ${s.text}`).join(" / ")}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
+  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.fix ? `${e.fix.scene ? "shot" : "piece"}${e.fix.redo.length === 1 ? "" : "s"} ${listText(e.fix.redo)} made again for it, the rest kept` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.refs ? `from ${e.refs} reference picture${e.refs === 1 ? "" : "s"}` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.shots ? `a scene of ${e.shots.length} shots laid out by Claude${e.shotsEdited ? " and edited" : ""}: ${e.shots.map((s, i) => `${i + 1} (${Number(s.seconds).toFixed(1)} s) ${s.text}`).join(" / ")}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
 }
 
 // The settings of a result kept before they were kept with it, read back

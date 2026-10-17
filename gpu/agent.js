@@ -84,7 +84,7 @@ function idleWatch() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "19";
+const VERSION = "20";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -273,11 +273,11 @@ function askWorker(req, onProgress = null, timeoutMs = 60 * 60e3, onStart = null
 
 // Loads a folder model into the worker, replacing whatever either engine
 // had: the two cannot share the card.
-async function ensureWorkerLoaded(target, adapters = []) {
-  const key = JSON.stringify([target, adapters]);
+async function ensureWorkerLoaded(target, adapters = [], workflow = null) {
+  const key = JSON.stringify([target, adapters, workflow]);
   if (py.proc && py.dir && py.key === key) return;
   stopServer();
-  const req = { op: "load", adapters };
+  const req = { op: "load", adapters, ...(workflow ? { workflow } : {}) };
   if (target.endsWith(`/${INDEX}`)) req.dir = path.dirname(target);
   else req.file = target;
   const answer = await askWorker(req, null, 30 * 60e3);
@@ -411,10 +411,10 @@ function startJob(input) {
           if (lora && !fs.existsSync(lora)) throw new Error("the add-on's LoRA is not on this machine yet");
           adapters.push({ kind: input.addon.kind, path: main, lora, scale: input.addon.scale, faceid: /faceid/i.test(input.addon.file), plus: /plus/i.test(input.addon.file), xl: /sdxl/i.test(input.addon.file) });
         }
-        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, lastInit: input.lastInit ?? undefined, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined, seed: input.seed ?? undefined };
+        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, lastInit: input.lastInit ?? undefined, references: input.references?.length ? input.references : undefined, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined, seed: input.seed ?? undefined };
         let answer;
         for (let attempt = 0; ; attempt++) {
-          await ensureWorkerLoaded(file, adapters);
+          await ensureWorkerLoaded(file, adapters, input.references?.length ? "ref2va" : null);
           job.kind = py.kind;
           job.note = py.note;
           // Jobs take the worker one at a time: this one waits its turn.
@@ -1227,6 +1227,16 @@ const server = http.createServer(async (req, res) => {
         init = data;
         strength = Math.min(0.95, Math.max(0.1, Number(body.strength) || 0.55));
       }
+      // Reference pictures, for a model with a reference workflow: up to nine.
+      let references = [];
+      if (Array.isArray(body.references)) {
+        if (body.references.length > 9) return send(res, 400, { error: "At most nine reference pictures" });
+        for (const r of body.references) {
+          const data = String(r ?? "").replace(/^data:image\/\w+;base64,/, "");
+          if (!data || !/^[A-Za-z0-9+/]+=*$/.test(data) || data.length > 11 * 1024 * 1024) return send(res, 400, { error: "A reference picture did not arrive intact" });
+          references.push(data);
+        }
+      }
       // A picture the clip ends on, for a model with a keyframe workflow.
       let lastInit = null;
       if (body.lastInit) {
@@ -1236,7 +1246,7 @@ const server = http.createServer(async (req, res) => {
       }
       // The same seed with revised words keeps a scene close to the one before.
       const seed = Number.isInteger(body.seed) && body.seed >= 0 && body.seed < 2 ** 31 ? body.seed : null;
-      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed, lastInit });
+      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed, lastInit, references });
       return send(res, 202, { id: job.id, status: job.status });
     }
     const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})(\/result|\/last)?$/);

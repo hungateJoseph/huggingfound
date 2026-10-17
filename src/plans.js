@@ -253,7 +253,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
 export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4, "pull-lora": 19 };
-export const AGENT_VERSION = 19;
+export const AGENT_VERSION = 20;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;
@@ -486,10 +486,25 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
     done,
     command: `download ${repo.files.length} files of ${model.id} onto the rented GPU`,
   }];
+  // The reference-to-video part (MiniMax-H3's second transformer, 62 GB):
+  // a step of its own, for clips made from reference pictures of the
+  // people and things to show; the model works without it.
+  const referenceDone = repo.reference ? Boolean(have) && repo.reference.files.every((f) => have.includes(f.from)) : null;
+  if (repo.reference) {
+    steps.push({
+      kind: "pull-image-repo",
+      args: { repo: model.id, files: repo.reference.files.map((f) => f.from), gb: repo.reference.gb || 0 },
+      title: `Download its reference-to-video part (${repo.reference.gb.toFixed(1)} GB), for clips from reference pictures`,
+      text: "Optional. With this part on the machine, the window takes up to nine reference pictures of the people and things a clip is to show, and the model makes the clip from them and the words rather than from a starting frame. The machine loads one part or the other as a request needs, a few minutes each way.",
+      done: referenceDone,
+      optional: true,
+      command: `download ${repo.reference.files.length} files of ${model.id} (the reference part) onto the rented GPU`,
+    });
+  }
   const speed = { text: video ? "A short clip takes a few minutes on a data-centre card; the first one longer while the model loads." : "A picture takes some seconds to a minute on a data-centre card; the first one longer while the model loads.", seconds: null };
   // An image-to-video model animates a picture; a text-to-video one may take one as well.
   const startPicture = video ? (/image-to-video/.test(model.pipeline ?? "") && !(model.tags ?? []).includes("text-to-video") ? "required" : "optional") : null;
-  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, modular, ltx), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
+  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, modular, ltx), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}), ...(repo.reference ? { references: referenceDone, referenceGb: repo.reference.gb } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
 }
 
 // How a folder model sits on the rented machine's card or cards: whole,

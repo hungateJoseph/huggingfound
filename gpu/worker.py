@@ -88,7 +88,11 @@ def load(req):
     model_dir = str(req.get("dir") or "")
     single = str(req.get("file") or "")
     adapters = req.get("adapters") or []
-    key = json.dumps([model_dir or single, adapters], sort_keys=True)
+    # The workflow a modular model is loaded for: its keyframe one unless a
+    # request wants its reference one (MiniMax-H3's ref2va, another 62 GB
+    # transformer), which means loading again.
+    workflow = str(req.get("workflow") or "") or None
+    key = json.dumps([model_dir or single, adapters, workflow], sort_keys=True)
     if state.get("key") == key and state["pipe"] is not None:
         return {"ok": True, "kind": state["kind"], "already": True}
     # The same modular model with other LoRAs (or none): swapped on the
@@ -117,7 +121,7 @@ def load(req):
         # Wan, LTX, Mochi and CogVideoX name their pipelines after themselves.
         kind = "video" if any(w in cls for w in ("Video", "Wan", "LTX", "Mochi", "CogVideoX", "Allegro", "Latte", "SkyReels", "Hunyuan", "MiniMax")) else "image"
         weights = folder_gb(model_dir)
-        pipe, mode = load_folder(model_dir, dtype, weights)
+        pipe, mode = load_folder(model_dir, dtype, weights, workflow)
     with contextlib.suppress(Exception):
         pipe.set_progress_bar_config(disable=True)
     for adapter in adapters:
@@ -208,7 +212,7 @@ def place(pipe, weights, vram):
     return "offload"
 
 
-def load_folder(model_dir, dtype, weights):
+def load_folder(model_dir, dtype, weights, workflow=None):
     """Loads a folder model the way its size allows: whole on one card,
     spread over several, at 8 or 4 bits when it would not fit otherwise,
     or streamed from the machine's memory as a last resort. Pipelines a
@@ -224,7 +228,7 @@ def load_folder(model_dir, dtype, weights):
     # The newer "modular" pipelines (MiniMax-H3 among them) load through
     # their own class and take their inputs by name.
     if "Modular" in cls:
-        return load_modular(model_dir, dtype, weights, n, first, total)
+        return load_modular(model_dir, dtype, weights, n, first, total, workflow)
     # Components the index names whose folders were left on the Hub (LTX-2.5's
     # prompt-enhancing Gemma, which the app has Claude for): passed as absent,
     # and marked absent in the index on the disk as well, which every loader
@@ -492,7 +496,7 @@ def workflows(pipe):
     return []
 
 
-def load_modular(model_dir, dtype, weights, n, first, total):
+def load_modular(model_dir, dtype, weights, n, first, total, wanted_workflow=None):
     """A modular pipeline: the blocks come from the library or from the
     repository's own code, and the components are loaded afterwards, each
     from the model's own folder whatever repository the index names. Whole
@@ -518,7 +522,10 @@ def load_modular(model_dir, dtype, weights, n, first, total):
     try:
         manager = ComponentsManager()
         pipe = ModularPipeline.from_pretrained(model_dir, trust_remote_code=True, local_files_only=True, components_manager=manager)
-        workflow = next((w for w in PREFERRED_WORKFLOWS if w in workflows(pipe)), None)
+        offered = workflows(pipe)
+        if wanted_workflow and wanted_workflow not in offered:
+            raise ValueError(f"this model has no {wanted_workflow} workflow (it offers {', '.join(offered) or 'none by name'})")
+        workflow = wanted_workflow or next((w for w in PREFERRED_WORKFLOWS if w in offered), None)
         specs = getattr(pipe, "_component_specs", None) or {}
         names = [name for name, spec in specs.items() if getattr(spec, "default_creation_method", "from_pretrained") == "from_pretrained"]
         if workflow:
@@ -904,6 +911,19 @@ def generate(req):
         else:
             kwargs["ip_adapter_image"] = reference
 
+    # Reference pictures (MiniMax-H3's ref2va): the people and things the
+    # clip is to show, each as the library's image reference; that workflow
+    # takes no keyframes, so a starting picture is left aside with a note.
+    references = req.get("references") or []
+    if references and "references" in params:
+        from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
+
+        kwargs["references"] = [MiniMaxH3ImageReference(image=Image.open(io.BytesIO(base64.b64decode(r))).convert("RGB")) for r in references]
+        if req.get("init"):
+            say({"progress": 0, "note": "the reference workflow takes no starting picture; the clip comes from the references and the words"})
+            req = {**req, "init": None, "lastInit": None}
+    elif references:
+        raise ValueError("this model takes no reference pictures")
     # A picture the clip ends on, for a keyframe workflow (MiniMax-H3's
     # fl2va): an orbit LoRA ends where it began, on the same picture.
     last_init = req.get("lastInit")

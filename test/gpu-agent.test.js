@@ -92,7 +92,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
   delete h.diskFreeGb;
   delete h.diskTotalGb;
   delete h.diskUsedGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "19", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "20", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -266,6 +266,13 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   const askedEnding = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
   assert.deepEqual([askedEnding.init, askedEnding.lastInit], ["400 chars", "400 chars"]);
   assert.equal((await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "x", frames: 33, lastInit: "not a picture!" })).status, 400, "a last picture has to arrive intact");
+  // Reference pictures travel too, and ask for the model's reference workflow.
+  const refs = await (await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "the three of them holding hands", frames: 33, references: [png, png, png] })).json();
+  assert.equal((await finish(refs.id)).status, "completed");
+  const logged = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(logged.at(-1).references, ["400 chars", "400 chars", "400 chars"]);
+  assert.equal(logged.filter((l) => l.op === "load").at(-1).workflow, "ref2va", "loaded for the reference workflow");
+  assert.equal((await post("/jobs", { repo: WAN, file: "model_index.json", prompt: "x", frames: 33, references: Array(10).fill(png) })).status, 400, "nine at most");
   // A lean poll leaves the clip out and says it waits; the bytes come apart from the status.
   const lean = await (await get(`/jobs/${clip.id}?lean=1`)).json();
   assert.deepEqual([lean.status, lean.video, lean.image, lean.result, lean.bytes], ["completed", null, null, true, 14]);
