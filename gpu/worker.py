@@ -120,7 +120,15 @@ def load(req):
         mode = place(pipe, weights, vram)
     with contextlib.suppress(Exception):
         pipe.vae.enable_tiling()
-    state.update(pipe=pipe, dir=model_dir or single, key=key, kind=kind, offloaded=mode == "offload", adapters=adapters, mode=mode)
+    # A video VAE that can decode a clip in batches of frames does so:
+    # LTX-2's decoder, given all 121 frames of a clip at once, wants tens
+    # of gigabytes beyond the weights, and the library leaves the
+    # batch-wise way off unless asked.
+    for flag in ("use_framewise_decoding", "use_framewise_encoding"):
+        with contextlib.suppress(Exception):
+            if hasattr(pipe.vae, flag):
+                setattr(pipe.vae, flag, True)
+    state.update(pipe=pipe, dir=model_dir or single, key=key, kind=kind, offloaded=mode == "offload", adapters=adapters, mode=mode, phase=None)
     return {"ok": True, "kind": kind, "mode": mode, "note": MODE_NOTES.get(mode, ""), "offloaded": mode == "offload", "weightsGb": round(weights, 1), "vramGb": round(vram, 1), "gpus": torch.cuda.device_count() if torch.cuda.is_available() else 0}
 
 
@@ -782,12 +790,15 @@ def generate(req):
 
         def on_step(_pipe, step, _t, cb_kwargs):
             say({"progress": round((step + 1) / max(steps, 1), 3)})
+            # Where the work is, for a failure to name: the passes, then the decode.
+            state["phase"] = "decoding the frames" if step + 1 >= steps else f"pass {step + 2} of {steps}"
             return cb_kwargs
 
         kwargs["callback_on_step_end"] = on_step
 
     fps = int(req.get("fps") or 16)
     audio = rate = None
+    state["phase"] = "pass 1" if "callback_on_step_end" in params else None
     if ltx2:
         fps = int(req.get("fps") or 24)
         steps = fit_ltx_request(kwargs, params, fps, image if init else None)
@@ -932,7 +943,8 @@ def main():
             # answer says so, so the agent loads it again for the next job.
             unloaded = False
             if "out of memory" in msg.lower():
-                msg = "the GPU ran out of memory for this model at this size; try a smaller picture, fewer frames, or a bigger card"
+                phase = state.get("phase")
+                msg = f"the GPU ran out of memory for this model at this size{f' while {phase}' if phase else ''}; try a smaller picture, fewer frames, or a bigger card"
                 unload()
                 unloaded = True
             else:

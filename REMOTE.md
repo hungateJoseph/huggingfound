@@ -300,6 +300,16 @@ The machine takes two to four minutes to start. Meanwhile:
   `state.dataCenters[gpuId]`, default US-KS-2 and EUR-IS-4 for every card;
   `state.refusePlacement` refuses a create that names data centres; a pod
   lands in the first preferred data centre.
+- LTX-2.5, third try (image 15): the model loaded and the GPU ran out of
+  memory generating a 121-frame clip at 768 by 512 on a 141 GB card with
+  65 GB of weights. The traceback was lost with the machine; the numbers
+  point at the video VAE decoding all 121 frames at once (its decoder's
+  full-resolution activations run to tens of gigabytes), and diffusers
+  leaves `use_framewise_decoding` off unless asked. The worker now sets
+  `use_framewise_decoding` and `use_framewise_encoding` on any VAE that
+  has them, beside `enable_tiling()`, and an out-of-memory failure names
+  the stage it happened in ("while pass 3 of 8" / "while decoding the
+  frames"), kept in `state["phase"]` from the step callback.
 - LTX-2.5 on the machine, first try (2026-10-16): the load failed with
   "no file named model.safetensors … found in directory <the repo root>":
   a component the index names had no folder on the disk (the prompt
