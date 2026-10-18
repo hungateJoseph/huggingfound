@@ -1269,6 +1269,10 @@ await step("hosted: a machine whose agent lost track of its model is restarted i
 await step("hosted: a machine busy on a clip is left alone: the still-there check waits for it, and a machine that stops anyway is reported with the reason", async () => {
   await openSettings(visitor);
   await visitor.waitForSelector("#rent-presence");
+  // The machine report is on the Settings card too, where the machine is managed.
+  await visitor.click("#rent-report");
+  await visitor.waitForFunction(() => /Python 3\.12\.3, torch 2\.6\.0/.test(document.querySelector("#rent-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  assert.equal(await visitor.locator("#rent-report-copy").isHidden(), false);
   await visitor.fill("#rent-presence", "0.1");
   await visitor.click("#rent-save-idle");
   await visitor.waitForFunction(() => /Saved/.test(document.querySelector("#notice")?.textContent ?? ""));

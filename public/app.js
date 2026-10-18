@@ -4340,6 +4340,7 @@ function renderRental() {
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
         ${r.status === "EXITED" || r.status === "ERROR" ? `<button class="primary" id="rent-start">Start</button>` : ""}
         <button class="ghost" id="rent-delete">Delete machine and models</button>
+        <button class="ghost" id="rent-report">Machine report</button>
       </div>
       <div id="rent-spend"></div>
       <div id="rent-others"></div>
@@ -4391,6 +4392,28 @@ function renderRental() {
     });
     panel.querySelector("#rent-replace-old")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
+    // The machine's own account of itself, here as well as in the panel of
+    // what is on the machine: what it runs, holds, has loaded, and how its
+    // last failures went, ready to copy.
+    panel.querySelector("#rent-report")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      let out = panel.querySelector("#rent-report-out");
+      let copy = panel.querySelector("#rent-report-copy");
+      if (!out) {
+        const wrap = document.createElement("div");
+        wrap.innerHTML = `<p class="tools-row"><button class="ghost" id="rent-report-copy" hidden>Copy the report</button></p><pre class="log small" id="rent-report-out"></pre>`;
+        btn.closest(".rent-card")?.append(wrap);
+        out = wrap.querySelector("#rent-report-out");
+        copy = wrap.querySelector("#rent-report-copy");
+      }
+      out.hidden = false;
+      out.textContent = "Asking the machine for its report";
+      const text = await machineReport(state.rental ?? {});
+      out.textContent = text;
+      copy.hidden = false;
+      copy.textContent = "Copy the report";
+      copy.onclick = () => navigator.clipboard?.writeText(text).then(() => (copy.textContent = "Copied"), () => (copy.textContent = "Select the text and copy it"));
+    });
     panel.querySelector("#rent-delete")?.addEventListener("click", () => rentAction("delete", "Delete the rented machine and every model on it? Nothing is charged after this; the models can be downloaded again on a new one."));
     panel.querySelector("#rent-save-idle").addEventListener("click", async () => {
       try {
