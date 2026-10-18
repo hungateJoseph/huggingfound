@@ -253,7 +253,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
 export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4, "pull-lora": 19 };
-export const AGENT_VERSION = 20;
+export const AGENT_VERSION = 22;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;
@@ -491,11 +491,14 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   // people and things to show; the model works without it.
   const referenceDone = repo.reference ? Boolean(have) && repo.reference.files.every((f) => have.includes(f.from)) : null;
   if (repo.reference) {
+    // Room for it, said on the step itself: the model stays usable without it.
+    const referenceRoom = !referenceDone && done ? diskRoom(detected.gpu, model, repo.reference.gb) : null;
     steps.push({
       kind: "pull-image-repo",
       args: { repo: model.id, files: repo.reference.files.map((f) => f.from), gb: repo.reference.gb || 0 },
       title: `Download its reference-to-video part (${repo.reference.gb.toFixed(1)} GB), for clips from reference pictures`,
-      text: "Optional. With this part on the machine, the window takes up to nine reference pictures of the people and things a clip is to show, and the model makes the clip from them and the words rather than from a starting frame. The machine loads one part or the other as a request needs, a few minutes each way.",
+      text: `Optional. With this part on the machine, the window takes up to nine reference pictures of the people and things a clip is to show, and the model makes the clip from them and the words rather than from a starting frame. The machine loads one part or the other as a request needs, a few minutes each way.${referenceRoom ? ` The disk has no room for it yet: grow it to ${referenceRoom.growTo} GB first (from this window, once the model's own download is done, or from Settings).` : ""}`,
+      ...(referenceRoom ? { growTo: referenceRoom.growTo } : {}),
       done: referenceDone,
       optional: true,
       command: `download ${repo.reference.files.length} files of ${model.id} (the reference part) onto the rented GPU`,
@@ -566,14 +569,16 @@ function diskRoom(gpu, model, needGb) {
   const rented = gpu.rented ?? null;
   let free = gpu.diskFreeGb ?? rented?.diskGb ?? null;
   let total = gpu.diskTotalGb ?? rented?.diskGb ?? null;
-  // A machine from before it knew its disk's size (image 18) reads the
-  // pool its volume is a quota on (a petabyte, with hundreds of terabytes
-  // free): numbers far past the disk rented are set aside for the disk's
-  // size less what the models on it weigh.
-  const pooled = rented?.diskGb && total != null && total > rented.diskGb * 2 && (gpu.version ?? 0) < 18;
-  if (pooled) {
+  // The disk's size is what was rented (and grown since): the machine's own
+  // reading is either the pool its volume is a quota on, far too large, or
+  // the size it was told at the rent, too small after a grow. What is used
+  // is the machine's count of its folders, or its models' sizes.
+  if (rented?.diskGb) {
+    const plausible = gpu.diskTotalGb != null && gpu.diskTotalGb <= rented.diskGb * 2 && gpu.diskTotalGb >= rented.diskGb;
+    const counted = gpu.diskUsedGb != null && gpu.diskUsedGb <= rented.diskGb * 1.05 ? gpu.diskUsedGb : null;
+    const used = counted ?? (plausible ? Math.max(0, gpu.diskTotalGb - (gpu.diskFreeGb ?? 0)) : 0);
     total = rented.diskGb;
-    free = Math.max(0, total - (gpu.diskUsedGb ?? 0));
+    free = Math.max(0, total - used);
   }
   if (free == null) return null;
   // Free space is exact; a disk's size alone leaves the file system's share unknown.

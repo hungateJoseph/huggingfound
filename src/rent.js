@@ -453,7 +453,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   async function probe(url, path = "/api/tags") {
     try {
       const res = await fetchImpl(`${url}${path}`, { signal: AbortSignal.timeout(4000) });
-      if (path === "/health") agentRefused = res.status === 401;
+      if (path.startsWith("/health")) agentRefused = res.status === 401;
       return res.ok ? await res.json() : null;
     } catch {
       return null;
@@ -652,7 +652,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       let imagesReady = Boolean(last?.imagesReady) && running;
       let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "", agentVersion: last?.agentVersion ?? null, agentRefused: last?.agentRefused ?? false };
       if (running && wantProbe) {
-        const [tags, health] = await Promise.all([probe(urlFor(id)), hasAgent() ? probe(agentFor(id), "/health") : null]);
+        // The disk's size goes with the health call: grown since the rent, the machine learns of it here.
+        const diskNow = pod.mounts?.persistent?.size ?? Number(env().RUNPOD_POD_DISK_GB) ?? null;
+        const [tags, health] = await Promise.all([probe(urlFor(id)), hasAgent() ? probe(agentFor(id), `/health${diskNow ? `?diskGb=${Math.round(diskNow)}` : ""}`) : null]);
         ready = Boolean(tags);
         imagesReady = Boolean(health?.ok);
         counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "", agentVersion: health ? Number(health.version) || 1 : null, agentRefused };

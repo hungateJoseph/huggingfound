@@ -41,16 +41,26 @@ state = {"pipe": None, "dir": None, "key": None, "kind": None, "offloaded": Fals
 
 
 def check():
+    """What the Python side has: the libraries and their versions, the
+    cards and their memory, so a machine report says it all in one place."""
     try:
         import torch
         import diffusers
 
         cuda = torch.cuda.is_available()
-        info = {"ok": True, "torch": torch.__version__, "diffusers": diffusers.__version__, "cuda": cuda}
+        info = {"ok": True, "torch": torch.__version__, "diffusers": diffusers.__version__, "cuda": cuda, "python": sys.version.split()[0]}
+        for lib in ("transformers", "peft", "av", "accelerate", "bitsandbytes", "safetensors"):
+            try:
+                info[lib] = __import__(lib).__version__
+            except Exception:  # noqa: BLE001
+                info[lib] = None
         if cuda:
             props = torch.cuda.get_device_properties(0)
             info["gpu"] = props.name
             info["vramGb"] = round(props.total_memory / 1024**3, 1)
+            info["cudaVersion"] = torch.version.cuda
+            info["bf16"] = bool(torch.cuda.is_bf16_supported())
+            info["gpus"] = [{"name": torch.cuda.get_device_properties(i).name, "gb": round(torch.cuda.get_device_properties(i).total_memory / 1024**3, 1)} for i in range(torch.cuda.device_count())]
         return info
     except Exception as err:  # noqa: BLE001
         return {"ok": False, "error": f"{type(err).__name__}: {err}"}
@@ -185,7 +195,8 @@ def component_sizes(pipe):
                 continue
             gb = sum(p.numel() * p.element_size() for p in params) / 1024**3
             dtypes = sorted({str(p.dtype).replace("torch.", "") for p in params})
-            out.append((name, gb, "/".join(dtypes)))
+            devices = sorted({str(p.device) for p in params})
+            out.append((name, gb, f"{'/'.join(dtypes)} on {'/'.join(devices)}"))
     return out
 
 
@@ -1131,7 +1142,8 @@ def main():
                 if where:
                     msg = f"{msg} (at {where})"
             traceback.print_exc()
-            say({"ok": False, "error": msg, "unloaded": unloaded})
+            # The traceback goes along in the answer, for the machine's journal and the page's details.
+            say({"ok": False, "error": msg, "unloaded": unloaded, "trace": traceback.format_exc()[-6000:], "phase": state.get("phase")})
 
 
 if __name__ == "__main__":

@@ -64,7 +64,7 @@ export function startStubAgent() {
         Object.defineProperty(data, "__state", { value: state, enumerable: false });
       }
       res.setHeader("Content-Type", "application/json");
-      if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 20), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length, busy: Boolean(state.busy) || state.jobs.some((j) => /slow please/.test(j.prompt) && !state.release), ...(state.diskFreeGb != null ? { diskFreeGb: state.diskFreeGb, diskTotalGb: state.diskTotalGb ?? 50 } : {}) }));
+      if (req.url.split("?")[0] === "/health") return res.end(JSON.stringify({ ok: true, version: String(state.version ?? 22), loaded: state.loaded, ready: Boolean(state.loaded), loading: false, models: state.files.length, busy: Boolean(state.busy) || state.jobs.some((j) => /slow please/.test(j.prompt) && !state.release), ...(state.diskFreeGb != null ? { diskFreeGb: state.diskFreeGb, diskTotalGb: state.diskTotalGb ?? 50 } : {}) }));
       if (req.url === "/models" && req.method === "GET") return res.end(JSON.stringify({ models: state.files, addons: state.addons }));
       if (req.url === "/lease") {
         state.leases.push(data.minutes ?? null);
@@ -109,6 +109,9 @@ export function startStubAgent() {
         await run((line) => res.write(`${JSON.stringify(line)}\n`));
         return res.end();
       }
+      // The machine's report and journal, as the newer agent gives them.
+      if (req.url === "/diagnostics" && req.method === "GET") return res.end(JSON.stringify({ version: String(state.version ?? 22), agentUptimeSeconds: 120, env: { HF_DISK_GB: "50", diskGbHint: null, HF_IDLE_MINUTES: "10", PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True" }, python: { ok: true, python: "3.12.3", torch: "2.6.0", cudaVersion: "12.4", diffusers: "0.41.0", transformers: "5.5.3", peft: "0.18.0", av: "15.0.0", gpus: [{ name: "Fake A40", gb: 48 }], bf16: true }, disk: { freeGb: 41.5, totalGb: 50, usedGb: 8.5, quota: true }, models: state.files.map((f) => ({ repo: f.repo, file: f.file, gb: f.gb, files: null })), addons: [], loaded: state.loaded ? { dir: state.loaded, kind: "video", mode: "gpu", note: "" } : null, worker: { running: true, busy: false, tail: "fake worker tail" }, imageServer: { file: null, ready: false, lastFailure: null }, jobs: state.jobs.slice(-5).map((j) => ({ id: j.id, status: "completed", kind: "video", createdAt: Date.now(), error: null, phase: null })), downloads: [], failures: state.failures ?? [], journal: "2026-10-17T00:00:00.000Z agent 22 started: disk 50 GB\n2026-10-17T00:01:00.000Z loaded x: video, mode gpu" }));
+      if (req.url.startsWith("/journal") && req.method === "GET") return res.end("2026-10-17T00:00:00.000Z agent 22 started");
       if (req.url === "/downloads" && req.method === "GET") return res.end(JSON.stringify({ tasks: [...state.tasks.values()].map((t) => ({ id: t.id, key: t.key, status: t.status, error: t.error, startedAt: t.startedAt, last: t.lines.at(-1) ?? null })) }));
       const poll = req.url.match(/^\/downloads\/([a-f0-9]{16})(?:\?after=(\d+))?$/);
       if (poll && req.method === "GET") {

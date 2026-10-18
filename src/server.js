@@ -1086,6 +1086,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
 
   // What the rented machine's agent holds, for an image model's plan: the
   // files on its disk and whether it answers.
+  // A used figure larger than the disk is a miscount (a machine on image
+  // 21 counted its folders twice); the models' sizes stand in for it.
+  function plausibleUsed(used, diskGb) {
+    return used == null || (diskGb && used > diskGb * 1.05) ? null : used;
+  }
   async function withGpu(detected, agent, ctx) {
     let files = [];
     const folders = {};
@@ -1096,7 +1101,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     let usedGb = null;
     try {
       let models;
-      [models, addons, health, tasks] = await Promise.all([agentModelList(agent, fetchImpl), agentAddons(agent, fetchImpl), agentHealth(agent, fetchImpl), agentTasks(agent, fetchImpl)]);
+      [models, addons, health, tasks] = await Promise.all([agentModelList(agent, fetchImpl), agentAddons(agent, fetchImpl), agentHealth(agent, fetchImpl, { diskGb: ctx.rental?.owns(agent) ? ctx.rental.cached()?.diskGb ?? null : null }), agentTasks(agent, fetchImpl)]);
       files = models.map((m) => `${m.repo}/${m.file}`);
       // What the models on it weigh, for a disk whose free space the machine
       // cannot read (a quota on a larger pool): an older agent says nothing of it.
@@ -1108,7 +1113,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     } catch {
       // not up yet, or stopped
     }
-    return { ...detected, gpu: { url: agent, running, files, folders, addons, tasks, version: Number(health?.version) || (running ? 1 : null), diskFreeGb: health?.diskFreeGb ?? null, diskTotalGb: health?.diskTotalGb ?? null, diskUsedGb: health?.diskUsedGb ?? usedGb, rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
+    return { ...detected, gpu: { url: agent, running, files, folders, addons, tasks, version: Number(health?.version) || (running ? 1 : null), diskFreeGb: health?.diskFreeGb ?? null, diskTotalGb: health?.diskTotalGb ?? null, diskUsedGb: plausibleUsed(health?.diskUsedGb, ctx.rental?.owns(agent) ? ctx.rental.cached()?.diskGb : null) ?? usedGb, rented: ctx.rental?.owns(agent) ? ctx.rental.cached() : null } };
   }
 
   // When the chat server is the rented machine, the plan can say whether it

@@ -874,9 +874,9 @@ export async function removeAgentAddon(repo, file, fetchImpl = fetch, agent = ""
 }
 
 // What the agent on the machine reports about itself, or null when it does not answer.
-export async function agentHealth(agent, fetchImpl = fetch) {
+export async function agentHealth(agent, fetchImpl = fetch, { diskGb = null } = {}) {
   try {
-    const res = await fetchImpl(`${agent}/health`, { signal: AbortSignal.timeout(4000) });
+    const res = await fetchImpl(`${agent}/health${diskGb ? `?diskGb=${Math.round(diskGb)}` : ""}`, { signal: AbortSignal.timeout(4000) });
     if (!res.ok) return null;
     return await res.json();
   } catch {

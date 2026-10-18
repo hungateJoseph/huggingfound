@@ -88,11 +88,15 @@ test("it answers health, and only the allowed origins may call it from a page", 
   assert.equal(h.diskTotalGb, 50, "the size the site gave, not the pool's");
   assert.ok(typeof h.diskUsedGb === "number" && h.diskUsedGb >= 0 && h.diskUsedGb < 1, "what is on it so far");
   assert.ok(h.diskFreeGb <= 50 && h.diskFreeGb > 49, "the quota less that");
+  // Grown since: the site says the new size with its health call, and the agent goes by it.
+  const grownH = await (await get("/health?diskGb=70")).json();
+  assert.deepEqual([grownH.diskTotalGb, grownH.diskFreeGb > 69], [70, true]);
+  assert.equal((await (await get("/health")).json()).diskTotalGb, 70, "and keeps it");
   assert.ok(!fs.existsSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part")), "a half-written part from before the restart is swept at startup");
   delete h.diskFreeGb;
   delete h.diskTotalGb;
   delete h.diskUsedGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "20", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "22", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -520,4 +524,18 @@ test("removing a model unloads it and frees the disk", async () => {
   assert.equal(h.loaded, null);
   assert.equal(h.models, 0);
   assert.ok(!fs.existsSync(path.join(modelsDir, "second-state")));
+});
+
+test("the machine reports on itself: what it runs, holds, has loaded and how its failures went, with a journal on its disk", async () => {
+  const d = await (await get("/diagnostics")).json();
+  assert.equal(d.version, "22");
+  assert.ok(d.agentUptimeSeconds >= 0);
+  assert.deepEqual([d.env.HF_DISK_GB, typeof d.disk.totalGb, Array.isArray(d.models), Array.isArray(d.failures), typeof d.journal], ["50", "number", true, true, "string"]);
+  assert.match(d.journal, /agent 22 started: disk 50 GB/);
+  assert.match(d.journal, /job .* done|failed/, "jobs from the tests before are in it");
+  assert.ok(d.failures.length > 0, "the failed jobs of the tests before are remembered");
+  for (const k of ["at", "error", "jobId", "kind", "trace", "what"]) assert.ok(k in d.failures[0], `a failure carries ${k}`);
+  const text = await (await get("/journal?lines=50")).text();
+  assert.match(text, /agent 22 started/);
+  assert.ok(fs.existsSync(path.join(modelsDir, "..", "journal.log")), "the journal lives on the disk beside the models");
 });

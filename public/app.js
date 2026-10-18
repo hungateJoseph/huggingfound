@@ -3394,6 +3394,7 @@ function renderImage(box, t) {
             if (err) {
               if (req.item) failedItems.push(req.item);
               say(`Could not make ${requests.length > 1 ? `request ${i + 1}` : "it"}: ${err.message}`);
+              await machineSays(t.agent, say);
               // Out of memory: the size is remembered as too big for this
               // machine, the estimate warns above it from now on, and the
               // way to go again is at a length that stays under it.
@@ -3421,6 +3422,7 @@ function renderImage(box, t) {
           } catch (err) {
             failedItems.push(item);
             say(`Could not make the long clip: ${err.message}`);
+            await machineSays(t.agent, say);
           }
         }
       } finally {
@@ -3640,6 +3642,81 @@ function patienceFor(item) {
 // older one is restarted in place by RunPod, which keeps its host, card and
 // disk, and is back when the failed job's record is gone from it.
 // The secret the machine was started with, sent with every call to it.
+
+// The machine's own account of a failure, in the log under the page's line:
+// which stage it was in and the last lines of the worker's traceback, read
+// from the machine's report; nothing to fetch by hand.
+async function machineSays(agent, say) {
+  if (!agent) return;
+  try {
+    const d = await fetch(`${agent}/diagnostics`, { headers: agentHeaders(), cache: "no-store", signal: AbortSignal.timeout(15e3) }).then((r) => (r.ok ? r.json() : null));
+    const f = d?.failures?.[0];
+    if (!f || Date.now() - f.at > 10 * 60e3) return;
+    const lines = String(f.trace || "").trim().split("\n").filter(Boolean);
+    say(`The machine's account: ${f.error}${f.phase ? ` (while ${f.phase})` : ""}.${lines.length ? " The end of its traceback:" : ""}`);
+    for (const l of lines.slice(-14)) say(`  │ ${l}`);
+    say("The whole report is under Machine report in the GPU panel (the bar's Manage), ready to copy.");
+    rememberMachineFailure(d, f);
+  } catch {
+    // the machine's account is a help, not a need
+  }
+}
+// Failures remembered across machines, in this browser: a replaced
+// machine takes its journal with it, this stays.
+function rememberMachineFailure(d, f) {
+  try {
+    const list = JSON.parse(localStorage.getItem("machineFailures") || "[]");
+    if (list.some((x) => x.at === f.at && x.error === f.error)) return;
+    list.unshift({ at: f.at, machine: state.rental?.id ?? null, dataCenter: state.rental?.dataCenter ?? null, image: d.version ?? null, what: f.what, error: f.error, phase: f.phase ?? null, trace: String(f.trace || "").split("\n").slice(-30).join("\n") });
+    localStorage.setItem("machineFailures", JSON.stringify(list.slice(0, 20)));
+  } catch {
+    // no storage
+  }
+}
+// The report as text: what the machine runs, holds, has loaded, how its
+// disk stands, its last failures with their tracebacks, its journal's
+// tail, and failures remembered from machines before it.
+async function machineReport(r) {
+  const when = (t) => (t ? new Date(t).toLocaleString() : "?");
+  let earlier = [];
+  try {
+    earlier = JSON.parse(localStorage.getItem("machineFailures") || "[]");
+  } catch {
+    earlier = [];
+  }
+  const head = [`HuggingFound machine report, ${new Date().toLocaleString()}`, `Machine ${r.id ?? "?"}: ${r.gpu ?? "?"}${r.gpuCount > 1 ? ` x${r.gpuCount}` : ""}, ${r.gb ?? "?"} GB of card memory, disk ${r.diskGb ?? "?"} GB, data centre ${r.dataCenter ?? "?"}, status ${r.status ?? "?"}${r.containerUp === false ? " (no container yet)" : ""}, image ${r.agentVersion ?? "?"} of ${r.agentCurrent ?? "?"}`];
+  let d = null;
+  try {
+    d = r.agent ? await fetch(`${r.agent}/diagnostics`, { headers: agentHeaders(), cache: "no-store", signal: AbortSignal.timeout(15e3) }).then((x) => (x.ok ? x.json() : null)) : null;
+  } catch {
+    d = null;
+  }
+  const parts = [...head];
+  if (!d) parts.push("", "The machine's agent did not answer, so this is the site's view alone.");
+  else {
+    const p = d.python ?? {};
+    parts.push("", `Agent ${d.version}, up ${Math.round((d.agentUptimeSeconds ?? 0) / 60)} min. Python ${p.python ?? "?"}, torch ${p.torch ?? "?"} (CUDA ${p.cudaVersion ?? "?"}), diffusers ${p.diffusers ?? "?"}, transformers ${p.transformers ?? "?"}, peft ${p.peft ?? "none"}, av ${p.av ?? "none"}.`);
+    parts.push(`Cards: ${(p.gpus ?? []).map((g) => `${g.name} ${g.gb} GB`).join(", ") || p.gpu || "none seen"}${p.bf16 === false ? " (no bf16)" : ""}${p.problem ? `; problem: ${p.problem}` : ""}.`);
+    parts.push(`Disk: ${d.disk ? `${d.disk.freeGb} GB free of ${d.disk.totalGb}${d.disk.usedGb != null ? `, ${d.disk.usedGb} GB in the machine's folders` : ""}${d.disk.quota ? " (a quota; the size as the site said it)" : ""}` : "unknown"}. Env: disk ${d.env?.HF_DISK_GB ?? "?"} GB at rent${d.env?.diskGbHint ? `, ${d.env.diskGbHint} GB since` : ""}, idle ${d.env?.HF_IDLE_MINUTES ?? "?"} min, allocator ${d.env?.PYTORCH_CUDA_ALLOC_CONF ?? "default"}.`);
+    parts.push(`Models on it: ${(d.models ?? []).map((m) => `${m.repo}${m.file !== "model_index.json" ? `/${m.file}` : ""} ${m.gb} GB${m.files != null ? ` (${m.files} files)` : ""}`).join("; ") || "none"}. Add-ons: ${(d.addons ?? []).map((a) => `${a.repo}/${a.file}`).join("; ") || "none"}.`);
+    parts.push(`Loaded: ${d.loaded ? `${d.loaded.dir} (${d.loaded.kind}, mode ${d.loaded.mode || "?"}${d.loaded.note ? `: ${d.loaded.note}` : ""})` : "nothing"}. Worker ${d.worker?.running ? (d.worker.busy ? "busy" : "idle") : "not running"}.`);
+    if (d.downloads?.length) parts.push(`Downloads: ${d.downloads.map((t) => `${t.key} ${t.status}${t.error ? ` (${t.error})` : ""} ${when(t.startedAt)}`).join("; ")}.`);
+    if (d.jobs?.length) parts.push(`Jobs: ${d.jobs.map((j) => `${j.id.slice(0, 6)} ${j.status}${j.phase ? ` (${j.phase})` : ""}${j.error ? `: ${j.error.slice(0, 120)}` : ""}`).join("; ")}.`);
+    parts.push("", d.failures?.length ? "Last failures on this machine:" : "No failures on this machine.");
+    for (const f of (d.failures ?? []).slice(0, 5)) {
+      parts.push(`- ${when(f.at)}, ${f.kind}: ${f.what}`, `  ${f.error}${f.phase ? ` (while ${f.phase})` : ""}`);
+      const lines = String(f.trace || "").trim().split("\n").filter(Boolean).slice(-20);
+      for (const l of lines) parts.push(`    ${l}`);
+    }
+    if (d.worker?.tail) parts.push("", "Worker's last lines:", ...String(d.worker.tail).trim().split("\n").slice(-25).map((l) => `  ${l}`));
+    if (d.journal) parts.push("", "Journal (tail):", ...String(d.journal).trim().split("\n").slice(-40).map((l) => `  ${l}`));
+  }
+  if (earlier.length) {
+    parts.push("", "Failures remembered from earlier machines (this browser):");
+    for (const f of earlier.slice(0, 8)) parts.push(`- ${when(f.at)}, machine ${f.machine ?? "?"} (${f.dataCenter ?? "?"}, image ${f.image ?? "?"}): ${f.what ?? ""}`, `  ${f.error}${f.phase ? ` (while ${f.phase})` : ""}`);
+  }
+  return parts.join("\n");
+}
 function agentHeaders() {
   // Only the standard header: a browser asks the machine first whether a
   // header may be sent, and a machine on an earlier image allows this one.
@@ -4257,7 +4334,7 @@ function renderRental() {
       ${capNote}${stuck}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
-      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}${r.agentVersion < 20 ? ", clips from reference pictures on MiniMax-H3" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
+      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}${r.agentVersion < 20 ? ", clips from reference pictures on MiniMax-H3" : ""}${r.agentVersion < 21 ? ", a disk grown after the rent read at its new size" : ""}${r.agentVersion < 22 ? ", the disk's use counted once" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.retrying ? ` <b>Start is asked again every minute for ${Math.max(1, Math.ceil((startRetry.until - Date.now()) / 60e3))} more minutes${startRetry.tries ? ` (${startRetry.tries} so far)` : ""}; this can be left as it is.</b>` : state.rentError.noGpu && state.rentError.action === "start" ? " Start was asked again every minute for half an hour without luck." : ""}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>${state.rentError.retrying ? `<button class="ghost" id="rent-stop-retry">Stop asking</button>` : ""}` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
@@ -5467,6 +5544,9 @@ async function renderGpuModels() {
     body.innerHTML = `<p class="muted small">Could not ask the machine: ${esc(err.message)}</p>`;
     return;
   }
+  // The machine's own account of itself, to read or to paste when asking
+  // for help: what it runs, holds, has loaded, and how its last failures went.
+  const reportRow = `<p class="tools-row report-row"><button class="ghost" id="gpu-report">Machine report</button><button class="ghost" id="gpu-report-copy" hidden>Copy the report</button></p><pre class="log small" id="gpu-report-out" hidden></pre>`;
   // One entry per model. The newest download of a model stands for the
   // older tries; while it runs, it stands for the model's own row too,
   // since a folder half-fetched is nothing to open or remove yet, and
@@ -5510,7 +5590,17 @@ async function renderGpuModels() {
     </li>`;
   };
   const downloads = runs.length ? `<h3>Downloads</h3><ul class="gpu-list" id="gpu-runs">${runs.map(runRow).join("")}</ul>` : "";
-  body.innerHTML = `${downloads}<h3>Chat models</h3>${chat}<h3>Image models</h3>${images}<p class="muted small">Models stay on the machine's disk while it is stopped and go when it is deleted. Each download onto it, and each conversation or picture, counts as use for the idle timer.</p><div class="actions"><button class="ghost" id="gpu-models-refresh">Refresh</button></div>`;
+  body.innerHTML = `${downloads}<h3>Chat models</h3>${chat}<h3>Image models</h3>${images}<p class="muted small">Models stay on the machine's disk while it is stopped and go when it is deleted. Each download onto it, and each conversation or picture, counts as use for the idle timer.</p><div class="actions"><button class="ghost" id="gpu-models-refresh">Refresh</button></div>` + reportRow;
+  body.querySelector("#gpu-report")?.addEventListener("click", async () => {
+    const out = body.querySelector("#gpu-report-out");
+    const copy = body.querySelector("#gpu-report-copy");
+    out.hidden = false;
+    out.textContent = "Asking the machine for its report";
+    const text = await machineReport(r);
+    out.textContent = text;
+    copy.hidden = false;
+    copy.onclick = () => navigator.clipboard?.writeText(text).then(() => (copy.textContent = "Copied"), () => (copy.textContent = "Select the text and copy it"));
+  });
   body.querySelector("#gpu-models-refresh").addEventListener("click", renderGpuModels);
   for (const li of body.querySelectorAll("#gpu-runs li")) {
     li.querySelector("[data-open-run]")?.addEventListener("click", () => {

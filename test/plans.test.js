@@ -313,6 +313,15 @@ test("a model bigger than the rented machine's disk is stopped before the downlo
   assert.equal(pooled.needsDisk, true);
   assert.equal(pooled.growTo, 250, "room for what is there and the model with a margin");
   assert.match(pooled.reason, /its 90 GB disk has no room for that \(4\.8 GB free of 90\)\. Grow the disk to 250 GB/);
+  // A disk grown since the rent: the machine still says the old size and no room, the rent says 250 GB; the model fits.
+  const grown = buildPlan({ model, files, machine, detected: gpu({ diskFreeGb: 0, diskTotalGb: 160, diskUsedGb: 100, rented: { rented: true, diskGb: 250 } }), hasToken: false });
+  assert.equal(grown.runnable, true, grown.reason);
+  // A machine that counted its folders twice says more is used than the disk holds: the figure is set aside.
+  const miscounted = buildPlan({ model, files, machine, detected: gpu({ diskFreeGb: 0, diskTotalGb: 160, diskUsedGb: 284, rented: { rented: true, diskGb: 250 } }), hasToken: false });
+  assert.equal(miscounted.runnable, true, miscounted.reason);
+  const grownTight = buildPlan({ model, files, machine, detected: gpu({ diskFreeGb: 0, diskTotalGb: 160, diskUsedGb: 160, rented: { rented: true, diskGb: 250 } }), hasToken: false });
+  assert.equal(grownTight.needsDisk, true);
+  assert.match(grownTight.reason, /its 250 GB disk has no room for that \(90\.0 GB free of 250\)\. Grow the disk to 320 GB/);
   // Room enough: the download goes ahead, the size along for the machine's own check.
   const roomy = buildPlan({ model, files, machine, detected: gpu({ diskFreeGb: 190, diskTotalGb: 200, rented: { rented: true, diskGb: 200 } }), hasToken: false });
   assert.equal(roomy.runnable, true);

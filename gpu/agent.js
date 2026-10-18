@@ -84,7 +84,7 @@ function idleWatch() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "20";
+const VERSION = "22";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -179,6 +179,41 @@ checkWorker();
 // line out, with progress lines in between.
 
 const py = { proc: null, dir: null, key: null, kind: null, pending: null, chain: Promise.resolve(), tail: "" };
+// A journal of what the machine did, on its disk beside the models, so a
+// stop and start loses nothing of it, and a report can be read off it
+// rather than guessed at: starts, loads, jobs, downloads, failures with
+// their tracebacks. Kept to a few megabytes, oldest lines first out.
+const JOURNAL = path.join(MODELS_DIR, "..", "journal.log");
+const JOURNAL_MAX = 4 * 1024 * 1024;
+function journal(line, detail = "") {
+  const stamp = new Date().toISOString();
+  const text = `${stamp} ${line}${detail ? `\n${String(detail).trim().split("\n").map((l) => `    ${l}`).join("\n")}` : ""}\n`;
+  try {
+    fs.mkdirSync(path.dirname(JOURNAL), { recursive: true });
+    fs.appendFileSync(JOURNAL, text);
+    const size = fs.statSync(JOURNAL).size;
+    if (size > JOURNAL_MAX) {
+      const all = fs.readFileSync(JOURNAL, "utf8");
+      fs.writeFileSync(JOURNAL, all.slice(all.length - JOURNAL_MAX / 2));
+    }
+  } catch {
+    // a journal that cannot be written is not worth failing over
+  }
+}
+function journalTail(lines = 200) {
+  try {
+    return fs.readFileSync(JOURNAL, "utf8").split("\n").slice(-lines).join("\n");
+  } catch {
+    return "";
+  }
+}
+// The last failures, each with the worker's traceback, for the report.
+const failures = [];
+function noteFailure(kind, what, error, trace = "", extra = {}) {
+  failures.unshift({ at: Date.now(), kind, what, error: String(error).slice(0, 600), trace: String(trace || "").slice(-6000), ...extra });
+  failures.splice(20);
+  journal(`${kind} failed: ${what}: ${String(error).slice(0, 400)}`, trace);
+}
 
 function stopWorker() {
   if (py.proc) {
@@ -201,7 +236,8 @@ function startWorker() {
   const proc = spawn(PYTHON, [WORKER], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PYTORCH_CUDA_ALLOC_CONF: process.env.PYTORCH_CUDA_ALLOC_CONF || "expandable_segments:True" } });
   py.proc = proc;
   py.tail = "";
-  proc.stderr.on("data", (c) => (py.tail = (py.tail + c.toString()).slice(-4000)));
+  journal(`worker started (pid ${proc.pid})`);
+  proc.stderr.on("data", (c) => (py.tail = (py.tail + c.toString()).slice(-200000)));
   const rl = readline.createInterface({ input: proc.stdout });
   rl.on("line", (line) => {
     let msg;
@@ -225,6 +261,7 @@ function startWorker() {
     const pending = py.pending;
     py.pending = null;
     stopWorker();
+    journal(`worker stopped${pending ? " with a request in hand" : ""}`, py.tail.slice(-3000));
     pending?.resolve({ ok: false, error: `the Python worker stopped: ${py.tail.trim().split("\n").pop() || "no output"}` });
   };
   proc.on("exit", gone);
@@ -280,8 +317,13 @@ async function ensureWorkerLoaded(target, adapters = [], workflow = null) {
   const req = { op: "load", adapters, ...(workflow ? { workflow } : {}) };
   if (target.endsWith(`/${INDEX}`)) req.dir = path.dirname(target);
   else req.file = target;
+  journal(`loading ${req.dir ?? req.file}${adapters.length ? ` with ${adapters.map((a) => path.basename(a.path)).join(", ")}` : ""}${workflow ? ` for ${workflow}` : ""}`);
   const answer = await askWorker(req, null, 30 * 60e3);
-  if (!answer.ok) throw new Error(answer.error || "the model did not load");
+  if (!answer.ok) {
+    noteFailure("load", req.dir ?? req.file, answer.error || "the model did not load", answer.trace);
+    throw new Error(answer.error || "the model did not load");
+  }
+  journal(`loaded ${req.dir ?? req.file}: ${answer.kind ?? "?"}, mode ${answer.mode ?? "?"}${answer.note ? `; ${answer.note}` : ""}`);
   py.dir = req.dir ?? req.file;
   py.key = key;
   py.kind = answer.kind ?? "image";
@@ -428,7 +470,12 @@ function startJob(input) {
           // the model again and asking once more.
           const stale = /no model is loaded/i.test(answer.error || "");
           if (answer.unloaded || stale) forgetWorkerModel();
-          if (!stale || attempt > 0) throw new Error(answer.error || "the worker made nothing");
+          if (!stale || attempt > 0) {
+            job.trace = answer.trace || null;
+            job.phase = answer.phase || null;
+            noteFailure("job", `${input.repo}: ${String(input.prompt).slice(0, 80)} (${input.width}x${input.height}${input.frames ? `, ${input.frames} frames` : ""}${input.addon ? `, with ${input.addon.file}` : ""}${input.references?.length ? `, ${input.references.length} references` : ""}${input.init ? ", from a picture" : ""})`, answer.error || "the worker made nothing", answer.trace, { jobId: id, phase: answer.phase || null });
+            throw new Error(answer.error || "the worker made nothing");
+          }
           job.status = "loading";
           job.progress = null;
         }
@@ -441,6 +488,7 @@ function startJob(input) {
           job.kind = "image";
         } else throw new Error("the worker returned no picture");
         job.status = "completed";
+        journal(`job ${id} done: ${input.repo}, ${input.width}x${input.height}${input.frames ? `, ${input.frames} frames` : ""}, ${Math.round((Date.now() - job.createdAt) / 1000)} s`);
         return;
       }
       await ensureLoaded(file);
@@ -487,6 +535,7 @@ function startJob(input) {
     } catch (err) {
       job.status = "failed";
       job.error = err.message;
+      if (!failures.some((f) => f.jobId === id)) noteFailure("job", `${input.repo}: ${String(input.prompt).slice(0, 80)}`, err.message, job.trace || "", { jobId: id });
     }
   })();
   return job;
@@ -644,6 +693,10 @@ setInterval(idleWatch, IDLE_CHECK_MS).unref();
 // folders the agent writes to, so a download is refused before the quota
 // kills it midway, as one did at 90 GB of MiniMax-H3.
 const DISK_GB = Number(process.env.HF_DISK_GB) || 0;
+// The size as the site last said it: a disk grown after the rent is bigger
+// than the environment knows, and the site tells the agent with each health call.
+let diskGbHint = 0;
+const diskGb = () => diskGbHint || DISK_GB;
 function usedGb() {
   let bytes = 0;
   const walk = (dir) => {
@@ -665,16 +718,21 @@ function usedGb() {
       }
     }
   };
-  for (const d of new Set([MODELS_DIR, ADDONS_DIR, process.env.HF_HOME, path.join(MODELS_DIR, "..")].filter(Boolean))) walk(d);
+  // Each folder once: the models and add-ons sit inside their parent, and
+  // a folder counted twice once read 142 GB as 284 and the disk as full.
+  const roots = [path.join(MODELS_DIR, ".."), MODELS_DIR, ADDONS_DIR, process.env.HF_HOME].filter(Boolean).map((d) => path.resolve(d));
+  const inside = (a, b) => a !== b && (a + path.sep).startsWith(b + path.sep);
+  for (const d of new Set(roots.filter((d) => !roots.some((other) => inside(d, other))))) walk(d);
   return bytes / 1024 ** 3;
 }
 function diskSpace() {
   try {
     const s = fs.statfsSync(MODELS_DIR);
     const pool = { freeGb: (s.bavail * s.bsize) / 1024 ** 3, totalGb: (s.blocks * s.bsize) / 1024 ** 3 };
-    if (DISK_GB && pool.totalGb > DISK_GB * 2) {
+    const quota = diskGb();
+    if (quota && pool.totalGb > quota * 2) {
       const used = usedGb();
-      return { freeGb: Math.max(0, Math.min(pool.freeGb, DISK_GB - used)), totalGb: DISK_GB, usedGb: used, quota: true };
+      return { freeGb: Math.max(0, Math.min(pool.freeGb, quota - used)), totalGb: quota, usedGb: used, quota: true };
     }
     return pool;
   } catch {
@@ -1041,6 +1099,8 @@ const server = http.createServer(async (req, res) => {
     if (!tokenOk(req)) return send(res, 401, { error: "This machine answers only its own site: the request did not carry its secret" });
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/health") {
+      const said = Number(url.searchParams.get("diskGb"));
+      if (said >= 10 && said <= 4000) diskGbHint = said;
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
       const loaded = sd.file ? rel(sd.file) : py.dir ? (py.dir.endsWith(".safetensors") || py.dir.endsWith(".ckpt") ? rel(py.dir) : `${rel(py.dir)}/${INDEX}`) : null;
       const room = diskSpace();
@@ -1049,6 +1109,32 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
     // The image server's recent output and the Python side's, for a look
     // when a picture fails.
+    // The machine's own account of itself, for the page's Machine report:
+    // what it runs, what it holds, what is loaded, what failed and how.
+    if (req.method === "GET" && url.pathname === "/diagnostics") {
+      const room = diskSpace();
+      return send(res, 200, {
+        version: VERSION,
+        agentUptimeSeconds: Math.round(process.uptime()),
+        env: { HF_DISK_GB: process.env.HF_DISK_GB ?? null, diskGbHint: diskGbHint || null, HF_IDLE_MINUTES: process.env.HF_IDLE_MINUTES ?? null, PYTORCH_CUDA_ALLOC_CONF: process.env.PYTORCH_CUDA_ALLOC_CONF ?? null },
+        python: pyCheck,
+        disk: room ? { freeGb: Math.round(room.freeGb * 10) / 10, totalGb: Math.round(room.totalGb), usedGb: room.usedGb != null ? Math.round(room.usedGb * 10) / 10 : null, quota: Boolean(room.quota) } : null,
+        models: listModels().map((m) => ({ repo: m.repo, file: m.file, gb: Math.round(m.gb * 10) / 10, files: m.files?.length ?? null })),
+        addons: listAddons(),
+        loaded: py.dir ? { dir: path.relative(MODELS_DIR, py.dir).split(path.sep).join("/"), kind: py.kind, mode: py.mode, note: py.note, key: py.key } : null,
+        worker: { running: Boolean(py.proc), busy: Boolean(py.pending), tail: py.tail.split("\n").slice(-80).join("\n") },
+        imageServer: { file: sd.file ? path.relative(MODELS_DIR, sd.file).split(path.sep).join("/") : null, ready: sd.ready, lastFailure: sd.lastFailure ?? null },
+        jobs: [...jobs.values()].slice(-20).map((j) => ({ id: j.id, status: j.status, kind: j.kind, createdAt: j.createdAt, error: j.error, phase: j.phase ?? null })),
+        downloads: [...tasks.values()].slice(-10).map((t) => ({ id: t.id, key: t.key, status: t.status, error: t.error, startedAt: t.startedAt, finishedAt: t.finishedAt ?? null })),
+        failures,
+        journal: journalTail(120),
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/journal") {
+      const lines = Math.min(5000, Math.max(20, Number(url.searchParams.get("lines")) || 500));
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+      return res.end(journalTail(lines));
+    }
     if (req.method === "GET" && url.pathname === "/log") return send(res, 200, { sd: sd.tail, lastFailure: sd.lastFailure ?? null, python: py.tail, loaded: sd.file ? path.relative(MODELS_DIR, sd.file).split(path.sep).join("/") : null });
     // The site renews the lease while it sees activity (a chat sent from the
     // browser, a download it is relaying). A lease is at most the idle time.
@@ -1301,5 +1387,6 @@ for (const sig of ["SIGINT", "SIGTERM"]) {
 
 server.listen(PORT, HOST, () => {
   touchActivity();
+  journal(`agent ${VERSION} started: disk ${process.env.HF_DISK_GB ?? "?"} GB, idle ${IDLE_MINUTES} min, models in ${MODELS_DIR}`);
   console.log(`HuggingFound GPU agent listening on ${HOST}:${server.address().port}; models in ${MODELS_DIR}; origins: ${ORIGINS.join(", ") || "none (same-machine only)"}`);
 });

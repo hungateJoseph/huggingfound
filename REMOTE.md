@@ -300,6 +300,72 @@ The machine takes two to four minutes to start. Meanwhile:
   `state.dataCenters[gpuId]`, default US-KS-2 and EUR-IS-4 for every card;
   `state.refusePlacement` refuses a create that names data centres; a pod
   lands in the first preferred data centre.
+- Image 22: the agent's `usedGb()` walked the models folder and the
+  add-ons folder and then their parent as well, so 142 GB read as 284,
+  the disk as full, and each grow was followed by a demand for ten more.
+  The walk now takes each folder once (a root inside another is dropped);
+  the site sets aside a used figure larger than the disk itself (server
+  `plausibleUsed`, plan `counted`) and goes by the models' sizes instead,
+  which ends the loop for a machine on image 21 as soon as the site
+  deploys, though that machine's own per-file check still refuses until
+  it is replaced.
+- Diagnostics (image 21). The machine keeps a journal on its disk beside
+  the models (`journal.log`, 4 MB, oldest out): agent start with version,
+  disk and idle settings; worker start and stop (with its last lines);
+  every load (what, with which LoRAs, for which workflow; the mode and
+  note it ended in); every job done (size, frames, seconds) or failed
+  (what, the error, the worker's traceback); downloads. The worker's
+  stderr tail is 200 KB in memory. The worker answers a failure with
+  `trace` (the traceback, 6 KB) and `phase`; the agent keeps the last 20
+  failures (`failures`, with kind/what/error/trace/phase/jobId). `GET
+  /diagnostics` gives it all: version, uptime, env (HF_DISK_GB, the disk
+  hint, idle, allocator), the Python check (now with versions of torch,
+  diffusers, transformers, peft, av, accelerate, bitsandbytes,
+  safetensors, CUDA, bf16, every card), the disk reading, models and
+  add-ons on it, what is loaded (mode, note), the worker's state and tail,
+  the image server's state, the last jobs and downloads, the failures and
+  the journal's tail; `GET /journal?lines=N` the raw journal. The page: a
+  failed request is followed in the log by "The machine's account: …
+  (while …)" and the last 14 traceback lines, read from the report; the
+  GPU panel has "Machine report" (a readable text of all of the above
+  plus failures remembered in this browser from earlier machines,
+  `machineFailures` in localStorage) with a Copy button, meant to be
+  pasted when asking for help. The memory note on load names each
+  component's precision and device.
+
+## Verified on hardware, and not
+
+What has actually run on a rented machine, so the same thing is not
+tested twice, and what has not, so a first run is known to be one.
+
+Verified (2026-10-15 to 17): MiniMax-H3 keyframe clips (fl2va) from
+words and from a picture on 2×H200, including two-card placement; long
+clips as pieces, joined; scenes from Claude's shots; fixes of one shot;
+download stop-after; the still-there check refusing a busy machine;
+LTX-2.5 download (36 files after the spare-shard trim), load with the
+prompt enhancer absent, image-to-video reaching the transformer (ran out
+of memory at 121 frames on one card with everything resident, image 15);
+the disk quota error (-122) at 90 GB; the EUR-IS-4 host never starting a
+container, twice; peft missing from the image (fixed, image 19).
+
+Not yet verified: LTX-2.5 generating a clip (image 16's staging and
+decode batching are the fix; a text-only 5 s at Low and then one from a
+picture are the two tests); the MiniMax-H3 360 orbit LoRA end to end
+(image 19 has peft); clips from reference pictures (ref2va, image 20);
+the grown-disk size hint (image 21); the Machine report on a real
+machine (image 21). When one of these runs, move it up and note the
+date and the machine.
+- A disk grown after the rent (image 21): the agent took its size from
+  `HF_DISK_GB` once, so after a grow to 250 GB it still counted against
+  160, reported 0 GB free, and the plan asked for ten more every time.
+  Now every health call carries `?diskGb=` (the pod's mount size from the
+  rent status, or the saved disk size from the site's probe), the agent
+  keeps the last said size (`diskGbHint`) over the environment, and the
+  plan's `diskRoom` always takes the rented size as the disk's size, with
+  what is used from the machine's `diskUsedGb` (or its own total less free
+  when those are plausible). Until a machine is on image 21, its own
+  per-file room check still goes by the old size: a fresh machine rented
+  with the disk it needs is the way round on image 20.
 - Reference pictures and queued pictures (image 20). MiniMax-H3's ref2va
   workflow takes up to nine `MiniMaxH3ImageReference`s (people and things
   the clip is to show) and no keyframes; it runs on `transformer_ref`,
