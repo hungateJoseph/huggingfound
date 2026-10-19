@@ -59,6 +59,12 @@ export function startStubAgent() {
         return res.end("not yet");
       }
       const data = body ? JSON.parse(body) : {};
+      // As the real agent: a folder download comes with the model's index.
+      if (req.url === "/download-repo" && !(Array.isArray(data.files) && data.files.includes("model_index.json"))) {
+        res.statusCode = 400;
+        res.setHeader("Content-Type", "application/json");
+        return res.end(JSON.stringify({ error: "Bad model name" }));
+      }
       if (["/download", "/download-addon", "/download-repo", "/download-folder"].includes(req.url)) {
         state.downloads.push(req.url === "/download" ? { repo: data.repo, file: data.file, token: data.token ?? null } : req.url === "/download-addon" ? { repo: data.repo, files: data.files, addon: true, token: data.token ?? null } : req.url === "/download-repo" ? { repo: data.repo, files: data.files, token: data.token ?? null } : { repo: data.repo, files: data.files, into: data.into, token: data.token ?? null });
         Object.defineProperty(data, "__state", { value: state, enumerable: false });

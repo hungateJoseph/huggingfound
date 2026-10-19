@@ -333,6 +333,30 @@ The machine takes two to four minutes to start. Meanwhile:
   pasted when asking for help. The memory note on load names each
   component's precision and device.
 
+## Less on the screen, and words that fit the clip (2026-10-18)
+
+- Steps: one on show at a time (the first not done); the rest wait,
+  hidden, behind "Then N more steps"; done steps shrink to a line. An
+  optional step (MiniMax-H3's reference part) is offered where it is used,
+  the clip window's "Add it", and shows in the list only while it runs.
+- Kept results: this browser tab's session (sessionStorage
+  `hfSessionStart`, kept over a reload) is on show; earlier ones fold under
+  "Earlier sessions", drawn only when opened.
+- The clip window has two tabs, Short clip and Scene. Inside a scene:
+  Claude lays out the shots, or the words go in pieces (the old long clip;
+  the only way when there is no Anthropic key). The level texts, length
+  help, avoid, queue and save lines are a few words each; the level
+  explanation waits behind "What the levels change". Strength says what it
+  is: the LoRA's scale, 1 as trained.
+- Pacing: every clip request to Claude (scene, expansion at High, Suggest,
+  continue, remake, fix) carries the clip's length and a budget of about
+  one distinct action every three seconds (`actionBudget`), since the model
+  stops when its frames run out and action written past that is never
+  made. A scene that cannot fit the events names the rest in its Note. A
+  shot shortened by hand in the preview says "Written for N s" and offers
+  Fit, which asks Claude (mode `fit`) to keep the actions that fit and name
+  the ones dropped.
+
 ## Verified on hardware, and not
 
 What has actually run on a rented machine, so the same thing is not
@@ -347,6 +371,11 @@ prompt enhancer absent, image-to-video reaching the transformer (ran out
 of memory at 121 frames on one card with everything resident, image 15);
 the disk quota error (-122) at 90 GB; the EUR-IS-4 host never starting a
 container, twice; peft missing from the image (fixed, image 19).
+The reference-part download refused with HTTP 400 on hardware (2026-10-18):
+the agent takes a folder download only with `model_index.json` in its
+list, and the step sent only `transformer_ref/*`. Fixed site-side: the
+step now sends the index too (the agent skips it, already there), and the
+stub agent enforces the same rule so the tests catch it.
 
 Not yet verified: LTX-2.5 generating a clip (image 16's staging and
 decode batching are the fix; a text-only 5 s at Low and then one from a

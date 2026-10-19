@@ -521,3 +521,31 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .kept-head { margin-top: 18px; }
 .image-card .caption { margin: 4px 0 0; overflow-wrap: anywhere; }
 .levels-note { margin: 4px 0 0; }
+
+/* One step on show at a time; done ones shrink to a line. */
+.step[hidden] { display: none; }
+.step.done:not(.running):not(.failed) { padding: 8px 14px; align-items: center; }
+.step.done:not(.running):not(.failed) .text,
+.step.done:not(.running):not(.failed) code { display: none; }
+.steps-later { padding: 2px 4px; }
+
+/* The two kinds of clip, as tabs. */
+.clip-tabs { display: grid; grid-template-columns: 1fr 1fr; margin: 4px 0 8px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.clip-tab { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 14px; cursor: pointer; background: var(--surface); color: var(--ink); border: 0; border-radius: 0; text-align: left; font: inherit; }
+.clip-tab + .clip-tab { border-left: 1px solid var(--line); }
+.clip-tab b { font-size: 15px; }
+.clip-tab span { font-size: 12.5px; color: var(--muted); font-weight: 400; }
+.clip-tab.active { background: var(--accent-soft); box-shadow: inset 0 -3px 0 var(--accent); }
+.clip-tab.active b { color: var(--accent-ink); }
+.clip-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.scene-how { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; margin: 0 0 8px; }
+.scene-how[hidden] { display: none; }
+.scene-how label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+details.levels-note summary { cursor: pointer; }
+
+/* Results from earlier sessions, folded away. */
+.kept-older { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.kept-older > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 14px; color: var(--muted); }
+.kept-older[open] > summary { border-bottom: 1px solid var(--line); }
+.kept-older-list { padding: 0 14px 10px; }
+.shot-fit { grid-column: 1 / -1; margin: 4px 0 0; }

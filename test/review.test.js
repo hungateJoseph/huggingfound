@@ -8,7 +8,7 @@ import { startStubHub } from "./stub-hub.js";
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-review-"));
 delete process.env.ANTHROPIC_API_KEY;
 delete process.env.ANTHROPIC_AUTH_TOKEN;
-const { REVIEW_MODEL, ReviewError, buildRequest, createReviewer } = await import("../src/review.js");
+const { REVIEW_MODEL, ReviewError, actionBudget, buildRequest, createReviewer } = await import("../src/review.js");
 const { createServer } = await import("../src/server.js");
 
 const outputDir = path.join(process.env.HUGGINGFOUND_HOME, "output");
@@ -271,4 +271,30 @@ test("a failure before any text is an error status; one after it ends the stream
   assert.equal(late.status, 200);
   const lines = (await late.text()).trim().split("\n").map((l) => JSON.parse(l));
   assert.deepEqual(lines, [{ text: "This is " }, { error: "The check failed: socket closed" }]);
+});
+
+test("a clip's words are paced to its length: Claude is told how long it runs and how much action fits, so no action is written past the end", () => {
+  const text = (r) => (typeof r.messages[0].content === "string" ? r.messages[0].content : r.messages[0].content.at(-1).text);
+  assert.deepEqual([1, 2, 5, 8, 10, 15].map(actionBudget), [1, 1, 2, 3, 3, 5]);
+  const scene = buildRequest({ kind: "prompt", mode: "scene", clip: true, prompt: "a man does a flip, falls, gets up and bows", seconds: 30, minSeconds: 5, maxSeconds: 15 });
+  assert.match(scene.system, /Each shot holds only what really happens in its own length/);
+  assert.match(scene.system, /never crowd a shot/);
+  assert.match(scene.system, /name the rest in the Note line/, "events that do not fit are said, not dropped unseen");
+  assert.match(text(scene), /a 5-second shot holds about 2 distinct actions and a 15-second shot about 5/);
+  const expand = buildRequest({ kind: "prompt", mode: "expand", clip: true, prompt: "a dog runs on a beach", seconds: 5 });
+  assert.match(expand.system, /Timing matters/);
+  assert.match(text(expand), /The clip runs 5 seconds: describe at most 2 distinct actions/);
+  assert.doesNotMatch(buildRequest({ kind: "prompt", mode: "expand", prompt: "a dog" }).system, /Timing matters/, "a picture has no length");
+  assert.match(text(buildRequest({ kind: "prompt", mode: "suggest", clip: true, prompt: "jumping jacks", seconds: 10 })), /runs 10 seconds: describe at most 3 distinct actions/);
+  assert.match(text(buildRequest({ kind: "prompt", mode: "continue", clip: true, prompt: "a", request: "then he sits", seconds: 5 })), /The next clip runs 5 seconds/);
+  const remake = buildRequest({ kind: "image", mode: "reply", clip: true, prompt: "a man", request: "give him a hat", seconds: 5 });
+  assert.match(remake.system, /Timing matters/);
+  assert.match(text(remake), /runs 5 seconds/);
+  assert.match(buildRequest({ kind: "prompt", mode: "fix", clip: true, request: "no hat", prompt: "p", shots: [{ index: 1, seconds: 5, text: "a" }, { index: 2, seconds: 5, text: "b" }] }).system, /A shot keeps its length/);
+  // A shot shortened by hand is fitted to its new length, and what had to go is named.
+  const fit = buildRequest({ kind: "prompt", mode: "fit", prompt: "he jumps, lands, bows and waves", fromSeconds: 9, seconds: 5 });
+  assert.match(text(fit), /written for 9 seconds; the shot is now 5 seconds/);
+  assert.match(text(fit), /The shot runs 5 seconds: describe at most 2 distinct actions/);
+  assert.match(fit.system, /Dropped: the actions left out/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "fit", prompt: "x" }), /new length/);
 });

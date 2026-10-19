@@ -144,11 +144,16 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.equal(h3.file.gb, 124, "the reference partition is not fetched with the model");
   // The reference-to-video part is a step of its own, optional, and the window knows whether it is there.
   assert.equal(h3.steps.length, 2);
-  assert.deepEqual([h3.steps[1].kind, h3.steps[1].optional, h3.steps[1].args.files, h3.steps[1].args.gb, h3.steps[1].done], ["pull-image-repo", true, ["transformer_ref/diffusion_pytorch_model.safetensors"], 62, false]);
-  assert.match(h3.steps[1].title, /^Download its reference-to-video part \(62\.0 GB\), for clips from reference pictures/);
+  assert.deepEqual([h3.steps[1].kind, h3.steps[1].optional, h3.steps[1].args.files, h3.steps[1].args.gb, h3.steps[1].done], ["pull-image-repo", true, ["model_index.json", "transformer_ref/diffusion_pytorch_model.safetensors"], 62, false]);
+  assert.match(h3.steps[1].title, /^Add clips from reference pictures \(62\.0 GB more\)/);
+  assert.ok(h3.steps[1].args.files.includes("model_index.json"), "the machine takes a folder download only with the model's index");
   assert.deepEqual([h3.tryWith.references, h3.tryWith.referenceGb], [false, 62]);
   const withRef = buildPlan({ model: mm, files: mm.files, machine: { ...machine, gpuGb: 141 }, detected: { ...gpu, gpu: { ...gpu.gpu, files: ["MiniMaxAI/MiniMax-H3/model_index.json"], folders: { "MiniMaxAI/MiniMax-H3": ["model_index.json", "modular_model_index.json", "transformer/diffusion_pytorch_model.safetensors", "text_encoder/model.safetensors", "transformer_ref/diffusion_pytorch_model.safetensors"] } } }, hasToken: false });
   assert.deepEqual([withRef.steps[0].done, withRef.steps[1].done, withRef.tryWith.references], [true, true, true]);
+  // The model on a disk with no room for the reference part: the window offers to grow it first.
+  const noRoom = buildPlan({ model: mm, files: mm.files, machine: { ...machine, gpuGb: 141 }, detected: { ...gpu, gpu: { ...gpu.gpu, rented: { diskGb: 150 }, diskUsedGb: 124, files: ["MiniMaxAI/MiniMax-H3/model_index.json"], folders: { "MiniMaxAI/MiniMax-H3": ["model_index.json", "modular_model_index.json", "transformer/diffusion_pytorch_model.safetensors", "text_encoder/model.safetensors"] } } }, hasToken: false });
+  assert.deepEqual([noRoom.steps[0].done, noRoom.tryWith.references, noRoom.tryWith.referenceGrowTo], [true, false, 210]);
+  assert.equal(withRef.tryWith.referenceGrowTo, undefined);
   assert.equal(h3.file.modular, true);
   assert.equal(h3.tierGb.toFixed(1), "86.8", "a modular pipeline wants a card with room for most of it, not a second card");
   assert.equal(h3.fit.level, "tight");
@@ -165,7 +170,7 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.deepEqual([h3.video.levels.low.width, h3.video.levels.low.steps, h3.video.levels.medium.width, h3.video.levels.medium.steps, h3.video.levels.high.width, h3.video.levels.high.steps, h3.video.levels.high.expand], [960, 20, 1344, 30, 1344, 50, true], "a draft, the full canvas, and the full canvas with more passes and the words expanded");
   assert.equal(h3.video.levels.medium.expand, undefined);
   assert.match(h3.video.avoid, /blurry, low quality/, "the family's standard avoid list");
-  assert.match(h3.video.levels.high.text, /expanded first/);
+  assert.match(h3.video.levels.high.text, /words expanded/);
   assert.deepEqual([framesFor(5, h3.video), framesFor(10, h3.video), framesFor(15, h3.video), framesFor(0, h3.video)], [124, 243, 345, 124], "the nearest counts the VAE decodes, within the machine's limit, the default for nonsense");
   assert.deepEqual([clip.video.fps, clip.video.sound, framesFor(3, clip.video), framesFor(99, clip.video), framesFor(1, clip.video)], [16, false, 49, 81, 17]);
   assert.deepEqual([clip.video.levels.low.width, clip.video.levels.medium.width, clip.video.levels.medium.steps, clip.video.levels.high.width, clip.video.levels.high.steps, clip.video.levels.high.expand], [832, 1280, 30, 1280, 50, true], "medium already draws on the full canvas; high adds passes and the expansion");
@@ -201,7 +206,7 @@ test("a diffusers family runs on a rented GPU only: the plan asks for one, then 
   assert.match(buildPlan({ model: ltxD, files: ltxD.files, machine: { ...machine, gpuGb: 80 }, detected: gpu, hasToken: true }).fit.text, /Loads at 8 bits on the server's 80 GB/);
   assert.deepEqual([gatedOk.video.fps, gatedOk.video.minSeconds, gatedOk.video.maxSeconds, gatedOk.video.defaultSeconds, gatedOk.video.frameStep, gatedOk.video.frameAdd, gatedOk.video.sound, gatedOk.video.cfg], [24, 2, 10, 5, 8, 1, true, 3]);
   assert.deepEqual([gatedOk.video.levels.low.width, gatedOk.video.levels.low.height, gatedOk.video.levels.low.steps, gatedOk.video.levels.medium.width, gatedOk.video.levels.medium.steps, gatedOk.video.levels.high.steps, gatedOk.video.levels.high.expand], [768, 512, 8, 1280, 8, 8, true]);
-  assert.match(gatedOk.video.levels.low.text, /eight-pass schedule/);
+  assert.match(gatedOk.video.levels.low.text, /fast draft, 768 by 512/);
   assert.deepEqual([gatedOk.qualities.fast.frames, gatedOk.qualities.default.frames, gatedOk.qualities.max.frames, gatedOk.qualities.default.fps], [121, 121, 241, 24]);
   for (const q of Object.values(gatedOk.qualities)) assert.equal((q.frames - 1) % 8, 0, "a frame count the video VAE decodes");
   assert.deepEqual([framesFor(5, gatedOk.video), framesFor(2, gatedOk.video), framesFor(10, gatedOk.video)], [121, 49, 241]);

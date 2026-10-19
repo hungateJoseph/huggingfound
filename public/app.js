@@ -734,7 +734,14 @@ function renderModel(model, plan, choice = null) {
   if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "Larger than a typical laptop has to spare." : "Larger than this computer has to spare; it may load slowly or not at all."}${choice && !choice.rented ? " A rented GPU holds it: pick On a rented GPU above." : choice ? " Pick On a rented GPU above." : ""}</div>`);
   const onSite = state.hosted && !plan.remote;
   if (onSite) parts.push(`<h3>How to run it</h3>`);
-  parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i)).join("")}</ol>`);
+  // One step on show at a time: the first one not done, with the done ones
+  // as a line each above it. Later steps wait until it is done, and an
+  // optional one is offered where it is used (the clip window's reference
+  // pictures), shown here only while it runs.
+  const current = plan.steps.findIndex((s) => !s.done && !s.optional);
+  const waiting = (s, i) => !s.running && (s.optional || (current >= 0 && i > current));
+  const later = plan.steps.filter((s, i) => waiting(s, i) && !s.optional).length;
+  parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i, waiting(s, i))).join("")}${later ? `<li class="steps-later muted small">Then ${later} more step${later === 1 ? "" : "s"}, shown when this one is done.</li>` : ""}</ol>`);
   queueMicrotask(() => {
     for (const [i, s] of plan.steps.entries()) if (s.running && $(`#steps .step[data-index="${i}"]`)) followStep(model, plan, i, s.running);
   });
@@ -975,8 +982,8 @@ async function loadVoices(model) {
   webBox.innerHTML = civ + prompts + gh + hn + lem + yt + red + (web.took != null ? `<p class="muted small">Outside sources answered in ${(web.took / 1000).toFixed(1)} s${web.cached ? "" : "; kept for a week"}.</p>` : `<p class="muted small">From the copy kept this week.</p>`);
 }
 
-function stepHtml(s, i) {
-  return `<li class="step ${s.done ? "done" : ""}" data-index="${i}">
+function stepHtml(s, i, hidden = false) {
+  return `<li class="step ${s.done ? "done" : ""}${s.optional ? " optional" : ""}" data-index="${i}" ${hidden ? "hidden" : ""}>
     <span class="num">${s.done ? "✓" : i + 1}</span>
     <div>
       <div class="title">${esc(s.title)}</div>
@@ -1177,6 +1184,10 @@ async function runStep(model, plan, index) {
 
   const what = step.command ? `HuggingFound will run:\n\n${step.command}\n\nContinue?` : `Run "${step.title}" now?`;
   if (!confirm(what)) return;
+  // A step offered elsewhere (the reference part, from the clip window)
+  // shows here while it runs, with its log.
+  li.hidden = false;
+  li.scrollIntoView?.({ behavior: "smooth", block: "center" });
 
   btn.disabled = true;
   btn.textContent = "Running";
@@ -2251,7 +2262,8 @@ function renderImage(box, t) {
   try {
     const k = localStorage.getItem("clipKind");
     if (canLong && k === "long") clipKind = "long";
-    if (canScene && k === "scene") clipKind = "scene";
+    if (k === "scene") clipKind = canScene ? "scene" : canLong ? "long" : "short";
+
     longSeconds = Number(localStorage.getItem(`longSeconds:${t.repo}`)) || 30;
     sceneSeconds = Number(localStorage.getItem(`sceneSeconds:${t.repo}`)) || 30;
   } catch {
@@ -2263,7 +2275,7 @@ function renderImage(box, t) {
   }
   let shortSeconds = spec?.defaultSeconds ?? 0;
   const lengthRange = (kind) => (kind === "scene" ? { min: sceneMin, max: longMax, value: sceneSeconds } : kind === "long" ? { min: spec.maxSeconds + 1, max: longMax, value: longSeconds } : { min: spec.minSeconds, max: spec.maxSeconds, value: shortSeconds });
-  const lengthHelp = (kind) => (kind === "scene" ? `${sceneMin} to ${longMax} seconds in all. Claude chooses the shots, each ${spec.minSeconds} to ${spec.maxSeconds} s, with lengths adding up to this; you see and change them before anything is sent.` : kind === "long" ? `${spec.maxSeconds + 1} to ${longMax} seconds, made as pieces of at most ${spec.maxSeconds} s, each starting where the last ended, then joined on the machine into one clip; each piece comes out at the nearest length the model's frames allow.` : `${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot at ${spec.fps} frames a second${spec.sound ? ", with sound" : ""}; the clip comes out at the nearest length the model's frames allow.`);
+  const lengthHelp = (kind) => (kind === "scene" ? `${sceneMin} to ${longMax} s in all. Claude splits it into shots of ${spec.minSeconds} to ${spec.maxSeconds} s, which you check first.` : kind === "long" ? `${spec.maxSeconds + 1} to ${longMax} s, made from your words in pieces of up to ${spec.maxSeconds} s, joined.` : `${spec.minSeconds} to ${spec.maxSeconds} s, one continuous shot${spec.sound ? " with sound" : ""}.`);
   const qualities = plan?.qualities ?? {};
   const options = Object.entries(qualities).map(([q, info]) => `<label><input type="radio" name="quality" value="${q}" ${q === saved ? "checked" : ""}> ${qualityLabel(q, info, plan.fast)}</label>`).join("");
   const remote = t.remote ? `<div class="notice info">Pictures are made by the image server at ${esc(t.remote)} with the model it has loaded. Change this in Settings.</div>` : "";
@@ -2279,22 +2291,25 @@ function renderImage(box, t) {
       ${bases.length ? `<label class="field"><span>${videoLora ? "Applied to" : "Base model on the rented GPU"}</span><select id="addon-base">${bases.map((b, i) => `<option value="${i}">${esc(b.label)}${videoLora ? " · on the rented GPU" : b.xl ? " · SDXL" : " · SD 1.5"}</option>`).join("")}</select></label>` : `<div class="notice warn">${videoLora ? `${esc(baseName)} is not on the rented GPU yet. Open ${esc(baseName)}, download it on the rented GPU, then come back here: this LoRA is applied to it.` : "No base model is on the rented GPU yet. Open a Stable Diffusion 1.5 or SDXL model from the Easy to set up list, download it on the rented GPU, then come back here."}</div>`}
       <label class="field"><span>Variant</span><select id="addon-variant">${variants.map((v, i) => `<option value="${i}">${esc(v.label)}${v.gb ? `, ${v.gb.toFixed(2)} GB` : ""}</option>`).join("")}</select>${videoLora ? "" : `<small class="muted">Pick the variant made for the base's family: SD 1.5 variants for SD 1.5 bases, SDXL for SDXL.</small>`}</label>
       ${t.addonKind === "ip-adapter" ? `<label class="field"><span>Reference picture</span><input type="file" id="addon-ref" accept="image/*"><small class="muted">${variants.some((v) => v.faceid) ? "A clear photo of the face to keep." : "The picture whose subject or style to carry over."}</small></label>` : ""}
-      <label class="field"><span>Strength <output id="addon-scale-out">${scale0}</output></span><input type="range" id="addon-scale" min="0.1" max="1.5" step="0.05" value="${scale0}"></label>
-      ${videoLora && t.triggerPrompt ? `<p class="muted small"><b>Its words.</b> This LoRA was trained with the description below, which is filled in for you; keep it, and add to it if you must.</p>` : ""}
+      <label class="field"><span>Strength <output id="addon-scale-out">${scale0}</output></span><input type="range" id="addon-scale" min="0.1" max="1.5" step="0.05" value="${scale0}"><small class="muted">${videoLora ? "How strongly the LoRA's effect is applied: 1 is as trained, lower is subtler, above 1 can distort." : "How strongly the add-on steers the result: lower is subtler, higher can distort."}</small></label>
+      ${videoLora && t.triggerPrompt ? `<p class="muted small">The words this LoRA was trained on are filled in below; add to them.</p>` : ""}
     </div>` : "";
   const save = autosaveSettings();
   const what = video ? "clip" : "picture";
   const settingsHtml = spec ? `<div class="clip-settings">
-      ${canLong ? `<div class="effort-title">Clip</div>
-      <div class="quality clip-kind" id="clip-kind">
-        <label><input type="radio" name="clipKind" value="short" ${clipKind === "short" ? "checked" : ""}> <b>Short clip</b> <span class="muted">${spec.minSeconds} to ${spec.maxSeconds} seconds in one shot: one continuous motion, as the model makes it</span></label>
-        <label><input type="radio" name="clipKind" value="long" ${clipKind === "long" ? "checked" : ""}> <b>Long clip</b> <span class="muted">${spec.maxSeconds + 1} to ${longMax} seconds, made as pieces of at most ${spec.maxSeconds} s that each start where the last ended, then joined into one; a soft seam at each join</span></label>
-        ${canScene ? `<label><input type="radio" name="clipKind" value="scene" ${clipKind === "scene" ? "checked" : ""}> <b>Scene</b> <span class="muted">a sequence of events, ${sceneMin} to ${longMax} seconds. Claude lays it out as shots, each with its own description and length, shown to change before anything is sent; the shots are made one after another, each starting where the last ended, then joined into one. The quality chosen below applies to every shot (its canvas and passes), so a scene at Low is the quick way to see the sequence; at High the shot list takes the place of the one-paragraph expansion, and nothing else changes</span></label>` : ""}
+      ${canLong ? `<div class="clip-tabs" role="tablist">
+        <button type="button" role="tab" class="clip-tab" data-kind="short"><b>Short clip</b><span>${spec.minSeconds}–${spec.maxSeconds} s, one shot</span></button>
+        <button type="button" role="tab" class="clip-tab" data-kind="scene"><b>Scene</b><span>up to ${longMax} s, joined shots</span></button>
+      </div>
+      <div class="scene-how" id="clip-kind">
+        <input type="radio" name="clipKind" value="short" ${clipKind === "short" ? "checked" : ""} hidden>
+        ${canScene ? `<label><input type="radio" name="clipKind" value="scene" ${clipKind === "scene" ? "checked" : ""}> Claude lays out the shots</label>` : ""}
+        <label ${canScene ? "" : "hidden"}><input type="radio" name="clipKind" value="long" ${clipKind === "long" ? "checked" : ""}> My words, in pieces</label>
       </div>` : ""}
       <label class="field seconds"><span>Length in seconds</span><input type="number" id="video-seconds" min="${lengthRange(clipKind).min}" max="${lengthRange(clipKind).max}" step="1" value="${lengthRange(clipKind).value}"><small class="muted" id="seconds-help">${lengthHelp(clipKind)}</small></label>
       <div class="effort-title">Quality</div>
       <div class="quality" id="video-level">${["low", "medium", "high"].map((l) => `<label><input type="radio" name="level" value="${l}" ${l === level ? "checked" : ""}> <b>${l[0].toUpperCase() + l.slice(1)}</b> <span class="muted">${esc(spec.levels[l].text)}</span></label>`).join("")}</div>
-      <p class="muted small levels-note">A pass is one round of refinement over the whole clip; past about 30, each adds little. The canvas is the size the model draws at, and none draws better above the one it was trained for. The expansion at High is where the effort of understanding goes: ${claudeAvailable() ? "Claude turns your words into the detailed shot description these models follow best, and the log shows it" : "with an Anthropic key saved, Claude turns your words into the detailed shot description these models follow best; without one, High is the passes and the avoid list"}.</p>
+      <details class="levels-note muted small"><summary>What the levels change</summary>Low draws smaller with fewer passes. Medium and High draw at the model's full size; High adds passes${claudeAvailable() ? " and has Claude expand your words first" : ""}.</details>
       <p class="muted small estimate" id="estimate"></p>
     </div>` : `<div class="effort-title">Effort</div>
     <div class="quality" id="quality">${options}</div>`;
@@ -2303,8 +2318,8 @@ function renderImage(box, t) {
     ${style}
     ${addonHtml}
     ${settingsHtml}
-    ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">${t.startPicture === "required" ? "This model animates a picture: the clip begins from it." : "With a picture the clip begins from it; without one it comes from the words alone."}</small></label>` : ""}
-    ${video && t.references === true ? `<label class="field"><span>Reference pictures (optional, up to 9)</span><input type="file" id="video-refs" accept="image/*" multiple><small class="muted">Photos of the people and things the clip is to show, several at once: the model makes the clip from them and the words. With references, the starting picture is not used.</small></label>` : video && t.references === false ? `<p class="muted small ref-note"><span>Clips from reference pictures (three people together, say) need the model's reference part on the machine, ${t.referenceGb ? `${t.referenceGb.toFixed(0)} GB` : "a second transformer"} more.</span> <button class="ghost" id="get-refs">Download it</button></p>` : ""}
+    ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">The clip begins from it.</small></label>` : ""}
+    ${video && t.references === true ? `<label class="field"><span>Reference pictures (optional, up to 9)</span><input type="file" id="video-refs" accept="image/*" multiple><small class="muted">Photos of the people and things to show. Used instead of the starting picture.</small></label>` : video && t.references === false ? `<p class="muted small ref-note"><span>Optional: clips from several photos at once need ${t.referenceGb ? `${t.referenceGb.toFixed(0)} GB` : "an extra part"} more on the machine${t.referenceGrowTo ? `, more than its disk has free` : ""}.</span> ${t.referenceGrowTo ? `<button class="ghost" id="grow-for-refs">Grow the disk to ${t.referenceGrowTo} GB</button>` : `<button class="ghost" id="get-refs">Add it</button>`}</p>` : ""}
     ${video && t.lastPicture ? `<label class="field"><span>Last picture</span><select id="video-last"><option value="same" ${t.lastPicture === "same" ? "selected" : ""}>the same picture: the clip ends where it began</option><option value="none" ${t.lastPicture === "none" ? "selected" : ""}>none: the clip ends where the model takes it</option><option value="file">another picture</option></select><input type="file" id="video-last-file" accept="image/*" hidden><small class="muted">${t.lastPicture === "same" ? "This LoRA was trained to come back to its starting frame, a full orbit; keep the same picture unless you want it to end elsewhere." : "The model can be given a frame to end on."}</small></label>` : ""}
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
@@ -2315,17 +2330,17 @@ function renderImage(box, t) {
     <label class="field avoid">
       <span>Avoid</span>
       <input type="text" id="image-negative" placeholder="anime, cartoon, drawing, blurry, extra fingers">
-      <small class="muted">Models cannot read "not" or "no" in the description; whatever you do not want goes here instead.${spec?.avoid ? " Left empty at Medium or High, the model's standard avoid list is used." : ""}</small>
+      <small class="muted">Models can't read "no" in the description, so list unwanted things here.</small>
     </label>
     ${t.agent ? `<div class="queue" id="queue" hidden>
-      <p class="muted small"><b>Queue.</b> These start by themselves, one after another on the rented GPU, as soon as it is free of the request under way: no click, so a list left here keeps the machine working. Each is kept here and saved to this computer as it finishes. Tick the box below and the machine stops when the last one is made.</p>
+      <p class="muted small"><b>Queue.</b> Runs one after another by itself; each result is kept here.</p>
       <ol id="queue-list"></ol>
       <p class="tools-row"><button class="primary" id="queue-go" hidden>Start all</button><button class="ghost" id="queue-clear">Clear the queue</button></p>
       <p class="muted small" id="queue-estimate"></p>
     </div>
     <label class="check queue-hold" title="Held, requests added to the queue wait there until Start all; otherwise each starts as soon as the machine is free"><input type="checkbox" id="queue-hold" ${queueHeld() ? "checked" : ""}> Hold the queue: collect requests and start them by hand</label>` : ""}
     ${loaded}
-    ${t.agent ? `<label class="check autosave" title="Finished results are kept in this browser whatever happens; this also saves each one to your computer as it comes, so a finished clip is never lost to a stopped machine or a closed page"><input type="checkbox" id="autosave" ${save.on ? "checked" : ""}> Save each finished ${what} to this computer as it comes, up to <input type="number" id="autosave-mb" min="1" max="5000" step="1" value="${save.maxMb}"> MB <small class="muted">(the browser may ask once to allow several downloads)</small></label>` : ""}
+    ${t.agent ? `<label class="check autosave" title="Finished results are kept in this browser whatever happens; this also saves each one to your computer as it comes, so a finished clip is never lost to a stopped machine or a closed page"><input type="checkbox" id="autosave" ${save.on ? "checked" : ""}> Also save each ${what} to this computer, up to <input type="number" id="autosave-mb" min="1" max="5000" step="1" value="${save.maxMb}"> MB</label>` : ""}
     ${t.agent ? `<label class="check stop-after" title="The machine stops once everything asked for here is made or has failed; its models stay on its disk and Start brings it back"><input type="checkbox" id="image-stop-after"> Stop the rented GPU when everything asked for here is made${state.rental?.costPerHour ? ` (${money(state.rental.costPerHour)} an hour)` : ""}</label>` : ""}
     <div class="status-line muted small" id="image-status" hidden></div>
     <pre class="log" id="image-log" data-repo="${esc(t.repo)}" hidden></pre>
@@ -2365,7 +2380,8 @@ function renderImage(box, t) {
         image = null;
       }
     }
-    const got = await claudeText({ kind: "prompt", mode: "suggest", clip: video, model: t.repo, prompt: typed, negative: $("#image-negative").value.trim(), ...(image ? { image } : {}) });
+    const now = video && spec ? chosen() : null;
+    const got = await claudeText({ kind: "prompt", mode: "suggest", clip: video, model: t.repo, prompt: typed, negative: $("#image-negative").value.trim(), ...(now && now.kind !== "scene" && now.q?.frames ? { seconds: clipSeconds(now.q) } : {}), ...(image ? { image } : {}) });
     btn.disabled = false;
     const description = /^Description:\s*(.+)$/m.exec(got.text)?.[1]?.trim();
     if (!got.text || !description) {
@@ -2479,9 +2495,56 @@ function renderImage(box, t) {
     sec.max = String(range.max);
     sec.value = String(range.value);
     box.querySelector("#seconds-help").textContent = lengthHelp(r.value);
+    placeholderFor(r.value);
+    syncTabs();
     showKindButtons();
     refreshEstimate();
   });
+  // The two tabs choose between a short clip and a scene; inside the
+  // scene, Claude's shots or the words as typed in pieces, as last chosen.
+  function syncTabs() {
+    const kind = box.querySelector("input[name=clipKind]:checked")?.value ?? "short";
+    for (const tab of box.querySelectorAll(".clip-tab")) {
+      const on = (tab.dataset.kind === "short") === (kind === "short");
+      tab.classList.toggle("active", on);
+      tab.setAttribute("aria-selected", String(on));
+    }
+    const how = box.querySelector(".scene-how");
+    if (how) how.hidden = kind === "short" || !canScene;
+  }
+  for (const tab of box.querySelectorAll(".clip-tab")) tab.addEventListener("click", () => {
+    const kind = box.querySelector("input[name=clipKind]:checked")?.value ?? "short";
+    if ((tab.dataset.kind === "short") === (kind === "short")) return;
+    let next = "short";
+    if (tab.dataset.kind === "scene") {
+      let last = null;
+      try {
+        last = localStorage.getItem("sceneHow");
+      } catch {
+        // no storage
+      }
+      next = canScene && last !== "long" ? "scene" : "long";
+    }
+    const radio = box.querySelector(`input[name=clipKind][value=${next}]`);
+    if (!radio) return;
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change"));
+  });
+  for (const r of box.querySelectorAll(".scene-how input[name=clipKind]")) r.addEventListener("change", () => {
+    if (r.value === "short") return;
+    try {
+      localStorage.setItem("sceneHow", r.value);
+    } catch {
+      // no storage
+    }
+  });
+  if (canLong) syncTabs();
+  // Each tab asks for its own kind of words.
+  function placeholderFor(kind) {
+    const input = box.querySelector("#image-prompt");
+    if (input) input.placeholder = kind === "short" ? "Describe one moment, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe what happens, in order, for example: she walks to the window, opens it, then turns and smiles";
+  }
+  if (canLong) placeholderFor(clipKind);
   // A scene goes by way of the preview: Generate and Add to queue make
   // way for it, and come back for the other kinds.
   function showKindButtons() {
@@ -2583,6 +2646,23 @@ function renderImage(box, t) {
     const typed = $("#image-negative").value.trim();
     return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, pieces: c.pieces ?? 1, each: c.eachText ?? c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null, refFiles: [...(box.querySelector("#video-refs")?.files ?? [])].slice(0, 9), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, ...(c.kind === "scene" ? { scene: true, sceneSeconds: c.asked, shots: null } : {}) };
   };
+  // Room first: the disk grows (its models stay), then the part can be added.
+  box.querySelector("#grow-for-refs")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Growing the disk";
+    try {
+      state.rental = await api.post("/api/rent/grow", { diskGb: t.referenceGrowTo });
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = `Grow the disk to ${t.referenceGrowTo} GB`;
+      notice(`Could not grow the disk: ${err.message}`, "bad");
+      return;
+    }
+    notice(`The disk is now ${t.referenceGrowTo} GB, and its models stay. Add the reference part when the machine is back.`, "ok");
+    await load();
+    openModel(t.repo);
+  });
   box.querySelector("#get-refs")?.addEventListener("click", () => runStep({ id: t.repo, name: t.repo.split("/").pop() }, state.plan, Math.max(0, (state.plan?.steps ?? []).findIndex((s) => s.optional))));
   // The queue: several requests, run one after another by one click. It is
   // kept in this browser under the model, so leaving the window or the page
@@ -2701,7 +2781,7 @@ function renderImage(box, t) {
     if (!item.expand || item.expanded || !claudeAvailable() || !el) return [];
     el.hidden = false;
     el.innerHTML = `<p class="muted small">Claude is expanding the description for High quality; it shows here first, to change before it is sent.</p>`;
-    const got = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo));
+    const got = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo), clipSeconds(item.q));
     if (!got.text) {
       el.hidden = true;
       item.expand = false;
@@ -2815,14 +2895,57 @@ function renderImage(box, t) {
         const lv = spec.levels[level] ?? spec.levels.medium;
         el.querySelector("#shots-total").textContent = shots.length ? `${shots.length} shot${shots.length === 1 ? "" : "s"}, ${secs.toFixed(1)} s in all at ${level} quality (${lv.width} by ${lv.height}, ${lv.steps} passes each), about ${shortDuration(est)}${price ? ` and ${money((price * est) / 3600)} of machine time` : ""}. A lower quality above makes every shot quicker.` : "No shots: add one, or send your words as one long clip.";
       };
+      // A shot made shorter than Claude wrote it for would lose the end of
+      // its action, so the row says so and Claude can fit it to the new length.
+      const fitHint = (li) => {
+        const written = Number(li.dataset.written) || 0;
+        const now = Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds));
+        let hint = li.querySelector(".shot-fit");
+        if (!(written && now < written - 0.5)) {
+          hint?.remove();
+          return;
+        }
+        if (!hint) {
+          hint = document.createElement("p");
+          hint.className = "shot-fit muted small";
+          li.append(hint);
+        }
+        hint.innerHTML = `Written for ${written} s; at ${now} s the end may be cut. ${claudeAvailable() ? `<button class="ghost shot-fit-go">Fit to ${now} s</button>` : "Shorten the action to match."}`;
+        hint.querySelector(".shot-fit-go")?.addEventListener("click", async (ev) => {
+          const b = ev.currentTarget;
+          b.disabled = true;
+          b.textContent = "Fitting";
+          const got = await claudeText({ kind: "prompt", mode: "fit", clip: true, model: t.repo, prompt: li.querySelector(".shot-text").value.trim(), fromSeconds: written, seconds: now });
+          const description = (/^Description:\s*(.+)$/m.exec(got.text ?? "")?.[1] ?? "").trim();
+          if (!description) {
+            hint.textContent = `Could not fit it: ${got.why || "Claude wrote no Description line"}.`;
+            return;
+          }
+          const dropped = (/^Dropped:\s*(.+)$/m.exec(got.text)?.[1] ?? "").trim();
+          li.querySelector(".shot-text").value = description;
+          li.dataset.written = String(now);
+          hint.remove();
+          if (dropped && !/^(nothing|none|-)\.?$/i.test(dropped)) {
+            const note = document.createElement("p");
+            note.className = "shot-fit muted small";
+            note.textContent = `Left out to fit: ${dropped}. Add a shot for it if you want it.`;
+            li.append(note);
+          }
+          total();
+        });
+      };
       const addRow = (shot) => {
         const li = document.createElement("li");
+        if (shot.text) li.dataset.written = String(Math.min(spec.maxSeconds, Math.max(spec.minSeconds, shot.seconds)));
         li.innerHTML = `<label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><textarea class="shot-text" rows="2">${esc(shot.text)}</textarea><button class="ghost shot-remove" title="Remove this shot">Remove</button>`;
         li.querySelector(".shot-remove").addEventListener("click", () => {
           li.remove();
           total();
         });
-        li.querySelector(".shot-seconds").addEventListener("input", total);
+        li.querySelector(".shot-seconds").addEventListener("input", () => {
+          total();
+          fitHint(li);
+        });
         li.querySelector(".shot-text").addEventListener("input", total);
         list.append(li);
       };
@@ -3090,7 +3213,7 @@ function renderImage(box, t) {
     item.notes = [];
     if (item.expand && !item.replyTo && !item.expanded && claudeAvailable()) {
       say("Claude is expanding the description");
-      const expanded = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo));
+      const expanded = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo), clipSeconds(item.q));
       if (expanded.text) {
         item.expanded = expanded.text;
         say(`Expanded: "${expanded.text}"`);
@@ -3504,8 +3627,13 @@ async function renderKept(box, repo, shownIds = new Set(), onReply = null) {
     return;
   }
   const total = list.reduce((a, e) => a + (e.bytes || 0), 0);
-  el.innerHTML = `<div class="kept-head"><b>Kept here</b> <span class="muted small">${list.length} ${list.length === 1 ? "result" : "results"} made with this model, ${mbText(total)} in this browser. They stay until removed, whatever the machine does.</span></div>`;
-  for (const e of list) {
+  // This session's results are on show; earlier ones wait under a bar,
+  // drawn only when it is opened.
+  const since = sessionStart();
+  const recent = list.filter((e) => e.madeAt >= since);
+  const older = list.filter((e) => !(e.madeAt >= since));
+  el.innerHTML = `<div class="kept-head"><b>Kept here</b> <span class="muted small">${list.length} ${list.length === 1 ? "result" : "results"} made with this model, ${mbText(total)} in this browser, until removed.</span></div>`;
+  const card = (e) => {
     const url = URL.createObjectURL(e.blob);
     const name = `${e.kind === "video" ? "clip" : "image"}-${e.id}.${e.kind === "video" ? "mp4" : "png"}`;
     const card = document.createElement("div");
@@ -3519,9 +3647,37 @@ async function renderKept(box, repo, shownIds = new Set(), onReply = null) {
       renderKept(box, repo, shownIds, onReply);
     });
     addReply(card, e, onReply);
-    el.appendChild(card);
+    return card;
+  };
+  for (const e of recent) el.appendChild(card(e));
+  if (!older.length) return;
+  const fold = document.createElement("details");
+  fold.className = "kept-older";
+  const olderMb = older.reduce((a, e) => a + (e.bytes || 0), 0);
+  fold.innerHTML = `<summary>Earlier sessions · ${older.length} ${older.length === 1 ? "result" : "results"}, ${mbText(olderMb)}</summary><div class="kept-older-list"></div>`;
+  fold.addEventListener("toggle", () => {
+    const into = fold.querySelector(".kept-older-list");
+    if (fold.open && !into.childElementCount) for (const e of older) into.appendChild(card(e));
+  });
+  el.appendChild(fold);
+}
+
+// When this browser tab's session began: results made since are on show,
+// earlier ones are folded away. A reload keeps the session; a new tab or
+// window starts one.
+function sessionStart() {
+  try {
+    let v = Number(sessionStorage.getItem("hfSessionStart"));
+    if (!v) {
+      v = Date.now();
+      sessionStorage.setItem("hfSessionStart", String(v));
+    }
+    return v;
+  } catch {
+    return (sessionStart.fallback ??= Date.now());
   }
 }
+sessionStart();
 
 // A picture with its tools: download, Claude's check, and Improve, which
 // hands it to Claude or to an image model that paints over it. An edited
@@ -5012,8 +5168,11 @@ function parseShots(text) {
   return { shots, note };
 }
 
-async function expandWords(prompt, clip, model, negative, image = null) {
-  const got = await claudeText({ kind: "prompt", mode: "expand", clip, model, prompt, negative, ...(image ? { image } : {}) });
+// A clip's length in seconds from its settings, for Claude to write only
+// as much action as the clip has time for.
+const clipSeconds = (q) => (q?.frames && q?.fps ? Math.round((q.frames / q.fps) * 10) / 10 : null);
+async function expandWords(prompt, clip, model, negative, image = null, seconds = null) {
+  const got = await claudeText({ kind: "prompt", mode: "expand", clip, model, prompt, negative, ...(clip && seconds ? { seconds } : {}), ...(image ? { image } : {}) });
   if (got.text && got.text.length <= prompt.length) return { text: "", why: "Claude's description was no longer than yours" };
   return got;
 }
@@ -5107,7 +5266,7 @@ async function continueWords(entry, text, model) {
   const local = { prompt: nextWords(text), by: "words" };
   if (!claudeAvailable()) return local;
   const image = await startingPictureFor({ startFrom: entry.id }, entry.model);
-  const got = await claudeText({ kind: "prompt", mode: "continue", clip: true, model, prompt: entry.prompt, request: text, ...(image ? { image } : {}) });
+  const got = await claudeText({ kind: "prompt", mode: "continue", clip: true, model, prompt: entry.prompt, request: text, ...(clipSeconds(entry.q) ? { seconds: clipSeconds(entry.q) } : {}), ...(image ? { image } : {}) });
   return got.text ? { prompt: got.text, by: "Claude" } : { ...local, why: got.why };
 }
 function nextWords(text) {
@@ -5134,7 +5293,7 @@ async function reviseFor(entry, text, model) {
   } catch {
     picture = null;
   }
-  const got = await claudeText({ kind: "image", mode: "reply", clip: entry.kind === "video", model, request: text, prompt: entry.prompt, negative: entry.negative, ...(picture ? { image: picture } : {}) });
+  const got = await claudeText({ kind: "image", mode: "reply", clip: entry.kind === "video", model, request: text, prompt: entry.prompt, negative: entry.negative, ...(entry.kind === "video" && clipSeconds(entry.q) ? { seconds: clipSeconds(entry.q) } : {}), ...(picture ? { image: picture } : {}) });
   if (!got.text) return { ...local, why: got.why };
   const description = /^Description:\s*(.+)$/m.exec(got.text)?.[1]?.trim();
   if (!description) return { ...local, why: "Claude wrote no Description line" };

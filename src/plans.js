@@ -453,7 +453,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const levelText = LEVEL_TEXT;
   // LTX-2.5's distilled transformer runs a fixed schedule of eight passes
   // whatever is asked, so its levels differ by canvas and by the expansion.
-  const ltxText = { low: "a draft: 768 by 512, the model's eight-pass schedule", medium: "the model's 720p canvas (1280 by 704), eight passes, its standard avoid list", high: "720p, the avoid list, and your words expanded first into a detailed shot description" };
+  const ltxText = { low: "fast draft, 768 by 512", medium: "720p", high: "720p, words expanded" };
   const videoSpec = video ? (ltx
     ? { fps: 24, minSeconds: 2, maxSeconds: 10, defaultSeconds: 5, frameStep: 8, frameAdd: 1, sound: true, cfg, heavy: heavyFactor(repo.gb), avoid: VIDEO_AVOID, levels: { low: { steps: 8, width: 768, height: 512, text: ltxText.low }, medium: { steps: 8, width: 1280, height: 704, text: ltxText.medium }, high: { steps: 8, width: 1280, height: 704, expand: true, text: ltxText.high } } }
     : minimax
@@ -490,14 +490,16 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   // a step of its own, for clips made from reference pictures of the
   // people and things to show; the model works without it.
   const referenceDone = repo.reference ? Boolean(have) && repo.reference.files.every((f) => have.includes(f.from)) : null;
+  // Room for it, said where it is offered: the model stays usable without it.
+  const referenceRoom = repo.reference && !referenceDone && done ? diskRoom(detected.gpu, model, repo.reference.gb) : null;
   if (repo.reference) {
-    // Room for it, said on the step itself: the model stays usable without it.
-    const referenceRoom = !referenceDone && done ? diskRoom(detected.gpu, model, repo.reference.gb) : null;
     steps.push({
       kind: "pull-image-repo",
-      args: { repo: model.id, files: repo.reference.files.map((f) => f.from), gb: repo.reference.gb || 0 },
-      title: `Download its reference-to-video part (${repo.reference.gb.toFixed(1)} GB), for clips from reference pictures`,
-      text: `Optional. With this part on the machine, the window takes up to nine reference pictures of the people and things a clip is to show, and the model makes the clip from them and the words rather than from a starting frame. The machine loads one part or the other as a request needs, a few minutes each way.${referenceRoom ? ` The disk has no room for it yet: grow it to ${referenceRoom.growTo} GB first (from this window, once the model's own download is done, or from Settings).` : ""}`,
+      // The model's index goes with it: the machine takes a folder download
+      // only with its index, and skips the one already there.
+      args: { repo: model.id, files: ["model_index.json", ...repo.reference.files.map((f) => f.from)], gb: repo.reference.gb || 0 },
+      title: `Add clips from reference pictures (${repo.reference.gb.toFixed(1)} GB more)`,
+      text: "Optional. Make a clip from up to nine photos of the people and things in it. Switching between this and ordinary clips reloads the model, a few minutes.",
       ...(referenceRoom ? { growTo: referenceRoom.growTo } : {}),
       done: referenceDone,
       optional: true,
@@ -507,7 +509,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const speed = { text: video ? "A short clip takes a few minutes on a data-centre card; the first one longer while the model loads." : "A picture takes some seconds to a minute on a data-centre card; the first one longer while the model loads.", seconds: null };
   // An image-to-video model animates a picture; a text-to-video one may take one as well.
   const startPicture = video ? (/image-to-video/.test(model.pipeline ?? "") && !(model.tags ?? []).includes("text-to-video") ? "required" : "optional") : null;
-  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, modular, ltx), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}), ...(repo.reference ? { references: referenceDone, referenceGb: repo.reference.gb } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
+  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, modular, ltx), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}), ...(repo.reference ? { references: referenceDone, referenceGb: repo.reference.gb, ...(referenceRoom ? { referenceGrowTo: referenceRoom.growTo } : {}) } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
 }
 
 // How a folder model sits on the rented machine's card or cards: whole,
@@ -530,7 +532,7 @@ export function diffusersFit(gb, machine, modular = false) {
   return { level: "no", text: `Too big for ${where} even at 4 bits (${gb.toFixed(1)} GB); it would stream from the machine's memory, very slowly, or needs a bigger size` };
 }
 
-const LEVEL_TEXT = { low: "a draft: a small canvas, 20 passes", medium: "the model's full canvas, 30 passes, its standard avoid list", high: "the full canvas, 50 passes, the avoid list, and your words expanded first into a detailed shot description" };
+const LEVEL_TEXT = { low: "fast draft, smaller", medium: "full size", high: "full size, more passes, words expanded" };
 // MiniMax-H3 makes clips with sound of 5 to 15 seconds at 24 fps, in
 // frame counts of 17n + 5 on a canvas of multiples of 32 with a 768
 // short edge; smaller canvases are its biggest speed lever.

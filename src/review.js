@@ -9,6 +9,25 @@ import path from "node:path";
 
 export const REVIEW_MODEL = "claude-opus-5";
 
+// How much can happen in a clip of a given length. A video model plays the
+// words out in real time and stops when the clip's frames run out, so an
+// action written past the clip's length is never made: eight seconds of
+// events in a five-second clip loses its last three. About one distinct
+// action every three seconds of clip, at a natural pace.
+export function actionBudget(seconds) {
+  const s = Number(seconds);
+  return s > 0 ? Math.max(1, Math.round(s / 3)) : null;
+}
+const PACING = `
+
+Timing matters. The model plays the description out in real time and stops when the clip's length runs out, so whatever is written past that length is never shown. Describe only what really happens in the time given, at a natural pace: about one distinct action every three seconds, so a 5-second clip holds one action or two quick ones, 10 seconds about three, 15 seconds four or five. Spend the other words on how the action looks, the subject, the setting, the light and the camera, never on more events.`;
+// The clip's length and what fits in it, said in the request itself.
+function lengthLine(seconds, what = "The clip") {
+  const n = actionBudget(seconds);
+  if (!n) return "";
+  return `${what} runs ${Number(seconds).toFixed(Number(seconds) % 1 ? 1 : 0)} seconds: describe at most ${n} distinct action${n === 1 ? "" : "s"}, at a natural pace, all over within those seconds.`;
+}
+
 // Images go to the API as base64; this is the limit for one image.
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MEDIA_TYPES = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
@@ -59,6 +78,7 @@ Description: the full new description, every important element of the old one in
 Avoid: what the model must not show, comma-separated, or the word nothing
 
 Then one plain sentence on what this remake can and cannot achieve. Plain text only; no markdown.`;
+const EDIT_CLIP_PACED = EDIT_CLIP_SYSTEM.replace("\n\nReply with exactly", `${PACING}\n\nReply with exactly`);
 
 // A long clip was made as shots, each from the last frame of the one
 // before, then joined; the person says what went wrong. Only the shots
@@ -67,7 +87,7 @@ Then one plain sentence on what this remake can and cannot achieve. Plain text o
 // a reason to make the whole clip over.
 const FIX_SYSTEM = `You help people fix long video clips made by open-source video models they run on rented GPUs. Such a clip is made as shots, one after another, each shot by the model in one go from its own description and the last frame of the shot before, then the shots are joined. The person shows you the shot list the clip was made from and says what is wrong with the result: often the model left out something the words asked for, or got a detail wrong. Only the shots that need it will be made again, from revised words with the same random seed, so the scene stays close wherever the words stay the same; the other shots are kept as they are. The model reads short, plain, literal description, not instructions, "no" or "not"; what it left out is best said again early in the description, concretely, and once more where it matters.
 
-Work out which shots the complaint touches. A missing or wrong thing in one shot touches that shot alone; a missing or wrong thing about a person, an object or the setting that is in frame through later shots touches every shot from the first wrong one on. When a later shot is made again, it starts from the new last frame of the shot before, so the fix carries through.
+Work out which shots the complaint touches. A missing or wrong thing in one shot touches that shot alone; a missing or wrong thing about a person, an object or the setting that is in frame through later shots touches every shot from the first wrong one on. When a later shot is made again, it starts from the new last frame of the shot before, so the fix carries through. A shot keeps its length, so its revised description holds only as much action as that length allows at a natural pace, about one distinct action every three seconds: the model stops when the length runs out, and action written past it is never made.
 
 Reply with exactly these lines and nothing else:
 
@@ -83,12 +103,14 @@ Plain text only; no markdown.`;
 const EXPAND_SYSTEM = `You write descriptions for open-source image and video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos, illustrations. The person gives a short description. Everyday actions and scenes are described plainly and literally as they would be in a shooting script: someone taking off a jacket, changing shoes, swimming, dancing, arguing, cooking. Expand it into the detailed description such a model does best with: the subject and what it does, the setting, the light, the colours and the mood, the camera (the framing, and for a clip its movement and pace), the style and the medium. Keep every element the person named and add nothing that changes what they asked for; where they left something open, choose what fits. Such models read plain descriptive prose, not instructions, "no" or "not".
 
 Reply with only the description: 60 to 120 words in one paragraph of plain text, no heading, no list, no quotation marks, no comment.`;
+const EXPAND_CLIP_SYSTEM = EXPAND_SYSTEM.replace("\n\nReply with only", `${PACING}\n\nReply with only`);
 
 // A clip continued: the next shot starts from the last frame of the one
 // before, so its description is what happens next, with the scene kept.
 const CONTINUE_SYSTEM = `You write descriptions for open-source video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos. Everyday actions are described plainly and literally, as in a shooting script. A clip was made from a description; the person says what happens next. The next clip will be made by the same model starting from the last frame of the first, so the scene, the people and the light are already there in the picture; the new description has to say what moves and what happens from that frame on, with the same subjects, setting and style, and nothing that contradicts the frame. Such models read plain descriptive prose, not instructions, "no" or "not".
 
 Reply with only the description of the next clip: 40 to 90 words in one paragraph of plain text, no heading, no list, no quotation marks, no comment.`;
+const CONTINUE_PACED = CONTINUE_SYSTEM.replace("\n\nReply with only", `${PACING}\n\nReply with only`);
 
 // A better description for what the person wants, before anything is made:
 // literal, concrete, in the phrasing these models follow, with the
@@ -110,14 +132,26 @@ Plain text only; no markdown.`;
 // go from the last frame of the shot before, with its own description and
 // length, so a sequence of events happens in order instead of the same
 // words going to every piece.
-const SCENE_SYSTEM = `You write shot lists for open-source video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos, fitness and fashion clips. Everyday actions and scenes are described plainly and literally, as in a shooting script: someone taking off a jacket or a sweater, changing shoes, warming up in gym clothes, swimming, dancing, arguing, cooking. The person describes a sequence of events longer than the model makes in one go. Lay it out as shots. Each shot is made separately by the same model, starting from the last frame of the shot before, so: cut at moments of rest, never in the middle of a movement (a jump, a turn, a fall); every shot's description stands on its own and repeats the subject, their clothes, the setting and the light in the same words, since the model making it sees only that text and one still frame; anyone who is to appear later is already in frame in the shot before; the camera is still unless a movement is asked for. Use as few shots as the events allow, each within the length range given, with the lengths adding up to the total asked for, give or take a second. Keep every element the person named and add nothing that changes what they asked for. Such models read plain descriptive prose, not instructions, "no" or "not".
+const SCENE_SYSTEM = `You write shot lists for open-source video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos, fitness and fashion clips. Everyday actions and scenes are described plainly and literally, as in a shooting script: someone taking off a jacket or a sweater, changing shoes, warming up in gym clothes, swimming, dancing, arguing, cooking. The person describes a sequence of events longer than the model makes in one go. Lay it out as shots. Each shot is made separately by the same model, starting from the last frame of the shot before, so: cut at moments of rest, never in the middle of a movement (a jump, a turn, a fall); every shot's description stands on its own and repeats the subject, their clothes, the setting and the light in the same words, since the model making it sees only that text and one still frame; anyone who is to appear later is already in frame in the shot before; the camera is still unless a movement is asked for. Each shot holds only what really happens in its own length, at a natural real-time pace: about one distinct action every three seconds of shot, so a 5-second shot holds one action or two quick ones, a 10-second shot about three. The model stops when a shot's length runs out, so action written past it is never made. When the events need more time, give them another shot or a longer one within the range; never crowd a shot. Use as few shots as the events allow at that pace, each within the length range given, with the lengths adding up to the total asked for, give or take a second. If the events cannot all happen at a natural pace in the total, lay out the ones that fit, in order, and name the rest in the Note line with the length they would need. Keep every element the person named and add nothing that changes what they asked for. Such models read plain descriptive prose, not instructions, "no" or "not".
 
 Reply with only the shots, one per line, each in this form and nothing else:
 
-Shot 1 (8 s): the description, 30 to 80 words, one paragraph
+Shot 1 (8 s): the description, 30 to 80 words, one paragraph, with only as much action as 8 seconds hold
 Shot 2 (7 s): the next description
 
 If some part cannot be laid out, lay out the rest as shots all the same and add one last line starting with "Note:" saying in a few words what was left out. Plain text only; no heading, no markdown, no other comment.`;
+
+// A shot made shorter by hand: its description is fitted to the new length,
+// keeping the look in the same words and the actions that fit, in order,
+// and saying what had to go, so nothing is dropped unseen.
+const FIT_SYSTEM = `You fit shot descriptions for open-source video models to a new length. The person made a shot shorter than its description was written for. Keep the subject, their clothes, the setting, the light, the style and the camera in the same words. Keep the actions in order from the start, as many as fit in the new length at a natural pace, and leave out the rest; never squeeze more in by speeding them up.${PACING.replace("\n\n", " ")}
+
+Reply with exactly these lines, each starting with the word shown:
+
+Description: the fitted description, one paragraph
+Dropped: the actions left out, in a few words, or the word nothing
+
+Plain text only; no markdown.`;
 
 // With a starting picture, the words must defer to it: the person, the
 // clothes, the place and the light are already decided, and a description
@@ -205,11 +239,11 @@ export function buildRequest(input, { outputDir } = {}) {
     const negative = String(input.negative ?? "").trim();
     const focus = String(input.focus ?? "").trim();
     const thing = clip ? "clip" : "picture";
-    const ask = clip ? `I want this changed about the clip:\n\n<change>\n${request}\n</change>\n\nWrite the Description and Avoid lines for the remake.` : editing ? `I want this changed about the picture:\n\n<change>\n${request}\n</change>\n\nWrite the Description, Avoid and Keep lines for the image-to-image pass.` : `How well does the picture match, what is wrong with it, and what should I ask for instead?${focus ? ` Pay particular attention to: ${focus}` : ""}`;
+    const ask = clip ? `I want this changed about the clip:\n\n<change>\n${request}\n</change>\n\n${lengthLine(input.seconds) ? `${lengthLine(input.seconds)}\n\n` : ""}Write the Description and Avoid lines for the remake.` : editing ? `I want this changed about the picture:\n\n<change>\n${request}\n</change>\n\nWrite the Description, Avoid and Keep lines for the image-to-image pass.` : `How well does the picture match, what is wrong with it, and what should I ask for instead?${focus ? ` Pay particular attention to: ${focus}` : ""}`;
     const text = [`${from[0].toUpperCase()}${from.slice(1)} made this ${thing} from my description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, negative ? `I asked it to avoid:\n\n<avoid>\n${negative}\n</avoid>` : "I gave it nothing to avoid.", ...(pictureless && !clip ? ["The picture itself is not at hand; go by the description."] : []), ask].join("\n\n");
     return {
       ...base,
-      system: clip ? EDIT_CLIP_SYSTEM : editing ? EDIT_IMAGE_SYSTEM : IMAGE_SYSTEM,
+      system: clip ? EDIT_CLIP_PACED : editing ? EDIT_IMAGE_SYSTEM : IMAGE_SYSTEM,
       messages: [{ role: "user", content: bytes ? [{ type: "image", source: { type: "base64", media_type: mediaType, data: bytes.toString("base64") } }, { type: "text", text }] : text }],
     };
   }
@@ -221,17 +255,19 @@ export function buildRequest(input, { outputDir } = {}) {
     const parts = [`I want a ${thing} from ${input.model ? `${input.model}` : "an open-source model"}. I typed:`, `<description>\n${prompt}\n</description>`, negative ? `I asked it to avoid: ${negative}.` : "I gave it nothing to avoid."];
     const picture = pictureOf(input);
     if (picture) parts.push(`The ${thing} starts from the picture shown: the person, clothes, place and light are to stay as they are in it, and the avoid list should name a different person, a changed face, changed clothes and a changed background.`);
+    if (input.clip && lengthLine(input.seconds)) parts.push(lengthLine(input.seconds));
     parts.push("Write the Description, Avoid and Why lines.");
     const text = parts.join("\n\n");
-    return { ...base, max_tokens: 4000, system: picture ? SUGGEST_SYSTEM + WITH_PICTURE : SUGGEST_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
+    const suggestSystem = input.clip ? SUGGEST_SYSTEM.replace("\n\nReply with exactly", `${PACING}\n\nReply with exactly`) : SUGGEST_SYSTEM;
+    return { ...base, max_tokens: 4000, system: picture ? suggestSystem + WITH_PICTURE : suggestSystem, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   if (input.kind === "prompt" && input.mode === "continue") {
     const prompt = String(input.prompt ?? "").trim();
     if (!request) throw new ReviewError("Say what happens next.");
     const picture = pictureOf(input);
-    const parts = [`The clip was made${input.model ? ` by ${input.model}` : ""} from this description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, `What happens next:`, `<next>\n${request}\n</next>`, ...(picture ? ["The next clip starts from the frame shown: the person, clothes, place and light in it are to be kept."] : []), "Reply with only the description of the next clip."];
+    const parts = [`The clip was made${input.model ? ` by ${input.model}` : ""} from this description:`, `<description>\n${prompt || "(the description was not kept)"}\n</description>`, `What happens next:`, `<next>\n${request}\n</next>`, ...(picture ? ["The next clip starts from the frame shown: the person, clothes, place and light in it are to be kept."] : []), ...(lengthLine(input.seconds, "The next clip") ? [lengthLine(input.seconds, "The next clip")] : []), "Reply with only the description of the next clip."];
     const text = parts.join("\n\n");
-    return { ...base, max_tokens: 4000, system: picture ? CONTINUE_SYSTEM + WITH_PICTURE : CONTINUE_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
+    return { ...base, max_tokens: 4000, system: picture ? CONTINUE_PACED + WITH_PICTURE : CONTINUE_PACED, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   if (input.kind === "prompt" && input.mode === "scene") {
     const prompt = String(input.prompt ?? "").trim();
@@ -242,7 +278,7 @@ export function buildRequest(input, { outputDir } = {}) {
     if (!(total > 0 && min > 0 && max >= min)) throw new ReviewError("The scene needs a length and the model's shot range.");
     const negative = String(input.negative ?? "").trim();
     const picture = pictureOf(input);
-    const parts = [`Lay out this scene as shots for a video model${input.model ? ` (${input.model})` : ""}. The model makes ${min} to ${max} seconds in one go; the whole scene should run about ${total} seconds.`, `<scene>\n${prompt}\n</scene>`];
+    const parts = [`Lay out this scene as shots for a video model${input.model ? ` (${input.model})` : ""}. The model makes ${min} to ${max} seconds in one go; the whole scene should run about ${total} seconds.`, `<scene>\n${prompt}\n</scene>`, `At a natural pace a ${min}-second shot holds about ${actionBudget(min)} distinct action${actionBudget(min) === 1 ? "" : "s"} and a ${max}-second shot about ${actionBudget(max)}; give each shot a length its action needs.`];
     if (negative) parts.push(`It is asked to avoid: ${negative}. Leave those out of the descriptions.`);
     if (picture) parts.push("The first shot starts from the picture shown: the person, clothes, place and light in it are to be kept through every shot, and each description should say so.");
     // The picture is at hand but not shown: it is described to the writer
@@ -261,6 +297,15 @@ export function buildRequest(input, { outputDir } = {}) {
     const parts = [`A clip was made${input.model ? ` by ${input.model}` : ""} as ${shots.length} shots, joined${prompt ? ", from this request:" : "."}`, ...(prompt ? [`<request>\n${prompt}\n</request>`] : []), "The shots, each with its length and the description it was made from:", `<shots>\n${shots.map((s) => `Shot ${s.index} (${s.seconds.toFixed(1)} s): ${s.text}`).join("\n")}\n</shots>`, negative ? `The model was asked to avoid: ${negative}.` : "", "What is wrong with the result:", `<wrong>\n${request}\n</wrong>`, "Write the Shot lines for the shots to make again, then the Carry and Why lines."].filter(Boolean);
     return { ...base, max_tokens: 6000, system: FIX_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
+  if (input.kind === "prompt" && input.mode === "fit") {
+    const prompt = String(input.prompt ?? "").trim();
+    if (!prompt) throw new ReviewError("There is no description to fit.");
+    const to = Number(input.seconds);
+    const from = Number(input.fromSeconds);
+    if (!(to > 0)) throw new ReviewError("Say the shot's new length.");
+    const parts = [`This shot description was written for ${from > 0 ? `${from} seconds` : "a longer shot"}; the shot is now ${to} seconds.`, `<description>\n${prompt}\n</description>`, lengthLine(to, "The shot"), "Write the Description and Dropped lines."];
+    return { ...base, max_tokens: 3000, system: FIT_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
+  }
   if (input.kind === "prompt" && input.mode === "expand") {
     const prompt = String(input.prompt ?? "").trim();
     if (!prompt) throw new ReviewError("Say what the picture or clip should show.");
@@ -269,9 +314,11 @@ export function buildRequest(input, { outputDir } = {}) {
     const parts = [`Expand this description for a ${input.clip ? "video" : "picture"} model${input.model ? ` (${input.model})` : ""}:`, `<description>\n${prompt}\n</description>`];
     if (negative) parts.push(`It is asked to avoid: ${negative}. Leave those out of the description.`);
     if (picture) parts.push(`The ${input.clip ? "clip" : "picture"} starts from the picture shown: the person, clothes, place and light in it are to be kept, and the description should say so.`);
+    if (input.clip && lengthLine(input.seconds)) parts.push(lengthLine(input.seconds));
     parts.push("Reply with only the expanded description.");
     const text = parts.join("\n\n");
-    return { ...base, max_tokens: 4000, system: picture ? EXPAND_SYSTEM + WITH_PICTURE : EXPAND_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
+    const system = input.clip ? EXPAND_CLIP_SYSTEM : EXPAND_SYSTEM;
+    return { ...base, max_tokens: 4000, system: picture ? system + WITH_PICTURE : system, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   throw new ReviewError("Unknown kind of check.");
 }
