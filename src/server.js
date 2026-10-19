@@ -31,6 +31,7 @@ import { isAddon, qualityScore } from "./quality.js";
 import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
 import { RentError, TIERS, createRental, tierFor, agentFetch } from "./rent.js";
+import { createStock } from "./stock.js";
 import { AuthError, GUEST_HOURS, createAccounts } from "./accounts.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
@@ -57,7 +58,7 @@ const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDL
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), stockFile = path.join(DATA_DIR, "stock.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
   // Calls to a rented machine's agent carry the secret it was started with.
   fetchImpl = agentFetch(fetchImpl);
   // A hosted copy does not know the visitor's computer; it describes a
@@ -81,8 +82,10 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // account on the hosted site. A rental owns the chat server setting while
   // its machine exists and stops the machine when idle.
   const rentals = new Map();
+  // RunPod's stock of each size as seen over time, shared by every account.
+  const stock = createStock({ file: stockFile });
   const rentalFor = (key, settings, save) => {
-    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}), ...(runpodBudget ? { budget: runpodBudget } : {}) }));
+    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, onTiers: stock.record, base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}), ...(runpodBudget ? { budget: runpodBudget } : {}) }));
     return rentals.get(key);
   };
   // Marks a run so that, when it is over, the person's machine stops unless
@@ -735,7 +738,12 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const action = url.pathname.slice("/api/rent".length).replace(/^\//, "");
       const mine = ctx.rental;
       try {
-        if (req.method === "GET" && action === "options") return send(res, 200, { configured: mine.configured(), tiers: mine.configured() ? await mine.tiers({ fresh: url.searchParams.get("fresh") === "1" }) : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false })) });
+        if (req.method === "GET" && action === "options") {
+          const tiers = mine.configured() ? await mine.tiers({ fresh: url.searchParams.get("fresh") === "1" }) : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false }));
+          // With each size, what the site has seen of its stock: how long it
+          // has been sold out and how long it took to come back before.
+          return send(res, 200, { configured: mine.configured(), tiers, stock: stock.summaries(tiers.map((t) => t.gb)), checkedAt: Date.now() });
+        }
         if (req.method === "GET" && action === "registries") return send(res, 200, { registries: mine.configured() ? await mine.registries() : [] });
         // The other HuggingFound machines on the RunPod account, each still
         // charging for its disk, and the way to be rid of them.

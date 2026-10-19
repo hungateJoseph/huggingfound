@@ -103,6 +103,11 @@ test("with a key, each size names the cheapest card that is actually free", asyn
   assert.equal(by[80].gpu.name, "A100 PCIe", "LOW availability still counts as free");
   assert.equal(by[141].gpu.name, "H200 SXM");
   assert.equal(by[141].available, false, "listed but none free");
+  // What the site has seen of each size's stock comes with the sizes, for how long one has been sold out.
+  const seen = await json("/api/rent/options");
+  assert.equal(seen.stock[141].free, false);
+  assert.equal(seen.stock[24].free, true);
+  assert.ok(seen.checkedAt > 0);
   // Several cards in one machine, for models no single card holds: the same card, priced per card.
   assert.deepEqual([by[282].count, by[282].label, by[282].gpu.name, by[282].pricePerHour], [2, "2 × 141 GB GPUs", "H200 SXM", by[141].pricePerHour * 2]);
   assert.deepEqual([by[564].count, by[564].label, by[564].files], [4, "4 × 141 GB GPUs", 400]);

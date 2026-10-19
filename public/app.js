@@ -837,8 +837,12 @@ function rentAskHtml(choice, plan) {
       : state.rentOptionsError
         ? `<p class="muted small">RunPod is not answering about sizes: ${esc(state.rentOptionsError)}</p>`
         : options.length ? `<p class="muted small">No card is free at RunPod right now; it changes by the minute. Try again shortly.</p>` : `<p class="muted small">Asking RunPod for sizes and prices</p>`;
+    // The size the model wants is sold out: how long, and a watch for it.
+    const wantedOut = options.find((t) => t.gb === choice.tier && !t.available && t.gpu);
+    const outHtml = wantedOut ? `<div class="notice warn sold-out"><p>The ${wantedOut.count > 1 ? `${wantedOut.count} × ${wantedOut.gb / wantedOut.count} GB` : `${wantedOut.gb} GB`} size this model wants is sold out at RunPod right now. ${esc(stockText(wantedOut))}</p><p class="tools-row">${watchHtml(wantedOut)}<button class="ghost" id="ask-check">Check again</button></p></div>` : "";
     return `<div class="rent-ask rent-offer">
       <p><b>Rent a GPU for this.</b> ${esc(size)} RunPod bills your account by the hour while it runs; it stops itself after sitting idle, and the bar at the top can stop or delete it any time.</p>
+      ${outHtml}
       ${sizes}
       <div class="actions"><button class="primary" id="ask-rent" ${pick ? "" : "disabled"}>${pick ? `Rent it, ${money(pick.pricePerHour)} an hour` : "Rent it"}</button><button class="ghost" id="ask-sizes">Disk size and other settings</button>${back}</div>
       <p class="muted small" id="ask-rent-note"></p>
@@ -858,6 +862,12 @@ function rentAskHtml(choice, plan) {
 }
 
 function wireRentAsk(body, model, choice) {
+  wireWatch(body);
+  body.querySelector("#ask-check")?.addEventListener("click", (e) => {
+    e.currentTarget.disabled = true;
+    e.currentTarget.textContent = "Checking";
+    loadRentOptions({ fresh: true, quiet: true });
+  });
   body.querySelector("#ask-signin")?.addEventListener("click", openSignIn);
   body.querySelector("#ask-start")?.addEventListener("click", () => rentAction("start", null));
   body.querySelector("#ask-replace")?.addEventListener("click", () => {
@@ -4446,12 +4456,17 @@ function rentalPhase(r) {
 // The sizes and prices RunPod offers. The server keeps them for a while;
 // `fresh` asks RunPod again, for the Refresh button and after a rent that
 // found the stock gone.
-async function loadRentOptions({ fresh = false } = {}) {
-  state.rentOptionsLoading = true;
-  renderRental();
+async function loadRentOptions({ fresh = false, quiet = false } = {}) {
+  // A quiet check (the watch, Check again) keeps the list on show meanwhile.
+  if (!quiet || !state.rentOptions) {
+    state.rentOptionsLoading = true;
+    renderRental();
+  }
   try {
     const r = await api.get(`/api/rent/options${fresh ? "?fresh=1" : ""}`);
     state.rentOptions = r.configured ? r.tiers : null;
+    state.rentStock = r.stock ?? {};
+    state.rentCheckedAt = r.checkedAt ?? Date.now();
     state.rentOptionsError = "";
   } catch (err) {
     state.rentOptions = null;
@@ -4463,9 +4478,119 @@ async function loadRentOptions({ fresh = false } = {}) {
     if (wait) state.rentOptionsRetry = setTimeout(loadRentOptions, wait * 1000);
   }
   state.rentOptionsLoading = false;
+  await checkWatch();
   renderRental();
   // A model window asking about a GPU can now name the card and its price.
   if (state.open && state.rentAsk === state.open) openModel(state.open);
+}
+
+// How long a sold-out size has been out, and how long it took to come back
+// before, from what the site has seen of RunPod's stock. RunPod itself
+// never says when a card will be free; this is the nearest thing.
+function ago(ms) {
+  const m = Math.round(ms / 60e3);
+  return m < 1 ? "under a minute" : m < 90 ? `${m} min` : m < 36 * 60 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} days`;
+}
+function stockText(t) {
+  if (t.available || !t.gpu) return "";
+  const s = state.rentStock?.[t.gb];
+  if (!s) return "No history for this size yet; Tell me when free checks every minute.";
+  const now = state.rentCheckedAt ?? Date.now();
+  const parts = [];
+  if (s.outSinceKnown && s.outSince) parts.push(`Sold out for ${ago(now - s.outSince)}`);
+  else if (s.lastFreeAt) parts.push(`Last free ${ago(now - s.lastFreeAt)} ago`);
+  else if (now - s.historySince < 10 * 60e3) return "No history for this size yet; Tell me when free checks every minute.";
+  else parts.push(`Not seen free in the last ${ago(now - s.historySince)} of checks`);
+  if (s.typicalWaitMs) {
+    const usual = `before, it came back after about ${ago(s.typicalWaitMs)}`;
+    const elapsed = s.outSinceKnown && s.outSince ? now - s.outSince : 0;
+    parts.push(elapsed > s.typicalWaitMs ? `${usual}, so it may be soon` : usual);
+    if (s.waits > 1) parts[parts.length - 1] += ` (${s.waits} times seen, longest ${ago(s.longestWaitMs)})`;
+  }
+  return `${parts.join("; ")}.`;
+}
+
+// Watching a sold-out size: checked every minute while this page is open;
+// when one is free the page says so, and rents it if asked to. Kept in
+// this browser, so a reload goes on watching.
+function rentWatch() {
+  if (state.rentWatch !== undefined) return state.rentWatch;
+  try {
+    state.rentWatch = JSON.parse(localStorage.getItem("rentWatch") || "null");
+  } catch {
+    state.rentWatch = null;
+  }
+  return state.rentWatch;
+}
+function setRentWatch(w) {
+  state.rentWatch = w;
+  try {
+    if (w) localStorage.setItem("rentWatch", JSON.stringify(w));
+    else localStorage.removeItem("rentWatch");
+  } catch {
+    // no storage: the watch lasts as long as the page
+  }
+  clearInterval(state.rentWatchTimer);
+  state.rentWatchTimer = w ? setInterval(() => loadRentOptions({ fresh: true, quiet: true }), 60e3) : null;
+}
+function startRentWatch(gb) {
+  setRentWatch({ gb, rent: false, diskGb: Number(state.rentDisk ?? 50), since: Date.now() });
+  try {
+    if (window.Notification && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+  } catch {
+    // no notifications here: the page's own notice does
+  }
+  renderRental();
+  if (state.open) openModel(state.open);
+}
+async function checkWatch() {
+  const w = rentWatch();
+  if (!w) return;
+  if (!state.rentWatchTimer) setRentWatch(w);
+  if (state.rental?.rented) return setRentWatch(null);
+  const t = (state.rentOptions ?? []).find((x) => x.gb === w.gb);
+  if (!t?.available) return;
+  const name = `${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB` : `${t.gb} GB`} (${t.gpu?.name ?? "GPU"})`;
+  setRentWatch(null);
+  state.rentWant = t.gb;
+  const tell = (text) => {
+    notice(text, "ok");
+    try {
+      if (window.Notification && Notification.permission === "granted") new Notification("HuggingFound", { body: text });
+    } catch {
+      // the notice on the page is enough
+    }
+  };
+  if (!w.rent) return tell(`A ${name} is free at RunPod now, ${money(t.pricePerHour)} an hour. It is chosen in Settings; rent it before it goes.`);
+  try {
+    state.rental = await api.post("/api/rent", { gb: t.gb, diskGb: w.diskGb });
+    tell(`A ${name} came free and was rented, as you asked: ${money(t.pricePerHour)} an hour, with a ${w.diskGb} GB disk. It answers in a few minutes.`);
+    pollRental?.();
+  } catch (err) {
+    tell(`A ${name} came free, but renting it failed: ${err.message}`);
+  }
+}
+// The watch line, for Settings and the model window alike.
+function watchHtml(t) {
+  const w = rentWatch();
+  if (w?.gb === t.gb) return `<span class="watching">Watching: checked every minute while this page is open. <span class="check"><input type="checkbox" class="watch-rent" ${w.rent ? "checked" : ""}> Rent it as soon as one is free, with a ${w.diskGb} GB disk</span> <button class="ghost watch-stop">Stop watching</button></span>`;
+  return `<button class="ghost watch-go" data-gb="${t.gb}">Tell me when free</button>`;
+}
+function wireWatch(root) {
+  for (const b of root.querySelectorAll(".watch-go")) b.addEventListener("click", (e) => {
+    e.preventDefault();
+    startRentWatch(Number(b.dataset.gb));
+  });
+  for (const b of root.querySelectorAll(".watch-stop")) b.addEventListener("click", (e) => {
+    e.preventDefault();
+    setRentWatch(null);
+    renderRental();
+    if (state.open) openModel(state.open);
+  });
+  for (const c of root.querySelectorAll(".watch-rent")) c.addEventListener("change", () => {
+    const w = rentWatch();
+    if (w) setRentWatch({ ...w, rent: c.checked });
+  });
 }
 
 function renderRental() {
@@ -4611,24 +4736,28 @@ function renderRental() {
     return;
   }
   const want = state.rentWant && state.rentOptions.some((t) => t.gb === state.rentWant && t.available) ? state.rentWant : state.rentOptions.find((t) => t.available)?.gb;
-  panel.innerHTML = `<div class="tiers">${state.rentOptions.map((t) => `<label class="tier ${t.available ? "" : "off"}">
+  const checked = state.rentCheckedAt ? new Date(state.rentCheckedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+  panel.innerHTML = `<p class="tools-row stock-row"><span class="muted small">${checked ? `Checked at ${checked}.` : ""} Stock changes by the minute.</span><button class="ghost" id="rent-refresh">Check again</button></p>
+    <div class="tiers">${state.rentOptions.map((t) => `<label class="tier ${t.available ? "" : "off"}">
       <input type="radio" name="rent-tier" value="${t.gb}" ${t.gb === want ? "checked" : ""} ${t.available ? "" : "disabled"}>
-      <span><b>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPUs` : `${t.gb} GB GPU`}</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour` : ", none free right now"}` : "not on offer right now"}</span><small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small></span>
+      <span><b>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPUs` : `${t.gb} GB GPU`}</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour` : ", none free right now"}` : "not on offer right now"}</span><small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small>${!t.available && t.gpu ? `<small class="stock-note">${esc(stockText(t))}</small><span class="tier-watch">${watchHtml(t)}</span>` : ""}</span>
     </label>`).join("")}</div>
     <label class="field">
       <span>Disk for its models, in GB</span>
       <input type="number" id="rent-disk" min="10" max="4000" step="10" value="${Number(state.rentDisk ?? 50)}">
       <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep. It can be grown later, when a model does not fit, never shrunk. RunPod charges ${money(DISK_STOPPED_PER_GB_MONTH / 30 * Number(state.rentDisk ?? 50))} a day for ${Number(state.rentDisk ?? 50)} GB while the machine is stopped, half that while it runs.</small>
     </label>
-    <div class="actions"><button class="primary" id="rent-go" ${want ? "" : "disabled"}>Rent it</button><button class="ghost" id="rent-refresh">Refresh prices</button></div>
+    <div class="actions"><button class="primary" id="rent-go" ${want ? "" : "disabled"}>Rent it</button></div>
     <div id="rent-others"></div>
     ${privateImageHtml()}
     <p class="muted small">Ollama on the machine answers at a long random address that RunPod makes for it; only this computer knows it, and it goes when the machine is deleted. The disk is set up once; the machine itself usually answers two to four minutes after renting.</p>`;
   loadRegistries(panel);
-  panel.querySelector("#rent-refresh").addEventListener("click", () => {
-    state.rentOptions = null;
-    loadRentOptions({ fresh: true });
+  panel.querySelector("#rent-refresh").addEventListener("click", (e) => {
+    e.currentTarget.disabled = true;
+    e.currentTarget.textContent = "Checking";
+    loadRentOptions({ fresh: true, quiet: true });
   });
+  wireWatch(panel);
   loadOthers(panel);
   panel.querySelector("#rent-go").addEventListener("click", async () => {
     const gb = Number(panel.querySelector('input[name="rent-tier"]:checked')?.value);

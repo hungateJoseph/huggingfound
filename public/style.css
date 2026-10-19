@@ -344,7 +344,8 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 .tier b { font-weight: 600; }
 .tier .price { color: var(--ink); }
 .tier small { display: block; color: var(--muted); margin-top: 2px; }
-.tier.off { opacity: 0.6; cursor: default; }
+.tier.off { cursor: default; }
+.tier.off > input, .tier.off b, .tier.off .price, .tier.off small:not(.stock-note) { opacity: 0.6; }
 .rent-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-top: 10px; }
 .rent-card .rent-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
 .rent-card p { margin: 6px 0 0; }
@@ -549,3 +550,11 @@ details.levels-note summary { cursor: pointer; }
 .kept-older[open] > summary { border-bottom: 1px solid var(--line); }
 .kept-older-list { padding: 0 14px 10px; }
 .shot-fit { grid-column: 1 / -1; margin: 4px 0 0; }
+
+/* Sold-out sizes: how long, and a watch for one. */
+.stock-row { justify-content: space-between; margin: 0 0 8px; }
+.tier .stock-note { display: block; color: var(--warn); margin-top: 4px; }
+.tier-watch { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; font-size: 13px; }
+.tier-watch button, .sold-out button { font-size: 13px; padding: 4px 10px; }
+.watching { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--ink); }
+.sold-out p { margin: 0 0 6px; }

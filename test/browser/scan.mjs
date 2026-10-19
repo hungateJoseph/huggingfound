@@ -112,7 +112,6 @@ let acceptDialogs = false;
 page.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));
 
 let failed = 0;
-// Settings open with only the rental section unfolded; the tests unfold the rest.
 // The kind of clip: Short clip or Scene by tab, and inside a scene,
 // Claude's shots or the words in pieces.
 async function pickKind(p, kind) {
@@ -120,6 +119,7 @@ async function pickKind(p, kind) {
   if (kind !== "short" && !(await p.isChecked(`#clip-kind input[value=${kind}]`))) await p.click(`#clip-kind input[value=${kind}]`);
 }
 
+// Settings open with only the rental section unfolded; the tests unfold the rest.
 async function openSettings(p = page) {
   await p.click("#open-settings");
   await unfoldSettings(p);
@@ -893,6 +893,22 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   assert.equal(runpod.state.pods.leftover1.status, "TERMINATED");
   assert.equal(runpod.state.pods.leftover2.status, "TERMINATED");
   assert.equal(await page.locator("#rent-others .notice").count(), 0);
+  // A sold-out size says what the site has seen of it, and can be watched:
+  // checked every minute, and said when one comes free.
+  const h200 = page.locator("#rent-panel .tier").nth(3);
+  assert.match(await h200.locator(".stock-note").innerText(), /^(No history for this size yet; Tell me when free checks every minute\.|Not seen free in the last \d+ min of checks\.)$/);
+  assert.match(await page.locator("#rent-panel .stock-row").innerText(), /^Checked at .*\. Stock changes by the minute\.\s*Check again$/);
+  await h200.locator(".watch-go").click();
+  await h200.locator(".watching").waitFor();
+  assert.match(await h200.locator(".watching").innerText(), /Watching: checked every minute while this page is open\.[\s\S]*Rent it as soon as one is free, with a 50 GB disk/);
+  runpod.state.stock["NVIDIA H200"] = { 1: "LOW" };
+  await page.click("#rent-refresh");
+  await page.waitForFunction(() => /A 141 GB \(H200 SXM\) is free at RunPod now, \$3\.59 an hour\./.test(document.querySelector("#notice")?.textContent ?? ""));
+  assert.equal(await page.evaluate(() => localStorage.getItem("rentWatch")), null, "the watch ends once it has found one");
+  assert.equal(await page.locator("#rent-panel .tier").nth(3).locator("input").isChecked(), true, "the size that came free is chosen");
+  delete runpod.state.stock["NVIDIA H200"];
+  await page.click("#rent-refresh");
+  await page.waitForFunction(() => document.querySelectorAll("#rent-panel .tier")[3]?.classList.contains("off"));
   await page.click("#close-settings");
 });
 

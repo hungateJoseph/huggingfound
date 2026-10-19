@@ -132,7 +132,7 @@ export function agentFetch(fetchImpl) {
   };
 }
 
-export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), statusTtl = 4000, now = Date.now, budget = BUDGET }) {
+export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), statusTtl = 4000, now = Date.now, budget = BUDGET, onTiers = null }) {
   let options = { at: 0, key: "", tiers: null };
   let last = null;
   let lastAt = 0;
@@ -385,6 +385,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       };
     });
     options = { at: now(), key: key(), tiers: out };
+    // What RunPod said, for the history of each size's stock.
+    try {
+      onTiers?.(out);
+    } catch {
+      // the history never stands in the way of the sizes
+    }
     return out;
   }
 
