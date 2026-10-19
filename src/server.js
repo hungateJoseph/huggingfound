@@ -53,7 +53,7 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "RUNPOD_SLOW_DCS", "HF_TOKEN"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "RUNPOD_SLOW_DCS", "RUNPOD_COMMUNITY", "HF_TOKEN"]);
 // Models a person has hidden from search and Browse: ids, comma-separated.
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
@@ -505,6 +505,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         updates.RUNPOD_MAX_SPEND = String(Math.round(dollars * 100) / 100);
       }
       if ("RUNPOD_STOP_ON_QUIT" in body) updates.RUNPOD_STOP_ON_QUIT = body.RUNPOD_STOP_ON_QUIT ? "" : "0";
+      // RunPod's Community Cloud asked as well as the Secure Cloud: on or off.
+      if ("RUNPOD_COMMUNITY" in body) updates.RUNPOD_COMMUNITY = body.RUNPOD_COMMUNITY ? "1" : "";
       if ("RUNPOD_REGISTRY_AUTH" in body) {
         const value = String(body.RUNPOD_REGISTRY_AUTH ?? "").trim();
         if (value && !/^[\w-]{1,120}$/.test(value)) return send(res, 400, { error: "That does not look like a RunPod registry credential id" });
@@ -742,7 +744,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           const tiers = mine.configured() ? await mine.tiers({ fresh: url.searchParams.get("fresh") === "1" }) : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false }));
           // With each size, what the site has seen of its stock: how long it
           // has been sold out and how long it took to come back before.
-          return send(res, 200, { configured: mine.configured(), tiers, stock: stock.summaries(tiers.map((t) => t.gb)), checkedAt: Date.now() });
+          return send(res, 200, { configured: mine.configured(), community: mine.usesCommunity(), tiers, stock: stock.summaries(tiers.map((t) => t.gb)), checkedAt: Date.now() });
         }
         if (req.method === "GET" && action === "registries") return send(res, 200, { registries: mine.configured() ? await mine.registries() : [] });
         // The other HuggingFound machines on the RunPod account, each still

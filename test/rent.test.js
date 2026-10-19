@@ -124,6 +124,7 @@ test("with a key, each size names the cheapest card that is actually free", asyn
 test("a card RunPod runs out of between the listing and the request is passed over for the next free one of the size", async () => {
   // Two free 24 GB cards are listed; RunPod refuses the first at the moment of renting.
   runpod.state.refuse = new Set(["NVIDIA GeForce RTX 4090"]);
+  const podsBefore = runpod.state.calls.filter((c) => c === "POST /pods").length;
   const res = await post("/api/rent", { gb: 24, diskGb: 50 });
   const text = await res.text();
   assert.equal(res.status, 200, text);
@@ -131,7 +132,7 @@ test("a card RunPod runs out of between the listing and the request is passed ov
   assert.equal(r.gpu, "NVIDIA L4", "the next free card of the size");
   assert.equal(r.costPerHour, 0.48, "at that card's price");
   assert.deepEqual(runpod.state.created.slice(-1)[0].gpu, { id: "NVIDIA L4", count: 1, minCudaVersion: "12.4" });
-  assert.equal(runpod.state.calls.filter((c) => c === "POST /pods").length, 2, "one refused, one made");
+  assert.equal(runpod.state.calls.filter((c) => c === "POST /pods").length - podsBefore, 2, "one refused, one made");
   assert.equal(runpod.state.calls.filter((c) => c === "GET /catalog/gpus").length, 6, "the sizes were fetched again after the refusal");
   assert.equal((await post("/api/rent/delete", {})).status, 200);
   // With every card of the size gone, the person is told plainly and the list is fresh.
@@ -1187,4 +1188,39 @@ test("the data centres to place away from can be set by hand, as ids, and read b
     await post("/api/rent/delete", {}).catch(() => {});
     await post("/api/settings", { RUNPOD_SLOW_DCS: "" });
   }
+});
+
+test("Blackwell cards are offered and rented on a CUDA 12.8 host; the Community Cloud, when switched on, fills in when the Secure Cloud has none", async () => {
+  // A Blackwell card in stock is the size's card, rented on a host with CUDA 12.8; a Grace-Blackwell host never is.
+  runpod.state.stock = { "NVIDIA RTX PRO 6000 Blackwell": { 1: "HIGH" } };
+  let by = Object.fromEntries((await json("/api/rent/options?fresh=1")).tiers.map((t) => [t.gb, t]));
+  assert.deepEqual([by[80].gpu.name, by[80].available, by[80].gpu.cloud], ["RTX PRO 6000", true, "SECURE"], "the cheaper free card of the 80 GB size");
+  assert.ok(!Object.values(by).some((t) => t.gpu?.name === "GB200"), "an ARM host is never offered");
+  let res = await post("/api/rent", { gb: 80, diskGb: 50 });
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.deepEqual(runpod.state.created.at(-1).gpu, { id: "NVIDIA RTX PRO 6000 Blackwell", count: 1, minCudaVersion: "12.8" });
+  assert.equal(runpod.state.created.at(-1).cloud, "SECURE");
+  assert.equal((await post("/api/rent/delete", {})).status, 200);
+  runpod.state.stock = {};
+  // Off by default: the Community Cloud is not asked.
+  const before = runpod.state.catalogQueries.length;
+  const off = await json("/api/rent/options?fresh=1");
+  assert.equal(off.community, false);
+  assert.ok(!runpod.state.catalogQueries.slice(before).some((q) => /cloud=COMMUNITY/.test(q)));
+  // Switched on: a size the Secure Cloud has none of is filled from the Community Cloud, labelled.
+  assert.equal((await post("/api/settings", { RUNPOD_COMMUNITY: true })).status, 200);
+  runpod.state.community = { "NVIDIA H200": { 1: "HIGH" } };
+  const on = await json("/api/rent/options?fresh=1");
+  assert.equal(on.community, true);
+  by = Object.fromEntries(on.tiers.map((t) => [t.gb, t]));
+  assert.deepEqual([by[141].available, by[141].gpu.name, by[141].gpu.cloud, by[141].pricePerHour], [true, "H200 SXM", "COMMUNITY", 2.99]);
+  assert.equal(by[24].gpu.cloud, "SECURE", "the Secure Cloud stays first where it has a card");
+  res = await post("/api/rent", { gb: 141, diskGb: 50 });
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.equal(runpod.state.created.at(-1).cloud, "COMMUNITY");
+  assert.equal(runpod.state.created.at(-1).dataCenterIds, undefined, "no data-centre placement in the Community Cloud");
+  assert.equal((await json("/api/rent")).cloud, "COMMUNITY", "the machine says which cloud it is in");
+  assert.equal((await post("/api/rent/delete", {})).status, 200);
+  runpod.state.community = {};
+  assert.equal((await post("/api/settings", { RUNPOD_COMMUNITY: false })).status, 200);
 });

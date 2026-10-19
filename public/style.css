@@ -583,3 +583,4 @@ details.levels-note summary { cursor: pointer; }
 .code-head { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
 .code-body { white-space: pre-wrap; font-size: 14px; }
 .code-foot { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.check.community { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 0 0 10px; font-size: 14px; }

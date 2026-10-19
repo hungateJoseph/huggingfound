@@ -833,7 +833,7 @@ function rentAskHtml(choice, plan) {
     const free = options.filter((t) => t.available && t.pricePerHour != null);
     const pick = free.find((t) => t.gb === choice.tier) ?? free.find((t) => t.gb > (choice.tier ?? 0)) ?? free[0] ?? null;
     const sizes = free.length
-      ? `<label class="field"><span>Size</span><select id="ask-size">${free.map((t) => `<option value="${t.gb}" ${pick && t.gb === pick.gb ? "selected" : ""}>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB` : `${t.gb} GB`}, ${esc(t.gpu.name)}, ${money(t.pricePerHour)} an hour${t.gb === choice.tier ? " (recommended)" : ""}</option>`).join("")}</select></label>`
+      ? `<label class="field"><span>Size</span><select id="ask-size">${free.map((t) => `<option value="${t.gb}" ${pick && t.gb === pick.gb ? "selected" : ""}>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB` : `${t.gb} GB`}, ${esc(t.gpu.name)}, ${money(t.pricePerHour)} an hour${t.gpu.cloud === "COMMUNITY" ? ", Community Cloud" : ""}${t.gb === choice.tier ? " (recommended)" : ""}</option>`).join("")}</select></label>`
       : state.rentOptionsError
         ? `<p class="muted small">RunPod is not answering about sizes: ${esc(state.rentOptionsError)}</p>`
         : options.length ? `<p class="muted small">No card is free at RunPod right now; it changes by the minute. Try again shortly.</p>` : `<p class="muted small">Asking RunPod for sizes and prices</p>`;
@@ -4788,6 +4788,7 @@ async function loadRentOptions({ fresh = false, quiet = false } = {}) {
     const r = await api.get(`/api/rent/options${fresh ? "?fresh=1" : ""}`);
     state.rentOptions = r.configured ? r.tiers : null;
     state.rentStock = r.stock ?? {};
+    state.rentCommunity = Boolean(r.community);
     state.rentCheckedAt = r.checkedAt ?? Date.now();
     state.rentOptionsError = "";
   } catch (err) {
@@ -5060,9 +5061,10 @@ function renderRental() {
   const want = state.rentWant && state.rentOptions.some((t) => t.gb === state.rentWant && t.available) ? state.rentWant : state.rentOptions.find((t) => t.available)?.gb;
   const checked = state.rentCheckedAt ? new Date(state.rentCheckedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
   panel.innerHTML = `<p class="tools-row stock-row"><span class="muted small">${checked ? `Checked at ${checked}.` : ""} Stock changes by the minute.</span><button class="ghost" id="rent-refresh">Check again</button></p>
+    <label class="check community" title="RunPod's Community Cloud is machines that third parties host. It is cheaper and often has cards when the Secure Cloud has none; its hosts are less reliable, and your models and Hugging Face token sit on someone else's machine while it runs."><input type="checkbox" id="rent-community" ${state.rentCommunity ? "checked" : ""}> Also rent from RunPod's Community Cloud <small class="muted">third-party hosts: cheaper and more often in stock, less reliable. The Secure Cloud is still used first.</small></label>
     <div class="tiers">${state.rentOptions.map((t) => `<label class="tier ${t.available ? "" : "off"}">
       <input type="radio" name="rent-tier" value="${t.gb}" ${t.gb === want ? "checked" : ""} ${t.available ? "" : "disabled"}>
-      <span><b>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPUs` : `${t.gb} GB GPU`}</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour` : ", none free right now"}` : "not on offer right now"}</span><small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small>${!t.available && t.gpu ? `<small class="stock-note">${esc(stockText(t))}</small><span class="tier-watch">${watchHtml(t)}</span>` : ""}</span>
+      <span><b>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPUs` : `${t.gb} GB GPU`}</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour${t.gpu.cloud === "COMMUNITY" ? ", Community Cloud" : ""}` : ", none free right now"}` : "not on offer right now"}</span><small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small>${!t.available && t.gpu ? `<small class="stock-note">${esc(stockText(t))}</small><span class="tier-watch">${watchHtml(t)}</span>` : ""}</span>
     </label>`).join("")}</div>
     <label class="field">
       <span>Disk for its models, in GB</span>
@@ -5080,6 +5082,15 @@ function renderRental() {
     loadRentOptions({ fresh: true, quiet: true });
   });
   wireWatch(panel);
+  panel.querySelector("#rent-community")?.addEventListener("change", async (e) => {
+    try {
+      await api.post("/api/settings", { RUNPOD_COMMUNITY: e.target.checked });
+    } catch (err) {
+      notice(`Could not save that: ${err.message}`, "bad");
+      return;
+    }
+    loadRentOptions({ fresh: true, quiet: true });
+  });
   loadOthers(panel);
   panel.querySelector("#rent-go").addEventListener("click", async () => {
     const gb = Number(panel.querySelector('input[name="rent-tier"]:checked')?.value);
@@ -6093,7 +6104,7 @@ function renderRentBar(r) {
   const busy = r.downloading ? `<span class="pill live">${r.downloading} downloading</span>` : "";
   const disk = !running && r.diskPerDay ? `, disk ${money(r.diskPerDay)} a day` : "";
   const extra = others.length ? `<button class="ghost others-note" id="bar-others" title="Machines from before that this site no longer manages, each billing for its disk">${others.length} other machine${others.length === 1 ? "" : "s"} on the account</button>` : "";
-  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}, ${esc(word)}${cost}${time}${disk}.${extra}</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}${busy ? ` ${busy}` : ""}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-delete" title="Delete the machine, its disk and its models; nothing is charged after">Delete</button><button class="ghost" id="bar-settings">Manage</button></span></div>`;
+  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}${r.cloud === "COMMUNITY" ? " (Community Cloud)" : ""}, ${esc(word)}${cost}${time}${disk}.${extra}</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}${busy ? ` ${busy}` : ""}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-delete" title="Delete the machine, its disk and its models; nothing is charged after">Delete</button><button class="ghost" id="bar-settings">Manage</button></span></div>`;
   bar.querySelector("#bar-models").addEventListener("click", openGpuModels);
   bar.querySelector("#bar-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
   bar.querySelector("#bar-start")?.addEventListener("click", () => rentAction("start", null));

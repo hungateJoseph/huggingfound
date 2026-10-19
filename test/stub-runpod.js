@@ -10,16 +10,18 @@ export const KEY = "rpa_testkey_0123456789abcdef";
 export const GPUS = [
   { id: "NVIDIA RTX A5000", name: "RTX A5000", memory: 24, secure: true, price: { secure: 0.27 }, availability: "NONE" },
   // Cheap and free, but the image server is not compiled for these: never picked.
-  { id: "NVIDIA GeForce RTX 5090", name: "RTX 5090", memory: 32, secure: true, manufacturer: "NVIDIA", price: { secure: 0.2 }, availability: "HIGH" },
+  { id: "NVIDIA GeForce RTX 5090", name: "RTX 5090", memory: 32, secure: true, manufacturer: "NVIDIA", price: { secure: 0.2, community: 0.16 }, availability: "NONE" },
   { id: "Tesla V100-SXM2-32GB", name: "V100", memory: 32, secure: true, manufacturer: "NVIDIA", price: { secure: 0.19 }, availability: "HIGH" },
-  { id: "NVIDIA RTX PRO 6000 Blackwell", name: "RTX PRO 6000", memory: 96, secure: true, manufacturer: "NVIDIA", price: { secure: 0.9 }, availability: "HIGH" },
+  { id: "NVIDIA RTX PRO 6000 Blackwell", name: "RTX PRO 6000", memory: 96, secure: true, manufacturer: "NVIDIA", price: { secure: 0.9, community: 0.7 }, availability: "NONE" },
   { id: "NVIDIA GeForce RTX 4090", name: "RTX 4090", memory: 24, secure: true, price: { secure: 0.44 }, availability: "HIGH" },
   { id: "NVIDIA L4", name: "L4", memory: 24, secure: true, price: { secure: 0.48 }, availability: "HIGH" },
   { id: "NVIDIA A40", name: "A40", memory: 48, secure: true, price: { secure: 0.4 }, availability: "MEDIUM" },
   { id: "NVIDIA L40S", name: "L40S", memory: 48, secure: true, price: { secure: 0.86 }, availability: "HIGH" },
   { id: "NVIDIA A100 80GB PCIe", name: "A100 PCIe", memory: 80, secure: true, price: { secure: 1.64 }, availability: "LOW" },
   { id: "NVIDIA H100 80GB HBM3", name: "H100 SXM", memory: 80, secure: true, price: { secure: 2.69 }, availability: "HIGH" },
-  { id: "NVIDIA H200", name: "H200 SXM", memory: 141, secure: true, price: { secure: 3.59 }, availability: "NONE" },
+  { id: "NVIDIA H200", name: "H200 SXM", memory: 141, secure: true, price: { secure: 3.59, community: 2.99 }, availability: "NONE" },
+  // Grace-Blackwell hosts are ARM machines the image does not run on: never offered.
+  { id: "NVIDIA GB200", name: "GB200", memory: 186, secure: true, manufacturer: "NVIDIA", price: { secure: 3.0 }, availability: "HIGH" },
   { id: "AMD MI300X", name: "MI300X", memory: 192, secure: false, price: { secure: 2.49 }, availability: "HIGH" },
 ];
 
@@ -47,6 +49,8 @@ export function startStubRunpod() {
         state.catalogQueries.push(url.search);
         // With availability asked for, each card says which data centres hold it.
         const dcs = url.searchParams.get("include") === "AVAILABILITY" ? (g) => ({ ...g, dataCenters: state.dataCenters?.[g.id] ?? [{ id: "US-KS-2", availability: g.availability }, { id: "EUR-IS-4", availability: g.availability }] }) : (g) => g;
+        // The Community Cloud has its own stock, set by the tests; none unless set.
+        if (url.searchParams.get("cloud") === "COMMUNITY") return reply(200, { gpus: GPUS.map((g) => ({ ...g, availability: state.community?.[g.id]?.[count] ?? "NONE" })) });
         return reply(200, { gpus: GPUS.map((g) => dcs(stocked(g))) });
       }
       // Every pod on the account, as RunPod lists them (deleted ones included, as TERMINATED).
@@ -66,13 +70,16 @@ export function startStubRunpod() {
       if (req.method === "POST" && url.pathname === "/pods") {
         const gpu = GPUS.find((g) => g.id === data.gpu?.id);
         if (!gpu) return reply(422, { message: "unknown gpu" });
-        if (gpu.availability === "NONE") return reply(409, { message: "no capacity" });
+        // Stock as the catalogue gave it, for the cloud asked for.
+        const n = data.gpu?.count ?? 1;
+        const avail = data.cloud === "COMMUNITY" ? state.community?.[gpu.id]?.[n] ?? "NONE" : stocked(gpu, n).availability;
+        if (data.cloud !== "COMMUNITY" && gpu.availability === "NONE" && !state.stock?.[gpu.id]) return reply(409, { message: "no capacity" });
         // Gone between the listing and the request, as RunPod says it.
-        if (state.refuse?.has(gpu.id) || stocked(gpu, data.gpu?.count ?? 1).availability === "NONE") return reply(400, { message: "There are no longer any instances available with the requested specifications. Please refresh and try again." });
+        if (state.refuse?.has(gpu.id) || avail === "NONE") return reply(400, { message: "There are no longer any instances available with the requested specifications. Please refresh and try again." });
         // No stock in the data centres asked for, as a test says.
         if (state.refusePlacement && data.dataCenterIds?.length) return reply(400, { message: "There are no longer any instances available with the requested specifications. Please refresh and try again." });
         const id = `pod${state.nextId++}abc`;
-        const pod = { id, name: data.name, image: data.image, status: "PROVISIONING", cost: gpu.price.secure * (data.gpu.count ?? 1), gpu: { id: gpu.id, count: data.gpu.count ?? 1, memory: gpu.memory }, ports: data.ports, env: data.env, mounts: data.mounts, disk: data.disk, dataCenterId: data.dataCenterIds?.[0] ?? "US-KS-2", createdAt: new Date().toISOString(), startedAt: null, runtime: null, polls: 0 };
+        const pod = { id, name: data.name, image: data.image, status: "PROVISIONING", cost: (data.cloud === "COMMUNITY" ? gpu.price.community : gpu.price.secure) * (data.gpu.count ?? 1), gpu: { id: gpu.id, count: data.gpu.count ?? 1, memory: gpu.memory }, ports: data.ports, env: data.env, mounts: data.mounts, disk: data.disk, dataCenterId: data.dataCenterIds?.[0] ?? "US-KS-2", createdAt: new Date().toISOString(), startedAt: null, runtime: null, polls: 0 };
         state.pods[id] = pod;
         state.created.push(data);
         return reply(201, view(pod));

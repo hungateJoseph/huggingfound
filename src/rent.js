@@ -76,12 +76,16 @@ const BUDGET = { minute: 60, hour: 600 };
 // one runs comfortably: a 4-bit model wants its own size plus room for the
 // conversation. The thresholds match machine.js (90% of the memory is
 // usable, 80% of that is a comfortable fit).
-// The machine image's image server is compiled for NVIDIA Ampere, Ada and
-// Hopper cards (compute 8.0 to 9.0) against CUDA 12.4. Newer Blackwell
-// cards and older Turing or Volta ones would fail at the first picture, so
-// they are never picked, and the host has to offer CUDA 12.4 or newer.
+// The machine image is built against CUDA 12.8 for NVIDIA Ampere, Ada,
+// Hopper and Blackwell cards (compute 8.0 to 12.0). Older Turing or Volta
+// cards would fail at the first picture, and the Grace-Blackwell GB200 and
+// GB300 hosts are ARM machines the image does not run on, so those are
+// never picked. A host has to offer CUDA 12.4 or newer (the libraries run
+// on any 12.x driver), and 12.8 for a Blackwell card.
 export const MIN_CUDA = "12.4";
-const UNSUPPORTED_GPU = /\b(50\d0|B100|B200|B300|GB200|GB300|RTX PRO|V100|T4|P100|P40|A2|2080|2070|2060|TITAN)\b/i;
+export const MIN_CUDA_BLACKWELL = "12.8";
+const UNSUPPORTED_GPU = /\b(GB200|GB300|V100|T4|P100|P40|A2|2080|2070|2060|TITAN)\b/i;
+export const BLACKWELL = /\b(50\d0|B100|B200|B300|RTX PRO)\b/i;
 export function gpuSupported(gpu) {
   return (gpu.manufacturer ?? "NVIDIA") === "NVIDIA" && !UNSUPPORTED_GPU.test(String(gpu.id ?? "") + " " + String(gpu.name ?? ""));
 }
@@ -327,9 +331,13 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   // CUDA floor: a card free on its own may have no host with two free, and
   // the machine image needs CUDA 12.4, so the catalogue is asked exactly
   // what renting will ask, once per card count.
-  async function catalog(count) {
-    return request("GET", `/catalog/gpus?include=AVAILABILITY&product=POD&cloud=SECURE&count=${count}&minCudaVersion=${MIN_CUDA}`);
+  async function catalog(count, cloud = "SECURE") {
+    return request("GET", `/catalog/gpus?include=AVAILABILITY&product=POD&cloud=${cloud}&count=${count}&minCudaVersion=${MIN_CUDA}`);
   }
+  // RunPod's Community Cloud, asked as well when the person has said so:
+  // hosts run by third parties, cheaper and often in stock when the Secure
+  // Cloud is not. Off unless set.
+  const community = () => env().RUNPOD_COMMUNITY === "1";
   // The data centres the catalogue says hold this card, with stock, as
   // RunPod spells them (US-NC-1, EUR-IS-4); none when it does not say.
   function dataCentersOf(g) {
@@ -356,32 +364,45 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   async function tiers({ fresh = false } = {}) {
     if (!fresh && options.tiers && options.key === key() && now() - options.at < OPTIONS_TTL) return options.tiers;
     const lists = {};
+    const communityLists = {};
     try {
-      for (const count of [...new Set(TIERS.map((t) => t.count ?? 1))]) lists[count] = (await catalog(count))?.gpus ?? [];
+      for (const count of [...new Set(TIERS.map((t) => t.count ?? 1))]) {
+        lists[count] = (await catalog(count))?.gpus ?? [];
+        if (community()) communityLists[count] = (await catalog(count, "COMMUNITY"))?.gpus ?? [];
+      }
     } catch (err) {
       // Throttled: yesterday's prices beat no prices.
       if (err.status === 429 && options.tiers && options.key === key()) return options.tiers;
       throw err;
     }
-    const byPrice = (a, b) => a.price.secure - b.price.secure;
     const out = TIERS.map((tier) => {
       const count = tier.count ?? 1;
-      const gpus = lists[count].filter((g) => g.secure !== false && Number(g.memory) > 0 && gpuSupported(g));
-      // A host holds at most so many of a card; a size asking for more than that is not on offer.
-      const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.secure === "number" && !(Number(g.maxCount?.secure) >= 1 && g.maxCount.secure < count));
-      const free = inTier.filter((g) => g.availability && g.availability !== "NONE").sort(byPrice);
-      const pick = free[0] ?? inTier.sort(byPrice)[0] ?? null;
-      const card = (g) => ({ id: g.id, name: g.name || g.id, memory: g.memory, availability: g.availability ?? "UNKNOWN", pricePerHour: g.price.secure * count, dataCenters: dataCentersOf(g) });
+      // The cards of this size in one cloud, those free first, cheapest first.
+      const sized = (list, cloud) => {
+        const key = cloud === "COMMUNITY" ? "community" : "secure";
+        const gpus = (list ?? []).filter((g) => g[key] !== false && Number(g.memory) > 0 && gpuSupported(g));
+        // A host holds at most so many of a card; a size asking for more than that is not on offer.
+        const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.[key] === "number" && !(Number(g.maxCount?.[key]) >= 1 && g.maxCount[key] < count));
+        const card = (g) => ({ id: g.id, name: g.name || g.id, memory: g.memory, availability: g.availability ?? "UNKNOWN", pricePerHour: g.price[key] * count, cloud, dataCenters: cloud === "SECURE" ? dataCentersOf(g) : [] });
+        const byPrice = (a, b) => a.price[key] - b.price[key];
+        return { free: inTier.filter((g) => g.availability && g.availability !== "NONE").sort(byPrice).map(card), all: inTier.sort(byPrice).map(card) };
+      };
+      const secure = sized(lists[count], "SECURE");
+      const other = community() ? sized(communityLists[count], "COMMUNITY") : { free: [], all: [] };
+      // The Secure Cloud first while it has a card free; the Community Cloud
+      // when it has none.
+      const free = [...secure.free, ...other.free];
+      const pick = free[0] ?? secure.all[0] ?? other.all[0] ?? null;
       return {
         gb: tier.gb,
         count,
         label: tierLabel(tier),
         files: tier.files,
         examples: tier.examples,
-        gpu: pick ? card(pick) : null,
-        pricePerHour: pick ? pick.price.secure * count : null,
+        gpu: pick,
+        pricePerHour: pick ? pick.pricePerHour : null,
         available: Boolean(free.length),
-        cards: free.map(card),
+        cards: free,
       };
     });
     options = { at: now(), key: key(), tiers: out };
@@ -441,6 +462,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // Why it last stopped by itself: "idle:30", "cap:50", "away:10" or "done".
       stopReason: pod.status === "EXITED" ? env().RUNPOD_LAST_STOP || null : null,
       dataCenter: pod.dataCenterId ?? null,
+      cloud: env().RUNPOD_POD_CLOUD || "SECURE",
       slowDataCenters: slowDataCenters(),
       startedAt: pod.startedAt ?? null,
       // Whether RunPod has a container up for the pod: one listed as
@@ -472,7 +494,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   const hasAgent = () => env().RUNPOD_POD_AGENT === "1";
 
   function forget(id) {
-    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "", RUNPOD_AGENT_TOKEN: "" };
+    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "", RUNPOD_POD_CLOUD: "", RUNPOD_AGENT_TOKEN: "" };
     if (id) agentTokens.delete(agentFor(id));
     if (id && env().OLLAMA_SERVER === urlFor(id)) {
       updates.OLLAMA_SERVER = "";
@@ -569,6 +591,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
   const self = {
     configured: () => Boolean(key()),
+    // Whether the Community Cloud is asked as well as the Secure Cloud.
+    usesCommunity: () => community(),
     others,
     spend,
     spentToday,
@@ -726,10 +750,10 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       const avoid = slowDataCenters();
       let preferred = null;
       while (!pod && tried.length < 4) {
-        pick = (offer?.cards ?? [offer?.gpu]).find((c) => c && !tried.some((t) => t.id === c.id)) ?? null;
+        pick = (offer?.cards ?? [offer?.gpu]).find((c) => c && !tried.some((t) => t.id === c.id && t.cloud === c.cloud)) ?? null;
         if (!pick) break;
         if (preferred !== false) {
-          const good = (pick.dataCenters ?? []).filter((d) => d.available && !avoid.includes(d.id)).map((d) => d.id);
+          const good = pick.cloud === "COMMUNITY" ? [] : (pick.dataCenters ?? []).filter((d) => d.available && !avoid.includes(d.id)).map((d) => d.id);
           preferred = avoid.length && good.length ? good : null;
         }
         if (!preferred) tried.push(pick);
@@ -739,8 +763,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
             image: full ? image : OLLAMA_IMAGE,
             ...(full && auth ? { registry: auth } : {}),
             ...(preferred ? { dataCenterIds: preferred } : {}),
-            gpu: { id: pick.id, count, minCudaVersion: MIN_CUDA },
-            cloud: "SECURE",
+            gpu: { id: pick.id, count, minCudaVersion: BLACKWELL.test(`${pick.id} ${pick.name}`) ? MIN_CUDA_BLACKWELL : MIN_CUDA },
+            cloud: pick.cloud ?? "SECURE",
             disk: CONTAINER_DISK_GB,
             ports: full ? [`${OLLAMA_PORT}/http`, `${AGENT_PORT}/http`] : [`${OLLAMA_PORT}/http`],
             env: podEnv,
@@ -762,7 +786,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
       const totalGb = (pick.memory || tier.gb / count) * count;
       lastActivity = now();
-      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(pick.pricePerHour ?? offer?.pricePerHour ?? pod.cost ?? ""), RUNPOD_AGENT_TOKEN: secret, RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_CLOUD: pick.cloud ?? "SECURE", RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(pick.pricePerHour ?? offer?.pricePerHour ?? pod.cost ?? ""), RUNPOD_AGENT_TOKEN: secret, RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
       registerToken();
       othersCache = { at: 0, key: "", list: null };
       point(pod.id, totalGb);

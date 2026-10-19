@@ -6,15 +6,15 @@
 #
 # stable-diffusion.cpp publishes no Linux CUDA build, so the first stage
 # compiles it against the CUDA toolkit for the cards RunPod rents (Ampere,
-# Ada, Hopper); the second stage is the official Ollama image plus those
+# Ada, Hopper, Blackwell); the second stage is the official Ollama image plus those
 # binaries, the CUDA runtime libraries they need, Node for the agent, and
 # the agent itself.
 
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS build
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake build-essential ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp.git .
-RUN cmake -B build -DSD_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90" \
+RUN cmake -B build -DSD_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90;100;120" \
  && cmake --build build --config Release -j"$(nproc)"
 # Every shared library the binaries need that the Ollama image will not
 # have (the CUDA runtime, cuBLAS, NCCL and whatever else the toolkit linked
@@ -29,12 +29,12 @@ FROM ollama/ollama:latest
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils libgomp1 python3 python3-venv python3-dev build-essential ffmpeg libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz | tar -xJ -C /opt \
  && mv /opt/node-v22.23.3-linux-x64 /opt/node
-# The Python side: torch for CUDA 12.4 and the diffusers library, for the
+# The Python side: torch for CUDA 12.8 (Blackwell included) and the diffusers library, for the
 # image and video families that only it loads. Its own environment, so
 # nothing else on the machine is touched.
 RUN python3 -m venv /opt/huggingfound/py \
  && /opt/huggingfound/py/bin/pip install --no-cache-dir --upgrade pip \
- && /opt/huggingfound/py/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu124 \
+ && /opt/huggingfound/py/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu128 \
  && /opt/huggingfound/py/bin/pip install --no-cache-dir "diffusers>=0.41.0" "transformers>=5.5" accelerate peft safetensors sentencepiece protobuf pillow imageio imageio-ffmpeg av ftfy gguf bitsandbytes \
  && /opt/huggingfound/py/bin/python3 -c "import torch, diffusers, transformers, peft, av; print(torch.__version__, diffusers.__version__, transformers.__version__, peft.__version__)"
 # Face embeddings for the FaceID adapters. Built from source, so a failure

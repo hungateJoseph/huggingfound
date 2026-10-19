@@ -974,6 +974,9 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   assert.equal(await page.locator("#rent-others .notice").count(), 0);
   // A sold-out size says what the site has seen of it, and can be watched:
   // checked every minute, and said when one comes free.
+  // The Community Cloud is a choice, off unless set.
+  assert.equal(await page.isChecked("#rent-community"), false);
+  assert.match(await page.locator("#rent-panel .check.community").innerText(), /Also rent from RunPod's Community Cloud/);
   const h200 = page.locator("#rent-panel .tier").nth(3);
   assert.match(await h200.locator(".stock-note").innerText(), /^(No history for this size yet; Tell me when free checks every minute\.|Not seen free in the last \d+ min of checks\.)$/);
   assert.match(await page.locator("#rent-panel .stock-row").innerText(), /^Checked at .*\. Stock changes by the minute\.\s*Check again$/);

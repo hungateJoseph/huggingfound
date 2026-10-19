@@ -405,6 +405,24 @@ With an Anthropic key, three separate things on a chat model:
   the model's names, signatures and style.
   Either result joins the conversation on a click, as Claude's version.
 
+## Blackwell cards and the Community Cloud (2026-10-19)
+
+RunPod's Secure Cloud had no A100, H100 or H200 free for hours while its
+console listed Blackwell cards (RTX PRO 6000 96 GB, RTX 5090, B300 MIG)
+and Community Cloud stock. The image is now built against CUDA 12.8 with
+compute 10.0 and 12.0 for stable-diffusion.cpp, and torch from the cu128
+index, so Blackwell cards are offered (a Blackwell pod asks for a host
+with CUDA 12.8; others still 12.4, the libraries running on any 12.x
+driver by minor-version compatibility). GB200/GB300 stay out: ARM hosts.
+Not yet run on a Blackwell card.
+
+`RUNPOD_COMMUNITY=1` (Settings, "Also rent from RunPod's Community
+Cloud", off by default) asks the catalogue with `cloud=COMMUNITY` as well;
+Secure cards stay first, Community ones fill a size Secure has none of,
+priced from `price.community`, rented with `cloud: "COMMUNITY"` and no
+data-centre placement, and labelled in the list and the bar
+(`RUNPOD_POD_CLOUD`).
+
 ## Verified on hardware, and not
 
 What has actually run on a rented machine, so the same thing is not
