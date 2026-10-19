@@ -136,7 +136,7 @@ export function agentFetch(fetchImpl) {
   };
 }
 
-export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), statusTtl = 4000, now = Date.now, budget = BUDGET, onTiers = null }) {
+export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE, proxyUrl = (id) => `https://${id}-${OLLAMA_PORT}.proxy.runpod.net`, agentUrl = (id) => `https://${id}-${AGENT_PORT}.proxy.runpod.net`, image = GPU_IMAGE, registry = GPU_REGISTRY_AUTH, imageCheck = (img) => imagePullable(img, fetchImpl), statusTtl = 4000, now = Date.now, budget = BUDGET, onTiers = null, onWatch = null }) {
   let options = { at: 0, key: "", tiers: null };
   let last = null;
   let lastAt = 0;
@@ -361,6 +361,40 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     const kept = [...slowDataCenterEntries(), [id, String(now())]];
     save({ RUNPOD_SLOW_DCS: kept.map(([d, at]) => `${d}@${at}`).join(",") });
   }
+  // ---- renting a size as soon as one is free ----------------------------
+  // A watch is kept with the account as plain text, so it survives a
+  // restart of the site: "gb|disk|max price|since|until|hold minutes|origins".
+  // Its outcome is kept as "kind|at|text" for the page to tell, once.
+  const watchState = { checkedAt: 0, lastError: "" };
+  function watchSetting() {
+    const raw = String(env().RUNPOD_WATCH || "");
+    if (!raw) return null;
+    const [gb, diskGb, maxPrice, since, until, hold, origins] = raw.split("|");
+    if (!(Number(gb) > 0)) return null;
+    return { gb: Number(gb), diskGb: Number(diskGb) || 50, maxPricePerHour: Number(maxPrice) || 0, since: Number(since) || 0, until: Number(until) || 0, holdMinutes: Number(hold) || 0, origins: origins ? origins.split(",").filter(Boolean) : [] };
+  }
+  function watchResult() {
+    const raw = String(env().RUNPOD_WATCH_RESULT || "");
+    if (!raw) return null;
+    const [kind, at, ...text] = raw.split("|");
+    return { kind, at: Number(at) || 0, text: text.join("|") };
+  }
+  // What the page is told: the watch without the origins it carries.
+  function watchInfo() {
+    const w = watchSetting();
+    return { watch: w ? { gb: w.gb, diskGb: w.diskGb, maxPricePerHour: w.maxPricePerHour, since: w.since, until: w.until, holdMinutes: w.holdMinutes, checkedAt: watchState.checkedAt || null, lastNote: watchState.lastError || null } : null, watchResult: watchResult(), holdUntil: Number(env().RUNPOD_HOLD_UNTIL) || null };
+  }
+  function endWatch(kind, text) {
+    save({ RUNPOD_WATCH: "", RUNPOD_WATCH_RESULT: `${kind}|${now()}|${String(text).replace(/\|/g, "/").slice(0, 300)}` });
+    watchState.checkedAt = 0;
+    watchState.lastError = "";
+    try {
+      onWatch?.({ kind, text });
+    } catch {
+      // telling is a nicety; the outcome is kept all the same
+    }
+  }
+
   async function tiers({ fresh = false } = {}) {
     if (!fresh && options.tiers && options.key === key() && now() - options.at < OPTIONS_TTL) return options.tiers;
     const lists = {};
@@ -463,6 +497,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       stopReason: pod.status === "EXITED" ? env().RUNPOD_LAST_STOP || null : null,
       dataCenter: pod.dataCenterId ?? null,
       cloud: env().RUNPOD_POD_CLOUD || "SECURE",
+      // A machine rented by a watch is held running for the person to come back to.
+      holdUntil: Number(env().RUNPOD_HOLD_UNTIL) || null,
+      watchResult: watchResult(),
       slowDataCenters: slowDataCenters(),
       startedAt: pod.startedAt ?? null,
       // Whether RunPod has a container up for the pod: one listed as
@@ -494,7 +531,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   const hasAgent = () => env().RUNPOD_POD_AGENT === "1";
 
   function forget(id) {
-    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "", RUNPOD_POD_CLOUD: "", RUNPOD_AGENT_TOKEN: "" };
+    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "", RUNPOD_POD_CLOUD: "", RUNPOD_HOLD_UNTIL: "", RUNPOD_AGENT_TOKEN: "" };
     if (id) agentTokens.delete(agentFor(id));
     if (id && env().OLLAMA_SERVER === urlFor(id)) {
       updates.OLLAMA_SERVER = "";
@@ -591,6 +628,74 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
   const self = {
     configured: () => Boolean(key()),
+    watching: () => watchInfo(),
+    // Rent this size as soon as one is free, at no more than this price an
+    // hour, for so many hours; once rented, the machine is held running for
+    // `holdMinutes` for the person to come back to it.
+    watchFor({ gb, diskGb = 50, maxPricePerHour, hours = 24, holdMinutes = 60, origins = [] } = {}) {
+      if (!key()) throw new RentError("Save a RunPod key first.", 400);
+      if (podId()) throw new RentError("A machine is already rented. Stop or delete it first, or use it.", 409);
+      const tier = TIERS.find((t) => t.gb === Number(gb));
+      if (!tier) throw new RentError("Pick one of the sizes on offer.");
+      const disk = Math.round(Number(diskGb));
+      if (!(disk >= 10 && disk <= 4000)) throw new RentError("The disk must be between 10 and 4000 GB.");
+      const price = Number(maxPricePerHour);
+      if (!(price > 0 && price <= 200)) throw new RentError("Say the most it may cost an hour.");
+      const h = Number(hours);
+      if (!(h >= 1 && h <= 72)) throw new RentError("Watch for 1 to 72 hours.");
+      const hold = Math.round(Number(holdMinutes));
+      if (!(hold >= 0 && hold <= 240)) throw new RentError("Hold it for 0 to 240 minutes.");
+      const allowed = origins.filter((o) => /^https?:\/\/[\w.-]+(?::\d+|:\*)?$/.test(String(o)));
+      save({ RUNPOD_WATCH: [tier.gb, disk, Math.round(price * 100) / 100, now(), now() + h * 3600e3, hold, allowed.join(",")].join("|"), RUNPOD_WATCH_RESULT: "" });
+      watchState.checkedAt = 0;
+      watchState.lastError = "";
+      return watchInfo();
+    },
+    cancelWatch() {
+      if (watchSetting()) save({ RUNPOD_WATCH: "" });
+      return watchInfo();
+    },
+    // Asked every minute by the site: rents the watched size the moment
+    // RunPod has one free at the price, and tells the account so.
+    async checkWatch() {
+      const w = watchSetting();
+      if (!w) return null;
+      if (!key()) return null;
+      if (podId()) {
+        endWatch("cancelled", "a machine was rented meanwhile, so the watch ended");
+        return "cancelled";
+      }
+      if (now() > w.until) {
+        endWatch("expired", `no ${tierLabel(TIERS.find((t) => t.gb === w.gb) ?? { gb: w.gb })} came free in the time set`);
+        return "expired";
+      }
+      watchState.checkedAt = now();
+      let offer = null;
+      try {
+        offer = (await tiers({ fresh: true })).find((t) => t.gb === w.gb) ?? null;
+      } catch (err) {
+        watchState.lastError = `RunPod did not answer (${err.message})`;
+        return null;
+      }
+      if (!offer?.available) {
+        watchState.lastError = "";
+        return null;
+      }
+      if (offer.pricePerHour > w.maxPricePerHour) {
+        watchState.lastError = `one is free at $${offer.pricePerHour.toFixed(2)} an hour, above the $${w.maxPricePerHour.toFixed(2)} you set`;
+        return null;
+      }
+      try {
+        const r = await this.rent({ gb: w.gb, diskGb: w.diskGb, origins: w.origins });
+        if (w.holdMinutes) save({ RUNPOD_HOLD_UNTIL: String(now() + w.holdMinutes * 60e3) });
+        endWatch("rented", `${r.gpu || offer.gpu?.name || "the GPU"}${r.gb ? ` ${r.gb} GB` : ""}, $${(r.costPerHour ?? offer.pricePerHour).toFixed(2)} an hour, with a ${w.diskGb} GB disk${w.holdMinutes ? `; held for you for ${w.holdMinutes} minutes` : ""}`);
+        return "rented";
+      } catch (err) {
+        // Gone again between the listing and the rent: the watch goes on.
+        watchState.lastError = `one came free but renting it failed (${err.message}); still watching`;
+        return null;
+      }
+    },
     // Whether the Community Cloud is asked as well as the Secure Cloud.
     usesCommunity: () => community(),
     others,
@@ -647,7 +752,11 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
 
     async status({ probe: wantProbe = true } = {}) {
       const id = podId();
-      if (!id) return { rented: false };
+      if (!id) {
+        // A watch, or what became of the last one, comes with the status.
+        const info = watchInfo();
+        return { rented: false, ...(info.watch || info.watchResult ? info : {}) };
+      }
       // Several parts of a page ask at once; one answer serves them all,
       // and a fresh one is not fetched again within a few seconds.
       if (last && last.id === id && now() - lastAt < statusTtl && (last.ready || !wantProbe)) return last;
@@ -917,7 +1026,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     async checkIdle() {
       const minutes = idleMinutes();
       if (!podId()) return false;
-      let active = holds() > 0 || (minutes ? now() - lastActivity < minutes * 60e3 : true);
+      let active = holds() > 0 || now() < (Number(env().RUNPOD_HOLD_UNTIL) || 0) || (minutes ? now() - lastActivity < minutes * 60e3 : true);
       // A session costing more than the cap stops whether or not it is in
       // use, but never in the middle of a picture, clip or download: it
       // stops as soon as that work ends. Looked at every few minutes, on

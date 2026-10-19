@@ -32,6 +32,7 @@ import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
 import { RentError, TIERS, createRental, tierFor, agentFetch } from "./rent.js";
 import { createStock } from "./stock.js";
+import { createPush } from "./push.js";
 import { AuthError, GUEST_HOURS, createAccounts } from "./accounts.js";
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
@@ -58,7 +59,7 @@ const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDL
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), stockFile = path.join(DATA_DIR, "stock.json"), voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), stockFile = path.join(DATA_DIR, "stock.json"), pushFile = path.join(DATA_DIR, "push-keys.json"), pushSend = null, voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
   // Calls to a rented machine's agent carry the secret it was started with.
   fetchImpl = agentFetch(fetchImpl);
   // A hosted copy does not know the visitor's computer; it describes a
@@ -84,8 +85,15 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   const rentals = new Map();
   // RunPod's stock of each size as seen over time, shared by every account.
   const stock = createStock({ file: stockFile });
+  // Notifications to a person's browser with the tab closed.
+  const push = createPush({ file: pushFile, sendImpl: pushSend });
+  // A watch that rented a card, or ended, tells the account's browser.
+  const tellWatch = (settings) => (e) => {
+    const title = e.kind === "rented" ? "Your GPU is rented" : e.kind === "expired" ? "No GPU came free" : "The GPU watch ended";
+    push.send(settings().RUNPOD_PUSH, { title, body: e.kind === "rented" ? `${e.text}. Open HuggingFound to use it.` : `${e.text}.`, kind: e.kind }).catch(() => {});
+  };
   const rentalFor = (key, settings, save) => {
-    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, onTiers: stock.record, base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}), ...(runpodBudget ? { budget: runpodBudget } : {}) }));
+    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, onTiers: stock.record, onWatch: tellWatch(settings), base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}), ...(runpodBudget ? { budget: runpodBudget } : {}) }));
     return rentals.get(key);
   };
   // Marks a run so that, when it is over, the person's machine stops unless
@@ -269,12 +277,15 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // shows in its owner's banner, and the idle watch covers it.
   if (rental && localSettings().RUNPOD_POD_ID) rental.status({ probe: false }).catch(() => {});
   if (accounts) {
-    for (const id of accounts.withPods()) {
+    // Accounts with a machine, or watching for one, are looked after from the start.
+    for (const id of new Set([...accounts.withPods(), ...accounts.withWatch()])) {
       const settings = () => accounts.settings(id);
       rentalFor(id, settings, (updates) => accounts.saveSettings(id, updates)).status({ probe: false }).catch(() => {});
     }
   }
   server.checkIdle = () => Promise.all([...rentals.values()].map((r) => r.checkIdle().catch(() => false)));
+  // Every watch, once a minute: a size that came free is rented for its account.
+  server.checkWatches = () => Promise.all([...rentals.values()].map((r) => r.checkWatch().catch(() => null)));
   // A guest whose time is up: their machine is stopped while the key still
   // works, then the keys and the machine are forgotten.
   server.sweepGuests = async () => {
@@ -291,7 +302,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     }
     return gone;
   };
-  if (idleWatch) setInterval(() => server.checkIdle().then(server.sweepGuests).catch(() => {}), 60e3).unref();
+  if (idleWatch) setInterval(() => server.checkWatches().then(server.checkIdle).then(server.sweepGuests).catch(() => {}), 60e3).unref();
   return server;
 
   // One pass: the scan, then the voices for every model in it.
@@ -824,6 +835,18 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           return send(res, 200, await mine.stop({ reason: body.reason === "away" ? `away:${Number(body.minutes) || ""}` : body.reason === "done" ? "done" : "" }));
         }
         if (req.method === "POST" && action === "start") return send(res, 200, await mine.start());
+        // Rent a size the moment it is free: the site watches RunPod for it,
+        // even with this page closed, and rents it at no more than the price set.
+        if (req.method === "POST" && action === "watch") {
+          const body = await json(req);
+          const here = `${String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers.host}`;
+          const origins = hosted ? [siteOrigin || here] : [...new Set([here, here.replace("127.0.0.1", "localhost"), here.replace("localhost", "127.0.0.1")])];
+          const out = mine.watchFor({ gb: body.gb, diskGb: body.diskGb, maxPricePerHour: body.maxPricePerHour, hours: body.hours, holdMinutes: body.holdMinutes, origins });
+          // Checked straight away, not a minute from now.
+          await mine.checkWatch().catch(() => null);
+          return send(res, 200, { ...out, ...(await mine.status({ probe: false }).catch(() => ({}))) });
+        }
+        if (req.method === "POST" && action === "unwatch") return send(res, 200, mine.cancelWatch());
         // The same machine, restarted in place: its agent starts afresh, its disk and card stay.
         if (req.method === "POST" && action === "restart") return send(res, 200, await mine.restart());
         // A bigger disk for the same machine, when a model does not fit the one it has.
@@ -993,6 +1016,16 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     // Asks Claude to check a chat answer or a generated picture. Nothing is
     // sent anywhere until the user clicks for it. The review streams back
     // as lines of JSON: text as it is written, then how it ended.
+    // Web Push: the site's public key, and a browser's subscription kept with
+    // the account, to tell it what became of its GPU watch with the tab closed.
+    if (req.method === "GET" && url.pathname === "/api/push/key") return send(res, 200, { key: await push.publicKey() });
+    if (req.method === "POST" && url.pathname === "/api/push/subscribe") {
+      if (hosted && !ctx.user) return send(res, 403, { error: "Sign in or enter a key as a guest first." });
+      const packed = push.pack((await json(req)).subscription);
+      if (!packed) return send(res, 400, { error: "That is not a browser push subscription." });
+      ctx.save({ RUNPOD_PUSH: packed });
+      return send(res, 200, { ok: true });
+    }
     if (req.method === "POST" && url.pathname === "/api/review") {
       let use = {};
       if (hosted) {

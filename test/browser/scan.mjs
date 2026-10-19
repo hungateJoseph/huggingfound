@@ -1005,7 +1005,7 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   assert.match(await page.locator("#rent-panel .stock-row").innerText(), /^Checked at .*\. Stock changes by the minute\.\s*Check again$/);
   await h200.locator(".watch-go").click();
   await h200.locator(".watching").waitFor();
-  assert.match(await h200.locator(".watching").innerText(), /Watching: checked every minute while this page is open\.[\s\S]*Rent it as soon as one is free, with a 50 GB disk/);
+  assert.match(await h200.locator(".watching").innerText(), /^Telling you when one is free, while this page is open\./);
   runpod.state.stock["NVIDIA H200"] = { 1: "LOW" };
   await page.click("#rent-refresh");
   await page.waitForFunction(() => /A 141 GB \(H200 SXM\) is free at RunPod now, \$3\.59 an hour\./.test(document.querySelector("#notice")?.textContent ?? ""));
@@ -1014,6 +1014,35 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   delete runpod.state.stock["NVIDIA H200"];
   await page.click("#rent-refresh");
   await page.waitForFunction(() => document.querySelectorAll("#rent-panel .tier")[3]?.classList.contains("off"));
+  // Rent when available: the site watches RunPod with this page closed too,
+  // rents the size within the price set, holds it, and tells.
+  await page.locator("#rent-panel .tier").nth(3).locator(".rent-when").click();
+  const rw = page.locator("#rent-panel .rent-when-form");
+  await rw.waitFor();
+  assert.equal(await rw.locator(".rw-price").inputValue(), "4.13", "the listed price and a margin");
+  assert.equal(await rw.locator(".rw-disk").inputValue(), "50");
+  await rw.locator(".rw-hold").fill("30");
+  assert.match(await rw.locator(".rw-cost").innerText(), /^Once rented it runs while you are away for up to 30 minutes, at most \$2\.0\d,/);
+  await rw.locator(".rw-go").click();
+  await page.waitForFunction(() => /Watching RunPod for a 141 GB GPU: the site checks every minute, with this page closed too, and rents one at up to \$4\.13 an hour/.test(document.querySelector("#rent-bar")?.textContent ?? ""));
+  assert.match(await page.locator("#notice").innerText(), /^Watching for a 141 GB GPU\. /);
+  assert.equal(await page.locator("#rent-panel .watch-server-stop").count(), 1, "the size shows it is being watched for");
+  // Free now: the site's minute check rents it, and the page tells.
+  runpod.state.stock["NVIDIA H200"] = { 1: "LOW" };
+  await server.checkWatches();
+  assert.equal(runpod.state.created.at(-1).gpu.id, "NVIDIA H200");
+  await page.evaluate(async () => {
+    state.rental = await api.get("/api/rent");
+    renderRental();
+  });
+  await page.waitForFunction(() => /^Your GPU is rented: .*H200.*\$3\.59 an hour, with a 50 GB disk; held for you for 30 minutes\. It is starting/.test(document.querySelector("#notice")?.textContent ?? ""));
+  assert.ok(Number(await page.evaluate(() => localStorage.getItem("watchSeen"))) > 0, "told once");
+  await page.request.post(`${base}/api/rent/delete`, { data: {} });
+  delete runpod.state.stock["NVIDIA H200"];
+  await page.evaluate(async () => {
+    state.rental = await api.get("/api/rent");
+    renderRental();
+  });
   await page.click("#close-settings");
 });
 

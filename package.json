@@ -31,6 +31,7 @@
     "stable-diffusion"
   ],
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0"
+    "@anthropic-ai/sdk": "^0.131.0",
+    "web-push": "^3.6.7"
   }
 }

@@ -176,6 +176,9 @@ export function createAccounts({ dir, secret, sessionSecret = secret, googleClie
     withPods() {
       return listIds().filter((id) => this.settings(id).RUNPOD_POD_ID);
     },
+    withWatch() {
+      return listIds().filter((id) => this.settings(id).RUNPOD_WATCH);
+    },
 
     // ---- sessions ----------------------------------------------------------
     issue(userId) {

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { startStubHub } from "./stub-hub.js";
+// What the site sent to a browser's push service.
+const pushed = [];
 import { startStubAgent } from "./stub-agent.js";
 import { startStubOllama } from "./stub-ollama.js";
 import { GPUS, KEY, startStubRunpod } from "./stub-runpod.js";
@@ -46,7 +48,7 @@ before(async () => {
   // The machine's disk, as its agent reports it: roomy, so only the tests about the disk run into it.
   agent.state.diskFreeGb = 400;
   agent.state.diskTotalGb = 500;
-  server = createServer({ envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, idleWatch: false });
+  server = createServer({ envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, idleWatch: false, pushFile: path.join(home, "push-keys.json"), pushSend: async (subscription, payload) => pushed.push({ subscription, payload }) });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -1223,4 +1225,43 @@ test("Blackwell cards are offered and rented on a CUDA 12.8 host; the Community 
   assert.equal((await post("/api/rent/delete", {})).status, 200);
   runpod.state.community = {};
   assert.equal((await post("/api/settings", { RUNPOD_COMMUNITY: false })).status, 200);
+});
+
+test("a sold-out size can be rented the moment one is free: the site watches with the page closed, rents within the price, holds the machine and tells the browser", async () => {
+  // The browser's push subscription is kept with the account.
+  assert.equal((await post("/api/push/subscribe", { subscription: { endpoint: "https://push.example/abc", keys: { p256dh: "pk", auth: "au" } } })).status, 200);
+  assert.equal((await post("/api/push/subscribe", { subscription: { endpoint: "http://insecure.example" } })).status, 400);
+  assert.match((await json("/api/push/key")).key, /\S+/);
+  // Watching the 141 GB size at no more than $3 an hour; none is free.
+  let res = await post("/api/rent/watch", { gb: 141, diskGb: 120, maxPricePerHour: 3, hours: 2, holdMinutes: 45 });
+  assert.equal(res.status, 200, await res.clone().text());
+  let body = await res.json();
+  assert.deepEqual([body.rented, body.watch.gb, body.watch.diskGb, body.watch.maxPricePerHour, body.watch.holdMinutes], [false, 141, 120, 3, 45]);
+  assert.ok(!("origins" in body.watch), "the page is not told the origins the machine will accept");
+  const made = runpod.state.created.length;
+  await server.checkWatches();
+  assert.equal(runpod.state.created.length, made, "nothing free, nothing rented");
+  // Free, but above the price set: still watching, and said why.
+  runpod.state.stock = { "NVIDIA H200": { 1: "LOW" } };
+  await server.checkWatches();
+  assert.equal(runpod.state.created.length, made);
+  body = await json("/api/rent");
+  assert.match(body.watch.lastNote, /one is free at \$3\.59 an hour, above the \$3\.00 you set/);
+  assert.equal((await post("/api/rent/unwatch", {})).status, 200);
+  assert.equal((await json("/api/rent")).watch ?? null, null, "the watch can be ended");
+  // Within the price: rented at once, held, and the browser told.
+  res = await post("/api/rent/watch", { gb: 141, diskGb: 120, maxPricePerHour: 4, hours: 2, holdMinutes: 45 });
+  body = await res.json();
+  assert.equal(body.rented, true, "a size free when the watch starts is rented straight away");
+  assert.deepEqual([runpod.state.created.at(-1).gpu.id, runpod.state.created.at(-1).mounts.persistent.size], ["NVIDIA H200", 120]);
+  assert.equal(body.watchResult.kind, "rented");
+  assert.match(body.watchResult.text, /H200.* \$3\.59 an hour, with a 120 GB disk; held for you for 45 minutes/);
+  assert.ok(body.holdUntil > Date.now() + 40 * 60e3, "held running for the person to come back");
+  assert.equal(pushed.at(-1).subscription.endpoint, "https://push.example/abc");
+  assert.equal(pushed.at(-1).payload.title, "Your GPU is rented");
+  assert.match(pushed.at(-1).payload.body, /held for you for 45 minutes\. Open HuggingFound to use it\./);
+  // With a machine rented, a watch cannot start.
+  assert.equal((await post("/api/rent/watch", { gb: 141, diskGb: 120, maxPricePerHour: 4 })).status, 409);
+  assert.equal((await post("/api/rent/delete", {})).status, 200);
+  runpod.state.stock = {};
 });

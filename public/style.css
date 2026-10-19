@@ -585,3 +585,10 @@ details.levels-note summary { cursor: pointer; }
 .code-foot { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .check.community { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 0 0 10px; font-size: 14px; }
 .code-progress { margin: 4px 0 8px; } .code-progress[hidden] { display: none; }
+
+/* Rent when available: the short form under a sold-out size. */
+.rent-when-form { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: -2px 0 10px; background: var(--surface); }
+.rent-when-form p { margin: 0 0 8px; }
+.rent-when-fields { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 8px; font-size: 14px; }
+.rent-when-fields input { width: 5.5em; margin: 0 4px; }
+.tier-watch .rent-when, .sold-out .rent-when { font-size: 13px; padding: 4px 10px; }

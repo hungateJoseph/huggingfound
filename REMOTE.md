@@ -441,6 +441,29 @@ running goes on drawing into whichever window is open):
   (`scenePending`, handed to the window on show if it was reopened while
   Claude worked), Claude's suggestion, and the prompt and avoid words.
 
+## Rent when available (2026-10-19)
+
+A sold-out size offers "Rent when available" (Settings and the model
+window). The person sets the most it may cost an hour (the listed price
+plus 15% to begin with), the disk, how long to watch (1 to 72 hours) and
+how long to hold the machine once rented (0 to 240 minutes). The watch is
+kept with the account (`RUNPOD_WATCH`, plain "gb|disk|price|since|until|
+hold|origins") and checked by the server every minute (`checkWatches`,
+also at once when it starts), so it runs with the page closed and through a
+restart of the site (`accounts.withWatch()`). On a free card within the
+price it rents, sets `RUNPOD_HOLD_UNTIL` (the idle stop and the page's
+still-there check stand aside until then), and keeps the outcome in
+`RUNPOD_WATCH_RESULT` ("rented|at|text", also "expired" and "cancelled").
+
+How the person is told: a Web Push notification (VAPID keys made once in
+DATA_DIR/push-keys.json; the browser's subscription kept with the account
+as `RUNPOD_PUSH`; `public/sw.js` shows it and opens the site on a click),
+which appears as a system notification with the tab closed while the
+browser runs. With the tab open, the page polls every 30 s and adds a
+chime, a "● GPU rented" tab title and a notice; on coming back later it
+tells once (`watchSeen` in this browser). Not yet seen on a real phone or
+desktop push service.
+
 ## Verified on hardware, and not
 
 What has actually run on a rented machine, so the same thing is not
