@@ -1367,8 +1367,19 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.fill("#trait", "video generation");
   await visitor.click("#trait-go");
   await visitor.waitForSelector("#found .model");
+  // An optional step not done (a reference part, say) stays out of the
+  // way: hidden from the list, and the try box is there all the same.
+  const withOptional = async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.plan.steps.push({ kind: "pull-image-repo", optional: true, done: false, title: "Add clips from reference pictures (62.0 GB more)", text: "Optional.", args: { repo: WAN, files: ["model_index.json"], gb: 62 } });
+    await route.fulfill({ response: res, json: body });
+  };
+  await visitor.route(/\/api\/model\?id=Wan-AI/, withOptional);
   await visitor.locator("#found .model", { hasText: "Wan2.2-TI2V-5B-Diffusers" }).locator(".name").click();
   await visitor.waitForSelector("#video-seconds");
+  assert.deepEqual(await visitor.$$eval("#steps .step", (els) => els.map((e) => [e.classList.contains("done"), e.hidden])), [[true, false], [false, true]], "the optional step is out of the list, and not in the way");
+  await visitor.unroute(/\/api\/model\?id=Wan-AI/, withOptional);
   // A short clip is one shot; a long one, on a model that starts from a
   // picture, is pieces joined: chosen apart, each with its own lengths.
   assert.deepEqual(await visitor.$$eval("#clip-kind input", (els) => els.map((e) => [e.value, e.checked])), [["short", true], ["scene", false], ["long", false]]);

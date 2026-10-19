@@ -1081,6 +1081,15 @@ async function followStep(model, plan, index, id) {
             b.disabled = true;
           }
         }
+        // The next step comes on show now that this one is done.
+        const next = plan.steps.findIndex((s) => !s.done && !s.optional);
+        if (next >= 0) $(`#steps .step[data-index="${next}"]`)?.removeAttribute("hidden");
+        const still = plan.steps.filter((s, i) => !s.done && !s.optional && i > next).length;
+        const later = $("#steps .steps-later");
+        if (later) {
+          if (next < 0 || !still) later.remove();
+          else later.textContent = `Then ${still} more step${still === 1 ? "" : "s"}, shown when this one is done.`;
+        }
         renderTry(model, plan);
       }
     } else {
@@ -1237,9 +1246,10 @@ function follow(id, onLine) {
 function renderTry(model, plan) {
   const box = $("#try");
   if (!box) return;
-  const ready = plan.steps.every((s) => s.done);
+  // An optional step (the reference part) is never in the way of trying the model.
+  const ready = plan.steps.every((s) => s.done || s.optional);
   if (!ready) {
-    const left = plan.steps.filter((s) => !s.done).length;
+    const left = plan.steps.filter((s) => !s.done && !s.optional).length;
     // What was made with the model before stays on show here, whatever
     // the machine is doing now.
     box.innerHTML = `<p class="muted small">${left === plan.steps.length ? "Run the steps above and a try box appears here." : `${left} step${left === 1 ? "" : "s"} left before you can try it.`}</p><div id="kept"></div>`;
