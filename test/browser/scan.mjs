@@ -11,6 +11,7 @@ import { MODELS, startStubHub } from "../stub-hub.js";
 import { startStubAgent } from "../stub-agent.js";
 import { startStubOllama } from "../stub-ollama.js";
 import { KEY as RUNPOD_KEY, startStubRunpod } from "../stub-runpod.js";
+import { VAST_KEY, startStubVast } from "../stub-vast.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-browser-"));
 const { createServer } = await import("../../src/server.js");
@@ -21,6 +22,7 @@ const stub = await startStubHub();
 const runpod = await startStubRunpod();
 const rentedOllama = await startStubOllama();
 const rentedAgent = await startStubAgent();
+const vast = await startStubVast({ agentPort: () => new URL(rentedAgent.url).port, ollamaPort: () => new URL(rentedOllama.url).port });
 // The agent on a rented machine answers only with the secret it was started
 // with: every call, from the page or the site, has to carry it.
 rentedAgent.state.token = () => Object.values(runpod.state.pods).map((p) => p.env?.HF_AGENT_TOKEN).filter(Boolean);
@@ -127,7 +129,7 @@ const reviewer = {
     return { declined: false, model: "claude-opus-5", note: "" };
   },
 };
-const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, runpodAgent: () => rentedAgent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, idleWatch: false });
+const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, runpodAgent: () => rentedAgent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, vastBase: vast.base, vastTunnelCheck: (u) => /^http:\/\/127\.0\.0\.1:\d+$/.test(u), idleWatch: false });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -1055,6 +1057,38 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.click("#close-settings");
 });
 
+await step("a Vast.ai key adds its cards to the same list, each marked Vast.ai, and a Vast.ai row rents there", async () => {
+  await openSettings();
+  await page.fill("#vast-key", VAST_KEY);
+  await page.click("#save-vast");
+  await page.waitForFunction(() => /^A key is saved/.test(document.querySelector("#vast-status")?.textContent ?? ""));
+  await page.waitForSelector("#rent-panel .tier.vast");
+  const first = await page.locator("#rent-panel .tier.vast").first().innerText();
+  assert.match(first, /24 GB GPU\s+RTX 4090, \$0\.35 an hour, Vast\.ai/);
+  assert.match(first, /A Vast\.ai host in Norway, NO; it charges \$4\.10 a TB for downloads\./);
+  assert.doesNotMatch(await page.locator("#rent-panel .tier:not(.vast)").first().innerText(), /Vast\.ai/, "RunPod's rows stay as they were");
+  assert.match(await page.locator("#rent-panel").innerText(), /At Vast\.ai the disk is fixed when the machine is rented/);
+  // The 80 GB card at Vast.ai: rented there, and the bar says where.
+  await page.locator('#rent-panel input[value="80:vast"]').check();
+  acceptDialogs = true;
+  await page.click("#rent-go");
+  await page.waitForFunction(() => /\(Vast\.ai\)/.test(document.querySelector("#rent-bar")?.textContent ?? ""));
+  acceptDialogs = false;
+  assert.equal(vast.state.created.at(-1).offerId, 1010);
+  assert.match(await page.locator("#rent-bar").innerText(), /Rented GPU: H100 SXM 80 GB \(Vast\.ai\)/);
+  await page.waitForSelector("#rent-panel .rent-card");
+  assert.match(await page.locator("#rent-panel .rent-head").innerText(), /H100 SXM, 80 GB at Vast\.ai/);
+  acceptDialogs = true;
+  await page.click("#rent-delete");
+  await page.waitForSelector("#rent-panel .tier.vast");
+  acceptDialogs = false;
+  assert.equal(vast.state.destroyed.length, 1);
+  // Without the key, RunPod's list alone again.
+  await page.click("#clear-vast");
+  await page.waitForFunction(() => /^No key saved/.test(document.querySelector("#vast-status")?.textContent ?? "") && document.querySelector("#rent-panel .tier") && !document.querySelector("#rent-panel .tier.vast"));
+  await page.click("#close-settings");
+});
+
 await step("every card says what the model makes, and a search for pictures marks the text models that cannot", async () => {
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
@@ -1924,7 +1958,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.waitForSelector("#gpu-runs li");
   // The machine's own report, to read or copy: what it runs, holds and how its failures went.
   await visitor.click("#gpu-report");
-  await visitor.waitForFunction(() => /Agent 23, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  await visitor.waitForFunction(() => /Agent 24, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
   assert.match(await visitor.locator("#gpu-report-out").innerText(), /Python 3\.12\.3, torch 2\.6\.0 \(CUDA 12\.4\), diffusers 0\.41\.0, transformers 5\.5\.3, peft 0\.18\.0, av 15\.0\.0[\s\S]*Cards: Fake A40 48 GB[\s\S]*Disk: 41\.5 GB free of 50, 8\.5 GB in the machine's folders \(a quota; the size as the site said it\)[\s\S]*No failures on this machine\.[\s\S]*Journal \(tail\):/);
   assert.equal(await visitor.locator("#gpu-report-copy").isHidden(), false);
   assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");

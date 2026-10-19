@@ -1,4 +1,4 @@
-# The machine image HuggingFound rents at RunPod: Ollama for chat models and
+# The machine image HuggingFound rents at RunPod and Vast.ai: Ollama for chat models and
 # stable-diffusion.cpp for image models, with a small agent that downloads
 # image models onto the machine and makes pictures on request. Built by
 # GitHub Actions (.github/workflows/gpu-image.yml) and published as
@@ -42,6 +42,11 @@ RUN python3 -m venv /opt/huggingfound/py \
 RUN /opt/huggingfound/py/bin/pip install --no-cache-dir insightface onnxruntime-gpu opencv-python-headless \
  && /opt/huggingfound/py/bin/python3 -c "import insightface, onnxruntime; print('insightface', insightface.__version__)" \
  || echo "insightface could not be installed; FaceID add-ons will say so"
+# Cloudflare's tunnel client, for the HTTPS addresses a Vast.ai machine
+# needs (start.sh opens them only there; RunPod has its own proxy).
+RUN curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared \
+ && chmod +x /usr/local/bin/cloudflared \
+ && cloudflared --version
 COPY --from=build /src/build/bin/sd-cli /src/build/bin/sd-server /opt/huggingfound/bin/
 COPY --from=build /out/lib/ /opt/huggingfound/lib/
 # Every library must resolve here, or the build fails now rather than on a

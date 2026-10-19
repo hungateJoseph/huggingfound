@@ -253,7 +253,7 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
 export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4, "pull-lora": 19 };
-export const AGENT_VERSION = 23;
+export const AGENT_VERSION = 24;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;

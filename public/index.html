@@ -318,9 +318,9 @@ npm start</code>
         <button class="ghost" id="close-settings" aria-label="Close">Close</button>
       </div>
       <details class="section" id="sec-rent" open>
-        <summary><h3>Rent a GPU by the hour</h3><span class="muted small">RunPod key, sizes, the rented machine and its bill</span></summary>
+        <summary><h3>Rent a GPU by the hour</h3><span class="muted small">RunPod and Vast.ai keys, sizes, the rented machine and its bill</span></summary>
         <div class="rent" id="rent">
-        <p class="muted small">With a RunPod key saved, pick a size: HuggingFound rents a machine there, runs chat and image models on it, stops it once it has sat idle, and deletes it when you say so. RunPod bills you by the hour while it runs; HuggingFound charges nothing.</p>
+        <p class="muted small">With a RunPod or Vast.ai key saved, pick a size: HuggingFound rents a machine there, runs chat and image models on it, stops it once it has sat idle, and deletes it when you say so. RunPod bills you by the hour while it runs; HuggingFound charges nothing.</p>
         <label class="field">
           <span>RunPod API key</span>
           <input type="password" id="runpod-key" autocomplete="off" placeholder="rpa_...">
@@ -330,6 +330,16 @@ npm start</code>
         <div class="actions">
           <button class="primary" id="save-runpod">Save</button>
           <button class="ghost" id="clear-runpod">Remove</button>
+        </div>
+        <label class="field">
+          <span>Vast.ai API key (optional)</span>
+          <input type="password" id="vast-key" autocomplete="off" placeholder="Vast.ai key">
+          <small class="muted">A second place to rent from: Vast.ai's GPUs are listed with RunPod's below, marked Vast.ai, and are often in stock when RunPod's are not. Make an account at <a href="https://cloud.vast.ai" target="_blank" rel="noopener">vast.ai</a> and add some credit, then on the Keys page (Account, Keys) create an API key; it has to rent and stop machines. It is kept in the settings file on this computer and sent only to Vast.ai.</small>
+        </label>
+        <p class="muted small" id="vast-status"></p>
+        <div class="actions">
+          <button class="primary" id="save-vast">Save</button>
+          <button class="ghost" id="clear-vast">Remove</button>
         </div>
         <div id="rent-panel"></div>
         </div>

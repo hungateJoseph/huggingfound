@@ -464,6 +464,51 @@ chime, a "● GPU rented" tab title and a notice; on coming back later it
 tells once (`watchSeen` in this browser). Not yet seen on a real phone or
 desktop push service.
 
+## Vast.ai as a second place to rent (2026-10-19, image 24)
+
+A Vast.ai key (Settings, under RunPod's; `VAST_API_KEY`, kept like the
+RunPod key) adds Vast.ai's cards to the same list: each size keeps its
+RunPod row, and gets a row of Vast.ai's cheapest offer for it, marked
+"Vast.ai" with the host's place and its download price. The model window's
+size list holds both too. Either key alone works.
+
+- `src/vast.js` speaks Vast.ai's API (console.vast.ai/api/v0): offers from
+  `POST /bundles/` (verified, rentable, not rented, the card count, CUDA
+  12.4 or newer, two direct ports, reliability 0.95, 200 Mb/s down, amd64,
+  on-demand, the price with 50 GB of disk), rent with `PUT /asks/{id}/`
+  (the image, the disk, label "huggingfound", runtype "args" so the
+  image's own entrypoint runs, `-p 11434:11434` and `-p 7860:7860`),
+  `GET /instances/{id}/` (`{"instances": null}` once gone), `PUT` with a
+  state to stop or start, `PUT /instances/reboot/{id}/`, `DELETE`.
+- `rent.js` keeps one rental: the machine in force says where it is
+  (`RUNPOD_POD_PROVIDER` "vast"), and stop, start, restart, delete, the
+  status, the idle stop, the spend cap, "Rent when available" (RunPod's
+  card first, then Vast.ai's, within the price) and the other machines on
+  the account all branch on it. A Vast.ai disk cannot be grown (the grow
+  step says to replace the machine); its price a GB a month is the host's
+  (`RUNPOD_POD_DISK_RATE`), the same running or stopped.
+- HTTPS: Vast.ai gives only the host's IP and mapped ports. With
+  `HF_TUNNEL=1` the image's start.sh opens a Cloudflare quick tunnel for
+  Ollama and one for the agent (cloudflared is in the image, image 24);
+  the agent reads their addresses from the logs and says them on /health
+  (`tunnels`). The site asks that at the mapped agent port over plain HTTP
+  with the machine's secret, keeps them (`RUNPOD_POD_URL`,
+  `RUNPOD_POD_AGENT_URL`, only `https://*.trycloudflare.com`), and points
+  chat and pictures at them. They change at every start, so a stop or
+  start forgets them and they are learned again.
+- The agent's idle stop asks Vast.ai to stop the machine
+  (`CONTAINER_ID`, `CONTAINER_API_KEY`, which Vast.ai sets in every
+  container) before exiting, since an exited container there would leave
+  the card billing; and the site stops a machine whose container ended
+  while it was meant to run.
+- A stopped Vast.ai machine starts again only on its own host; while that
+  card is taken it waits, and the panel says so (`waitingForGpu`) with
+  Replace the machine.
+
+Not yet verified on Vast.ai itself: the search filters as Vast.ai takes
+them, a rent, the image pull time, the tunnels coming up and carrying
+chat streams and picture jobs, the self-stop with the container key.
+
 ## Verified on hardware, and not
 
 What has actually run on a rented machine, so the same thing is not

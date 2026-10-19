@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,7 +42,7 @@ before(async () => {
   fs.writeFileSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part"), "half");
   agent = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], {
     // The Python side is played by a Node script that speaks the same protocol.
-    env: { ...process.env, HF_OLLAMA_BIN: fakeOllama, OLLAMA_HOST: `127.0.0.1:${ollamaPort}`, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js"), HF_DISK_GB: "50" },
+    env: { ...process.env, HF_OLLAMA_BIN: fakeOllama, OLLAMA_HOST: `127.0.0.1:${ollamaPort}`, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js"), HF_DISK_GB: "50", HF_TUNNEL_DIR: path.join(home, "tunnels") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let errors = "";
@@ -101,7 +102,15 @@ test("it answers health, and only the allowed origins may call it from a page", 
   delete h.diskFreeGb;
   delete h.diskTotalGb;
   delete h.diskUsedGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "23", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "24", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  // On Vast.ai the Cloudflare tunnels' addresses are read from their logs
+  // and said on /health: the latest each, since a dropped tunnel comes back
+  // with a new one.
+  fs.mkdirSync(path.join(home, "tunnels"), { recursive: true });
+  fs.writeFileSync(path.join(home, "tunnels", "hf-tunnel-ollama.log"), "INF Requesting new quick Tunnel on trycloudflare.com...\nINF |  https://old-words-here.trycloudflare.com  |\nERR lost connection\nINF |  https://brave-new-words.trycloudflare.com  |\n");
+  fs.writeFileSync(path.join(home, "tunnels", "hf-tunnel-agent.log"), "INF |  https://agent-side-words.trycloudflare.com  |\n");
+  assert.deepEqual((await (await get("/health")).json()).tunnels, { ollama: "https://brave-new-words.trycloudflare.com", agent: "https://agent-side-words.trycloudflare.com" });
+  fs.rmSync(path.join(home, "tunnels"), { recursive: true, force: true });
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -463,6 +472,24 @@ test("the machine stops itself when nothing has used it and the site has not ren
   assert.equal(early, null, "still up under the lease");
   const later = await Promise.race([b.exit, new Promise((r) => setTimeout(() => r(null), 5000))]);
   assert.ok(later && later.code === 0, "and gone once the lease has run out without renewal");
+  // On Vast.ai the machine asks Vast.ai to stop it, with the key Vast.ai gives every machine, then exits.
+  const asked = [];
+  const vastApi = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      asked.push({ method: req.method, url: req.url, auth: req.headers.authorization, body: JSON.parse(body || "{}") });
+      res.end(JSON.stringify({ success: true }));
+    });
+  });
+  await new Promise((r) => vastApi.listen(0, "127.0.0.1", r));
+  const v = spawnAgent({ HF_IDLE_MINUTES: "0.01", CONTAINER_ID: "5123", CONTAINER_API_KEY: "machine-key", HF_VAST_API: `http://127.0.0.1:${vastApi.address().port}/api/v0` });
+  await v.url;
+  const vended = await Promise.race([v.exit, new Promise((r) => setTimeout(() => r(null), 5000))]);
+  vastApi.close();
+  assert.ok(vended && vended.code === 0, "it stopped itself");
+  assert.deepEqual(asked, [{ method: "PUT", url: "/api/v0/instances/5123/", auth: "Bearer machine-key", body: { state: "stopped" } }]);
+  assert.match(vended.out, /Asked Vast\.ai to stop this machine: HTTP 200/);
   // Idle time 0 means the day-long ceiling, not for ever.
   const c = spawnAgent({ HF_IDLE_MINUTES: "0", HF_IDLE_CEILING_MINUTES: "0.01" });
   await c.url;
@@ -533,16 +560,16 @@ test("removing a model unloads it and frees the disk", async () => {
 
 test("the machine reports on itself: what it runs, holds, has loaded and how its failures went, with a journal on its disk", async () => {
   const d = await (await get("/diagnostics")).json();
-  assert.equal(d.version, "23");
+  assert.equal(d.version, "24");
   assert.ok(d.agentUptimeSeconds >= 0);
   assert.deepEqual([d.env.HF_DISK_GB, typeof d.disk.totalGb, Array.isArray(d.models), Array.isArray(d.failures), typeof d.journal], ["50", "number", true, true, "string"]);
-  assert.match(d.journal, /agent 23 started: disk 50 GB/);
+  assert.match(d.journal, /agent 24 started: disk 50 GB/);
   assert.match(d.journal, /job .* done|failed/, "jobs from the tests before are in it");
   assert.ok(d.failures.length > 0, "the failed jobs of the tests before are remembered");
   for (const k of ["at", "error", "jobId", "kind", "trace", "what"]) assert.ok(k in d.failures[0], `a failure carries ${k}`);
   assert.equal(typeof d.ollamaLog, "string", "Ollama's log is in the report");
   const text = await (await get("/journal?lines=50")).text();
-  assert.match(text, /agent 23 started/);
+  assert.match(text, /agent 24 started/);
   assert.ok(fs.existsSync(path.join(modelsDir, "..", "journal.log")), "the journal lives on the disk beside the models");
 });
 

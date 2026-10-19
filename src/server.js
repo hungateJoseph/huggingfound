@@ -31,6 +31,7 @@ import { isAddon, qualityScore } from "./quality.js";
 import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
 import { RentError, TIERS, createRental, tierFor, agentFetch } from "./rent.js";
+import { VastError } from "./vast.js";
 import { createStock } from "./stock.js";
 import { createPush } from "./push.js";
 import { AuthError, GUEST_HOURS, createAccounts } from "./accounts.js";
@@ -54,12 +55,12 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "RUNPOD_SLOW_DCS", "RUNPOD_COMMUNITY", "HF_TOKEN"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "VAST_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "RUNPOD_SLOW_DCS", "RUNPOD_COMMUNITY", "HF_TOKEN"]);
 // Models a person has hidden from search and Browse: ids, comma-separated.
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), stockFile = path.join(DATA_DIR, "stock.json"), pushFile = path.join(DATA_DIR, "push-keys.json"), pushSend = null, voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), stockFile = path.join(DATA_DIR, "stock.json"), pushFile = path.join(DATA_DIR, "push-keys.json"), pushSend = null, voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, vastBase, vastDirect, vastTunnelCheck, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
   // Calls to a rented machine's agent carry the secret it was started with.
   fetchImpl = agentFetch(fetchImpl);
   // A hosted copy does not know the visitor's computer; it describes a
@@ -93,7 +94,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     push.send(settings().RUNPOD_PUSH, { title, body: e.kind === "rented" ? `${e.text}. Open HuggingFound to use it.` : `${e.text}.`, kind: e.kind }).catch(() => {});
   };
   const rentalFor = (key, settings, save) => {
-    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, onTiers: stock.record, onWatch: tellWatch(settings), base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}), ...(runpodBudget ? { budget: runpodBudget } : {}) }));
+    if (!rentals.has(key)) rentals.set(key, createRental({ env: settings, save, fetchImpl, onTiers: stock.record, onWatch: tellWatch(settings), base: runpodBase, proxyUrl: runpodProxy, agentUrl: runpodAgent, ...(vastBase ? { vastBase } : {}), ...(vastDirect ? { vastDirect } : {}), ...(vastTunnelCheck ? { tunnelCheck: vastTunnelCheck } : {}), ...(runpodImageCheck ? { imageCheck: runpodImageCheck } : {}), ...(runpodStatusTtl != null ? { statusTtl: runpodStatusTtl } : {}), ...(runpodBudget ? { budget: runpodBudget } : {}) }));
     return rentals.get(key);
   };
   // Marks a run so that, when it is over, the person's machine stops unless
@@ -385,6 +386,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         // said to a model never passes through this server.
         chatServer: remote ? { url: remote, agent: imageAgent(ctx) || null, gpuGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).comfortableGb, rented: rentedChat(ctx), direct: hosted } : null,
         runpodKey: saved.RUNPOD_API_KEY ? mask(saved.RUNPOD_API_KEY) : "",
+        vastKey: saved.VAST_API_KEY ? mask(saved.VAST_API_KEY) : "",
         registryAuth: saved.RUNPOD_REGISTRY_AUTH || "",
         rental: ctx.rental ? ctx.rental.cached() : hosted ? null : { rented: false },
         rentTiers: TIERS,
@@ -438,7 +440,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (!hosted) return send(res, 404, { error: "Not found" });
       const body = await json(req);
       const updates = {};
-      for (const [key, pattern, what] of [["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"]]) {
+      for (const [key, pattern, what] of [["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"], ["VAST_API_KEY", /^[\w-]{20,200}$/, "a Vast.ai API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"]]) {
         if (key in body) {
           const value = String(body[key] ?? "").trim();
           if (!pattern.test(value)) return send(res, 400, { error: `That does not look like ${what}` });
@@ -477,7 +479,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (typeof body.HF_TOKEN !== "string") return send(res, 400, { error: "HF_TOKEN must be a string" });
         updates.HF_TOKEN = body.HF_TOKEN.trim();
       }
-      for (const [key, pattern, what] of [["GITHUB_TOKEN", /^[\w-]{20,255}$/, "a GitHub token"], ["YOUTUBE_API_KEY", /^[\w-]{20,80}$/, "a YouTube API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"], ["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"]]) {
+      for (const [key, pattern, what] of [["GITHUB_TOKEN", /^[\w-]{20,255}$/, "a GitHub token"], ["YOUTUBE_API_KEY", /^[\w-]{20,80}$/, "a YouTube API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"], ["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"], ["VAST_API_KEY", /^[\w-]{20,200}$/, "a Vast.ai API key"]]) {
         if (key in body) {
           if (typeof body[key] !== "string") return send(res, 400, { error: `${key} must be a string` });
           const value = body[key].trim();
@@ -695,7 +697,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         : buildPlan({ model, files: model.files, machine: planMachine, detected, hasToken: Boolean(own), preferredFile: pick?.file, timings: hosted ? {} : readTimings(), imageServer: hosted ? null : await remoteImageServer(), twin: await diffusersTwin(model, own) });
       // What the page needs to offer the other place: the size of GPU this
       // file wants, and whether a machine is rented already.
-      const choice = ["ollama", "sd", "diffusers"].includes(kind) ? { where: useRemote || gpuOnly ? "rented" : "local", rented: Boolean(remote), tier: gpuOnly && plan.addon ? 24 : tierFor(plan.tierGb ?? plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY), ...(gpuOnly ? { gpuOnly: true } : {}) } : null;
+      const choice = ["ollama", "sd", "diffusers"].includes(kind) ? { where: useRemote || gpuOnly ? "rented" : "local", rented: Boolean(remote), tier: gpuOnly && plan.addon ? 24 : tierFor(plan.tierGb ?? plan.file?.gb ?? guessSizeGb({ id, runnerId: kind }))?.gb ?? null, hasRunpodKey: Boolean(ctx.settings().RUNPOD_API_KEY || ctx.settings().VAST_API_KEY), ...(gpuOnly ? { gpuOnly: true } : {}) } : null;
       // A step whose download is already going (started from this window
       // earlier, or from another tab) shows its progress instead of a button.
       const owner = ctx.user?.id ?? null;
@@ -755,7 +757,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           const tiers = mine.configured() ? await mine.tiers({ fresh: url.searchParams.get("fresh") === "1" }) : TIERS.map((t) => ({ ...t, gpu: null, pricePerHour: null, available: false }));
           // With each size, what the site has seen of its stock: how long it
           // has been sold out and how long it took to come back before.
-          return send(res, 200, { configured: mine.configured(), community: mine.usesCommunity(), tiers, stock: stock.summaries(tiers.map((t) => t.gb)), checkedAt: Date.now() });
+          return send(res, 200, { configured: mine.configured(), providers: mine.providers(), community: mine.usesCommunity(), tiers, stock: stock.summaries(tiers.map((t) => t.gb)), checkedAt: Date.now() });
         }
         if (req.method === "GET" && action === "registries") return send(res, 200, { registries: mine.configured() ? await mine.registries() : [] });
         // The other HuggingFound machines on the RunPod account, each still
@@ -783,7 +785,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           // from this page's address: the site's, or the app's own.
           const here = `${String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers.host}`;
           const origins = hosted ? [siteOrigin || here] : [...new Set([here, here.replace("127.0.0.1", "localhost"), here.replace("localhost", "127.0.0.1")])];
-          return send(res, 200, await mine.rent({ gb: body.gb, diskGb: body.diskGb ?? 50, origins }));
+          return send(res, 200, await mine.rent({ gb: body.gb, diskGb: body.diskGb ?? 50, origins, provider: body.provider === "vast" ? "vast" : "runpod" }));
         }
         // A message sent straight from the browser to the machine tells the
         // idle watch the machine is in use; nothing of the message comes here.
@@ -857,7 +859,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (req.method === "POST" && action === "delete") return send(res, 200, await mine.remove());
         return send(res, 404, { error: "Not found" });
       } catch (err) {
-        return send(res, err instanceof RentError ? err.status : 500, { error: err.message, ...(err.noGpu ? { noGpu: true } : {}), ...(err.busy ? { busy: true } : {}) });
+        return send(res, err instanceof RentError || err instanceof VastError ? err.status : 500, { error: err.message, ...(err.noGpu ? { noGpu: true } : {}), ...(err.busy ? { busy: true } : {}) });
       }
     }
     // Whether the chat server answers, and what it holds.

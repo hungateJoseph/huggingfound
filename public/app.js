@@ -43,6 +43,7 @@ async function load() {
   if (s.hosted) {
     $("#env-note").textContent = s.user?.guest ? "Kept with your guest keys on this site, until they expire." : "Kept with your account on this site.";
     $("#runpod-key").nextElementSibling.textContent = "Make an account at runpod.io and add some credit, then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. It is kept encrypted with your keys here and sent only to RunPod.";
+    $("#vast-key").nextElementSibling.textContent = "A second place to rent from: Vast.ai's GPUs are listed with RunPod's below, marked Vast.ai, and are often in stock when RunPod's are not. Make an account at vast.ai and add some credit, then on the Keys page (Account, Keys) create an API key; it has to rent and stop machines. It is kept encrypted with your keys here and sent only to Vast.ai.";
   } else {
     $("#env-path").textContent = s.envFile;
   }
@@ -71,15 +72,17 @@ async function load() {
   state.idleSet = Boolean(s.idleSet);
   state.maxSpend = s.maxSpend ?? 50;
   state.presenceMinutes = s.presenceMinutes ?? 30;
-  if (state.runpodKey !== s.runpodKey) state.others = null;
+  if (state.runpodKey !== s.runpodKey || state.vastKey !== (s.vastKey || "")) state.others = null;
   state.runpodKey = s.runpodKey;
+  state.vastKey = s.vastKey || "";
+  $("#vast-status").textContent = s.vastKey ? `A key is saved (${s.vastKey}).` : s.rental?.rented && s.rental.provider === "vast" ? "No key saved, but a Vast.ai machine is still rented: enter the key of the account that rented it to stop or delete it." : "No key saved; only RunPod is used.";
   state.registryAuth = s.registryAuth || "";
   if (state.others == null) loadOthersState();
   state.stopOnQuit = s.stopOnQuit;
   $("#runpod-status").textContent = s.runpodKey ? `A key is saved (${s.runpodKey}).` : s.rental?.rented ? "No key saved, but a machine is still rented: enter the key of the account that rented it to stop or delete it." : state.hosted ? "No key saved; renting is off." : "No key saved; renting is off. The chat server above can still be set by hand.";
   state.runpodKey = s.runpodKey || "";
   renderRental();
-  if (s.runpodKey && !state.rentOptions) loadRentOptions();
+  if ((s.runpodKey || s.vastKey) && !state.rentOptions) loadRentOptions();
   renderRunners();
   if (s.scan?.at) {
     const saved = await api.get("/api/models");
@@ -829,19 +832,20 @@ function rentAskHtml(choice, plan) {
   if (choice.hasRunpodKey) {
     // With a key saved, renting is one choice and one button here; the
     // key never comes up again while it is saved.
+    // Every free card, RunPod's and Vast.ai's, in one list.
     const options = state.rentOptions ?? [];
-    const free = options.filter((t) => t.available && t.pricePerHour != null);
-    const pick = free.find((t) => t.gb === choice.tier) ?? free.find((t) => t.gb > (choice.tier ?? 0)) ?? free[0] ?? null;
+    const free = rentRows(options).filter((t) => t.available && t.pricePerHour != null);
+    const pick = free.find((t) => t.key === state.rentWantKey && t.gb === choice.tier) ?? free.find((t) => t.gb === choice.tier) ?? free.find((t) => t.gb > (choice.tier ?? 0)) ?? free[0] ?? null;
     const sizes = free.length
-      ? `<label class="field"><span>Size</span><select id="ask-size">${free.map((t) => `<option value="${t.gb}" ${pick && t.gb === pick.gb ? "selected" : ""}>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB` : `${t.gb} GB`}, ${esc(t.gpu.name)}, ${money(t.pricePerHour)} an hour${t.gpu.cloud === "COMMUNITY" ? ", Community Cloud" : ""}${t.gb === choice.tier ? " (recommended)" : ""}</option>`).join("")}</select></label>`
+      ? `<label class="field"><span>Size</span><select id="ask-size">${free.map((t) => `<option value="${t.key}" ${pick && t.key === pick.key ? "selected" : ""}>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB` : `${t.gb} GB`}, ${esc(t.gpu.name)}, ${money(t.pricePerHour)} an hour${placeTag(t)}${t.gb === choice.tier ? " (recommended)" : ""}</option>`).join("")}</select></label>`
       : state.rentOptionsError
-        ? `<p class="muted small">RunPod is not answering about sizes: ${esc(state.rentOptionsError)}</p>`
-        : options.length ? `<p class="muted small">No card is free at RunPod right now; it changes by the minute. Try again shortly.</p>` : `<p class="muted small">Asking RunPod for sizes and prices</p>`;
-    // The size the model wants is sold out: how long, and a watch for it.
-    const wantedOut = options.find((t) => t.gb === choice.tier && !t.available && t.gpu);
-    const outHtml = wantedOut ? `<div class="notice warn sold-out"><p>The ${wantedOut.count > 1 ? `${wantedOut.count} × ${wantedOut.gb / wantedOut.count} GB` : `${wantedOut.gb} GB`} size this model wants is sold out at RunPod right now. ${esc(stockText(wantedOut))}</p><p class="tools-row">${rentWhenFreeHtml(wantedOut)}${state.rental?.watch?.gb === wantedOut.gb ? "" : watchHtml(wantedOut)}<button class="ghost" id="ask-check">Check again</button></p></div>` : "";
+        ? `<p class="muted small">${placesText()} ${state.runpodKey && state.vastKey ? "are" : "is"} not answering about sizes: ${esc(state.rentOptionsError)}</p>`
+        : options.length ? `<p class="muted small">No card is free at ${placesText()} right now; it changes by the minute. Try again shortly.</p>` : `<p class="muted small">Asking ${placesText()} for sizes and prices</p>`;
+    // The size the model wants is sold out everywhere: how long, and a watch for it.
+    const wantedOut = options.find((t) => t.gb === choice.tier && !(state.runpodKey && t.available) && (t.gpu || t.vast) && !t.vast?.available);
+    const outHtml = wantedOut ? `<div class="notice warn sold-out"><p>The ${wantedOut.count > 1 ? `${wantedOut.count} × ${wantedOut.gb / wantedOut.count} GB` : `${wantedOut.gb} GB`} size this model wants is sold out at ${placesText()} right now. ${state.runpodKey ? esc(stockText(wantedOut)) : ""}</p><p class="tools-row">${rentWhenFreeHtml(wantedOut)}${state.rental?.watch?.gb === wantedOut.gb ? "" : watchHtml(wantedOut)}<button class="ghost" id="ask-check">Check again</button></p></div>` : "";
     return `<div class="rent-ask rent-offer">
-      <p><b>Rent a GPU for this.</b> ${esc(size)} RunPod bills your account by the hour while it runs; it stops itself after sitting idle, and the bar at the top can stop or delete it any time.</p>
+      <p><b>Rent a GPU for this.</b> ${esc(size)} ${placesText().replace(" and ", " or ")} bills your account by the hour while it runs; it stops itself after sitting idle, and the bar at the top can stop or delete it any time.</p>
       ${outHtml}
       ${sizes}
       <div class="actions"><button class="primary" id="ask-rent" ${pick ? "" : "disabled"}>${pick ? `Rent it, ${money(pick.pricePerHour)} an hour` : "Rent it"}</button><button class="ghost" id="ask-sizes">Disk size and other settings</button>${back}</div>
@@ -878,8 +882,7 @@ function wireRentAsk(body, model, choice) {
   // Under the offer: what one picture or clip would cost at the chosen size.
   const sayPerQuery = () => {
     const note = body.querySelector("#ask-rent-note");
-    const gb = Number(body.querySelector("#ask-size")?.value);
-    const offer = (state.rentOptions ?? []).find((t) => t.gb === gb);
+    const offer = rentRow(body.querySelector("#ask-size")?.value);
     if (note && offer) note.textContent = perQueryText(offer.pricePerHour).trim();
     // The button's price is the chosen size's, not the first one's.
     const btn = body.querySelector("#ask-rent");
@@ -888,7 +891,9 @@ function wireRentAsk(body, model, choice) {
   sayPerQuery();
   body.querySelector("#ask-size")?.addEventListener("change", sayPerQuery);
   body.querySelector("#ask-sizes")?.addEventListener("click", () => {
-    state.rentWant = Number(body.querySelector("#ask-size")?.value) || choice.tier;
+    const row = rentRow(body.querySelector("#ask-size")?.value);
+    state.rentWant = row?.gb || choice.tier;
+    state.rentWantKey = row?.key ?? null;
     state.rentFrom = model.id;
     if (state.rentDiskWant) state.rentDisk = Math.max(Number(state.rentDisk ?? 50), state.rentDiskWant);
     $("#settings").hidden = false;
@@ -897,19 +902,20 @@ function wireRentAsk(body, model, choice) {
     $("#rent").scrollIntoView({ block: "start" });
   });
   body.querySelector("#ask-rent")?.addEventListener("click", async () => {
-    const gb = Number(body.querySelector("#ask-size")?.value);
-    const offer = (state.rentOptions ?? []).find((t) => t.gb === gb);
-    if (!offer) return;
+    const offer = rentRow(body.querySelector("#ask-size")?.value);
+    if (!offer?.gpu) return;
+    const gb = offer.gb;
+    state.rentWantKey = offer.key;
     // The disk is at least what this model wants, with room to spare.
     const diskGb = Math.max(Number(state.rentDisk ?? 50), Number(state.rentDiskWant ?? 0));
-    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${perQueryText(offer.pricePerHour)}${safeguardText(offer.pricePerHour)}`)) return;
+    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at ${placeOf(offer)} for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${perQueryText(offer.pricePerHour)}${safeguardText(offer.pricePerHour)}`)) return;
     if (!(await guardOthers())) return;
     const btn = body.querySelector("#ask-rent");
     const note = body.querySelector("#ask-rent-note");
     btn.disabled = true;
     btn.textContent = "Renting";
     try {
-      state.rental = await api.post("/api/rent", { gb, diskGb });
+      state.rental = await api.post("/api/rent", { gb, diskGb, provider: offer.provider });
     } catch (err) {
       note.textContent = `Could not rent it: ${err.message}`;
       btn.disabled = false;
@@ -948,6 +954,7 @@ function wireRentAsk(body, model, choice) {
     // The key entry gives way to the one-time rental, right here.
     state.rentOptions = null;
     state.rentWant = choice.tier;
+    state.rentWantKey = null;
     state.rentFrom = model.id;
     await load();
     if (state.open) openModel(state.open);
@@ -4974,6 +4981,34 @@ function rentalPhase(r) {
   return [r.status.toLowerCase(), "error"];
 }
 
+// Where GPUs are rented from, by the keys saved: RunPod, Vast.ai, or both.
+function placesText() {
+  const p = [state.runpodKey ? "RunPod" : "", state.vastKey ? "Vast.ai" : ""].filter(Boolean);
+  return p.length ? p.join(" and ") : "RunPod";
+}
+function placeOf(r) {
+  return r?.provider === "vast" || r?.cloud === "VAST" ? "Vast.ai" : "RunPod";
+}
+// Every card on offer in one list: each size at RunPod, and the same size
+// at Vast.ai when a Vast.ai key is saved. A row's key is its size, with
+// ":vast" for Vast.ai's; the rest of a row reads like a size from RunPod.
+function rentRows(options = state.rentOptions ?? []) {
+  const rows = [];
+  for (const t of options) {
+    if (state.runpodKey || !state.vastKey) rows.push({ ...t, provider: "runpod", key: String(t.gb) });
+    // With Vast.ai alone, a size it has none of still shows, sold out there.
+    if (t.vast && (t.vast.gpu || !state.runpodKey)) rows.push({ ...t, ...t.vast, provider: "vast", key: `${t.gb}:vast`, vast: null });
+  }
+  return rows;
+}
+function rentRow(key) {
+  return rentRows().find((r) => r.key === String(key)) ?? null;
+}
+// How a row says where it is: nothing for RunPod's Secure Cloud.
+function placeTag(row) {
+  return row.provider === "vast" ? ", Vast.ai" : row.gpu?.cloud === "COMMUNITY" ? ", Community Cloud" : "";
+}
+
 // The sizes and prices RunPod offers. The server keeps them for a while;
 // `fresh` asks RunPod again, for the Refresh button and after a rent that
 // found the stock gone.
@@ -4986,6 +5021,7 @@ async function loadRentOptions({ fresh = false, quiet = false } = {}) {
   try {
     const r = await api.get(`/api/rent/options${fresh ? "?fresh=1" : ""}`);
     state.rentOptions = r.configured ? r.tiers : null;
+    state.rentProviders = r.providers ?? { runpod: true, vast: false };
     state.rentStock = r.stock ?? {};
     state.rentCommunity = Boolean(r.community);
     state.rentCheckedAt = r.checkedAt ?? Date.now();
@@ -5034,7 +5070,7 @@ function openRentWhen(gb, anchor) {
   const disk = Number($("#rent-disk")?.value) || Number(state.rentDisk ?? 50);
   const form = document.createElement("div");
   form.className = "rent-when-form";
-  form.innerHTML = `<p class="muted small">The site checks RunPod every minute, with this page closed too, and rents a ${esc(sizeName(gb))} the moment one is free.</p>
+  form.innerHTML = `<p class="muted small">The site checks ${placesText()} every minute, with this page closed too, and rents a ${esc(sizeName(gb))} the moment one is free.</p>
     <div class="rent-when-fields">
       <label>Up to $<input type="number" class="rw-price" min="0.1" max="200" step="0.01" value="${cap}"> an hour</label>
       <label>Disk <input type="number" class="rw-disk" min="10" max="4000" step="10" value="${disk}"> GB</label>
@@ -5265,6 +5301,7 @@ async function checkWatch() {
   const name = `${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB` : `${t.gb} GB`} (${t.gpu?.name ?? "GPU"})`;
   setRentWatch(null);
   state.rentWant = t.gb;
+  state.rentWantKey = String(t.gb);
   const tell = (text) => {
     notice(text, "ok");
     try {
@@ -5337,15 +5374,17 @@ function renderRental() {
     // host not delivering), said plainly, with RunPod's own word on it and
     // the way out, rather than a bar that looks fine while the hour bills.
     const stuckMin = running && !r.ready && !r.imagesReady && r.uptimeSeconds > 600 ? Math.round(r.uptimeSeconds / 60) : 0;
-    const stuck = stuckMin ? `<div class="notice warn"><span>Listed as running by RunPod for ${stuckMin} minutes, but ${r.containerUp === false ? "no container has started on it" : "nothing on it answers"}${r.podNote ? ` (RunPod: ${esc(r.podNote)})` : ""}. ${r.containerUp === false ? "A fresh host fetches the machine image first, a few minutes; this long, the host is not delivering." : "Stop and Start may bring it back."}${r.dataCenter ? ` Data centre ${esc(r.dataCenter)}${(r.slowDataCenters ?? []).includes(r.dataCenter) ? ", which the next rent is placed away from when the card is in stock elsewhere" : ""}.` : ""}</span> <button class="primary" id="rent-replace-stuck">Replace the machine</button></div>` : "";
+    const place = placeOf(r);
+    const stuck = stuckMin ? `<div class="notice warn"><span>Listed as running by ${place} for ${stuckMin} minutes, but ${r.containerUp === false ? "no container has started on it" : r.provider === "vast" && !r.url ? "its secure address (a Cloudflare tunnel the machine opens) has not come up" : "nothing on it answers"}${r.podNote ? ` (${place}: ${esc(r.podNote)})` : ""}. ${r.containerUp === false ? "A fresh host fetches the machine image first, a few minutes; this long, the host is not delivering." : "Stop and Start may bring it back."}${r.dataCenter ? ` Data centre ${esc(r.dataCenter)}${(r.slowDataCenters ?? []).includes(r.dataCenter) ? ", which the next rent is placed away from when the card is in stock elsewhere" : ""}.` : ""}</span> <button class="primary" id="rent-replace-stuck">Replace the machine</button></div>` : "";
     const older = r.agentVersion != null && r.agentCurrent != null && r.agentVersion < r.agentCurrent;
     const idle = r.idleMinutes ? `Stops by itself after ${r.idleMinutes} minutes without a ${state.hosted ? "download" : "chat or download"}${state.stopOnQuit ? ", and when HuggingFound quits" : ""}.${state.hosted ? " Chats go straight from your browser to the machine, so the site cannot see them; each message you send counts as use." : ""}` : `Never stops by itself${state.stopOnQuit ? "; quitting HuggingFound stops it" : ""}.`;
     panel.innerHTML = `<div class="rent-card">
-      <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
+      <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}${r.provider === "vast" ? " at Vast.ai" : r.cloud === "COMMUNITY" ? ", Community Cloud" : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(todaySpend)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
       ${capNote}${stuck}
+      ${r.waitingForGpu ? `<div class="notice warn"><span>Waiting for the GPU on this machine's host to be free again: a stopped Vast.ai machine starts only on the host that holds its disk, and someone else has its card for now. It starts by itself once the card is free${r.podNote ? ` (Vast.ai: ${esc(r.podNote)})` : ""}.</span> <button class="ghost" id="rent-replace-wait">Replace the machine</button></div>` : ""}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
-      ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
+      ${(r.provider === "vast" ? state.vastKey : state.runpodKey) ? "" : `<div class="notice bad">The ${place} key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
       ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}${r.agentVersion < 20 ? ", clips from reference pictures on MiniMax-H3" : ""}${r.agentVersion < 21 ? ", a disk grown after the rent read at its new size" : ""}${r.agentVersion < 22 ? ", the disk's use counted once" : ""}${r.agentVersion < 23 ? ", freeing a chat model held up by an earlier reply" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.retrying ? ` <b>Start is asked again every minute for ${Math.max(1, Math.ceil((startRetry.until - Date.now()) / 60e3))} more minutes${startRetry.tries ? ` (${startRetry.tries} so far)` : ""}; this can be left as it is.</b>` : state.rentError.noGpu && state.rentError.action === "start" ? " Start was asked again every minute for half an hour without luck." : ""}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>${state.rentError.retrying ? `<button class="ghost" id="rent-stop-retry">Stop asking</button>` : ""}` : ""}</div>` : ""}
       <div class="actions">
@@ -5369,7 +5408,7 @@ function renderRental() {
       <label class="field">
         <span>Stop once today's machines have cost this many dollars</span>
         <input type="number" id="rent-cap" min="0" max="10000" step="1" value="${Number(r.maxSpend ?? 50)}">
-        <small class="muted">Counted across stops, starts and replaced machines since midnight UTC, from the running time RunPod reports; 0 removes the cap. ${r.costPerHour ? `At ${money(r.costPerHour)} an hour, ${money(r.maxSpend ?? 50)} is about ${((r.maxSpend ?? 50) / r.costPerHour).toFixed(1)} hours.` : ""}</small>
+        <small class="muted">Counted across stops, starts and replaced machines since midnight UTC, from the running time ${place} reports; 0 removes the cap. ${r.costPerHour ? `At ${money(r.costPerHour)} an hour, ${money(r.maxSpend ?? 50)} is about ${((r.maxSpend ?? 50) / r.costPerHour).toFixed(1)} hours.` : ""}</small>
       </label>
       ${state.hosted ? "" : `<label class="check"><input type="checkbox" id="rent-quit" ${state.stopOnQuit ? "checked" : ""}> Stop it when HuggingFound quits</label>`}
       <div class="actions"><button class="ghost" id="rent-save-idle">Save</button></div>
@@ -5381,6 +5420,7 @@ function renderRental() {
     panel.querySelector("#rent-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
     panel.querySelector("#rent-replace")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-replace-stuck")?.addEventListener("click", replaceMachine);
+    panel.querySelector("#rent-replace-wait")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-stop-retry")?.addEventListener("click", () => {
       stopRetryingStart();
       if (state.rentError) state.rentError.retrying = false;
@@ -5399,8 +5439,9 @@ function renderRental() {
       }
     });
     panel.querySelector("#rent-key-focus")?.addEventListener("click", () => {
-      $("#runpod-key").scrollIntoView({ block: "center" });
-      $("#runpod-key").focus();
+      const field = $(r.provider === "vast" ? "#vast-key" : "#runpod-key");
+      field.scrollIntoView({ block: "center" });
+      field.focus();
     });
     panel.querySelector("#rent-replace-old")?.addEventListener("click", replaceMachine);
     panel.querySelector("#rent-start")?.addEventListener("click", () => rentAction("start", null));
@@ -5440,39 +5481,43 @@ function renderRental() {
     pollRental();
     return;
   }
-  if (!state.runpodKey) {
+  if (!state.runpodKey && !state.vastKey) {
     panel.innerHTML = "";
     return;
   }
   // Nothing rented, yet machines from before may sit on the account billing
   // for their disks: they are looked for whenever the offer is shown.
   if (state.rentOptionsLoading) {
-    panel.innerHTML = `<p class="muted small">Asking RunPod what is on offer</p>`;
+    panel.innerHTML = `<p class="muted small">Asking ${placesText()} what is on offer</p>`;
     return;
   }
   if (!state.rentOptions) {
     const throttled = /stopped answering|rate limiting/.test(state.rentOptionsError ?? "");
-    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : "Could not read RunPod's offer."}${throttled ? " The sizes appear here by themselves when RunPod answers again." : ""} <button class="ghost" id="rent-retry">Try again</button></p>`;
+    panel.innerHTML = `<p class="muted small">${state.rentOptionsError ? esc(state.rentOptionsError) : `Could not read ${placesText()}'s offer.`}${throttled ? " The sizes appear here by themselves when it answers again." : ""} <button class="ghost" id="rent-retry">Try again</button></p>`;
     panel.querySelector("#rent-retry").addEventListener("click", loadRentOptions);
     return;
   }
-  const want = state.rentWant && state.rentOptions.some((t) => t.gb === state.rentWant && t.available) ? state.rentWant : state.rentOptions.find((t) => t.available)?.gb;
+  // The row chosen: the one picked before, else one of the size wanted, else the first free one.
+  const rows = rentRows();
+  const want = (rows.find((r) => r.key === state.rentWantKey && r.available) ?? rows.find((r) => r.gb === state.rentWant && r.available) ?? rows.find((r) => r.available))?.key;
+  const vastError = state.vastKey ? state.rentOptions.find((t) => t.vast?.error)?.vast.error : "";
   const checked = state.rentCheckedAt ? new Date(state.rentCheckedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
   panel.innerHTML = `<p class="tools-row stock-row"><span class="muted small">${checked ? `Checked at ${checked}.` : ""} Stock changes by the minute.</span><button class="ghost" id="rent-refresh">Check again</button></p>
-    <label class="check community" title="RunPod's Community Cloud is machines that third parties host. It is cheaper and often has cards when the Secure Cloud has none; its hosts are less reliable, and your models and Hugging Face token sit on someone else's machine while it runs."><input type="checkbox" id="rent-community" ${state.rentCommunity ? "checked" : ""}> Also rent from RunPod's Community Cloud <small class="muted">third-party hosts: cheaper and more often in stock, less reliable. The Secure Cloud is still used first.</small></label>
-    <div class="tiers">${state.rentOptions.map((t) => `<label class="tier ${t.available ? "" : "off"}">
-      <input type="radio" name="rent-tier" value="${t.gb}" ${t.gb === want ? "checked" : ""} ${t.available ? "" : "disabled"}>
-      <span><b>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPUs` : `${t.gb} GB GPU`}</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour${t.gpu.cloud === "COMMUNITY" ? ", Community Cloud" : ""}` : ", none free right now"}` : "not on offer right now"}</span><small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small>${!t.available && t.gpu ? `<small class="stock-note">${esc(stockText(t))}</small><span class="tier-watch">${rentWhenFreeHtml(t)}${state.rental?.watch?.gb === t.gb ? "" : watchHtml(t)}</span>` : ""}</span>
+    ${state.runpodKey ? `<label class="check community" title="RunPod's Community Cloud is machines that third parties host. It is cheaper and often has cards when the Secure Cloud has none; its hosts are less reliable, and your models and Hugging Face token sit on someone else's machine while it runs."><input type="checkbox" id="rent-community" ${state.rentCommunity ? "checked" : ""}> Also rent from RunPod's Community Cloud <small class="muted">third-party hosts: cheaper and more often in stock, less reliable. The Secure Cloud is still used first.</small></label>` : ""}
+    ${vastError ? `<p class="notice warn small">Vast.ai's cards are missing from the list: ${esc(vastError)}</p>` : ""}
+    <div class="tiers">${rows.map((t) => `<label class="tier ${t.available ? "" : "off"}${t.provider === "vast" ? " vast" : ""}">
+      <input type="radio" name="rent-tier" value="${t.key}" ${t.key === want ? "checked" : ""} ${t.available ? "" : "disabled"}>
+      <span><b>${t.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPUs` : `${t.gb} GB GPU`}</b> <span class="price">${t.gpu ? `${esc(t.gpu.name)}${t.available ? `, ${money(t.pricePerHour)} an hour${placeTag(t)}` : ", none free right now"}` : t.provider === "vast" ? "none free at Vast.ai right now" : "not on offer right now"}</span>${t.provider === "vast" ? (t.gpu ? `<small>A Vast.ai host${t.gpu.location ? ` in ${esc(t.gpu.location)}` : ""}${t.gpu.downloadPerTb ? `; it charges ${money(t.gpu.downloadPerTb)} a TB for downloads` : ""}.</small>` : "") : `<small>Model files up to about ${t.files} GB: ${esc(t.examples)}.</small>`}${!t.available && (t.gpu || t.provider === "vast") && (t.provider === "runpod" || !state.runpodKey) ? `${t.provider === "runpod" ? `<small class="stock-note">${esc(stockText(t))}</small>` : ""}<span class="tier-watch">${rentWhenFreeHtml(t)}${state.rental?.watch?.gb === t.gb ? "" : watchHtml(t)}</span>` : ""}</span>
     </label>`).join("")}</div>
     <label class="field">
       <span>Disk for its models, in GB</span>
       <input type="number" id="rent-disk" min="10" max="4000" step="10" value="${Number(state.rentDisk ?? 50)}">
-      <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep. It can be grown later, when a model does not fit, never shrunk. RunPod charges ${money(DISK_STOPPED_PER_GB_MONTH / 30 * Number(state.rentDisk ?? 50))} a day for ${Number(state.rentDisk ?? 50)} GB while the machine is stopped, half that while it runs.</small>
+      <small class="muted">Models are kept on it between stops, so make it bigger than the models you will keep.${state.runpodKey ? ` At RunPod it can be grown later, when a model does not fit, never shrunk; RunPod charges ${money(DISK_STOPPED_PER_GB_MONTH / 30 * Number(state.rentDisk ?? 50))} a day for ${Number(state.rentDisk ?? 50)} GB while the machine is stopped, half that while it runs.` : ""}${state.vastKey ? " At Vast.ai the disk is fixed when the machine is rented, and each host sets its own price for it, the same running or stopped; the hourly prices shown include 50 GB of it." : ""}</small>
     </label>
     <div class="actions"><button class="primary" id="rent-go" ${want ? "" : "disabled"}>Rent it</button></div>
     <div id="rent-others"></div>
     ${privateImageHtml()}
-    <p class="muted small">Ollama on the machine answers at a long random address that RunPod makes for it; only this computer knows it, and it goes when the machine is deleted. The disk is set up once; the machine itself usually answers two to four minutes after renting.</p>`;
+    <p class="muted small">Ollama on the machine answers at a long random address that RunPod makes for it${state.vastKey ? " (on a Vast.ai machine, a Cloudflare tunnel the machine opens itself)" : ""}; only this computer knows it, and it goes when the machine is deleted. The disk is set up once; the machine itself usually answers two to four minutes after renting${state.vastKey ? ", or ten to twenty at a Vast.ai host fetching the machine image for the first time" : ""}.</p>`;
   loadRegistries(panel);
   panel.querySelector("#rent-refresh").addEventListener("click", (e) => {
     e.currentTarget.disabled = true;
@@ -5491,18 +5536,19 @@ function renderRental() {
   });
   loadOthers(panel);
   panel.querySelector("#rent-go").addEventListener("click", async () => {
-    const gb = Number(panel.querySelector('input[name="rent-tier"]:checked')?.value);
+    const offer = rentRow(panel.querySelector('input[name="rent-tier"]:checked')?.value);
     const diskGb = Number($("#rent-disk").value);
-    const offer = state.rentOptions.find((t) => t.gb === gb);
-    if (!offer) return;
+    if (!offer?.gpu) return;
+    const gb = offer.gb;
     state.rentDisk = diskGb;
-    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at RunPod for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${perQueryText(offer.pricePerHour)}${safeguardText(offer.pricePerHour)}`)) return;
+    state.rentWantKey = offer.key;
+    if (!confirm(`Rent a ${offer.gpu.name}${offer.count > 1 ? ` × ${offer.count}` : ""} (${gb} GB) at ${placeOf(offer)} for ${money(offer.pricePerHour)} an hour, with a ${diskGb} GB disk?\n\n${perQueryText(offer.pricePerHour)}${safeguardText(offer.pricePerHour)}`)) return;
     if (!(await guardOthers())) return;
     const btn = panel.querySelector("#rent-go");
     btn.disabled = true;
     btn.textContent = "Renting";
     try {
-      state.rental = await api.post("/api/rent", { gb, diskGb });
+      state.rental = await api.post("/api/rent", { gb, diskGb, provider: offer.provider });
     } catch (err) {
       alert(`Could not rent it: ${err.message}`);
       // Stock moved under the list: the sizes are fetched again.
@@ -6423,7 +6469,8 @@ function stopWhy(r) {
 // is plain where the money went; RunPod's figures run about an hour behind.
 async function loadSpend(panel) {
   const box = panel.querySelector("#rent-spend");
-  if (!box) return;
+  // The bill is RunPod's; Vast.ai's is on its own site.
+  if (!box || !state.runpodKey) return;
   let bill;
   try {
     bill = await api.get("/api/rent/spend");
@@ -6462,20 +6509,23 @@ async function loadOthers(panel) {
   const perDay = others.reduce((a, o) => a + (o.diskPerDay || 0), 0);
   const running = others.filter((o) => o.running);
   const hourly = running.reduce((a, o) => a + (o.costPerHour || 0), 0);
-  const list = others.map((o) => `${o.gpu || "GPU"}${o.gpuCount > 1 ? ` × ${o.gpuCount}` : ""}, ${o.diskGb} GB disk, ${o.running ? `running at ${money(o.costPerHour || 0)} an hour` : "stopped"} (${o.id})`);
+  const list = others.map((o) => `${o.gpu || "GPU"}${o.gpuCount > 1 ? ` × ${o.gpuCount}` : ""}${o.provider === "vast" ? " at Vast.ai" : ""}, ${o.diskGb} GB disk, ${o.running ? `running at ${money(o.costPerHour || 0)} an hour` : "stopped"} (${o.id})`);
+  const atVast = others.some((o) => o.provider === "vast");
+  const atRunpod = others.some((o) => o.provider !== "vast");
+  const where = atVast && atRunpod ? "RunPod and Vast.ai" : atVast ? "Vast.ai" : "RunPod";
   box.innerHTML = `<div class="notice ${running.length ? "bad" : "warn"}">
-    <b>${others.length} other HuggingFound machine${others.length === 1 ? "" : "s"} on this RunPod account</b>, which this site no longer manages (rented in an earlier session, under a key since removed, or by a guest whose time ran out). ${running.length ? `${running.length} ${running.length === 1 ? "is" : "are"} running, ${money(hourly)} an hour. ` : ""}Their disks cost about ${money(perDay)} a day (${money(perDay * 30)} a month) while they sit stopped. ${others.length === 1 ? "It keeps" : "They keep"} billing until deleted.
+    <b>${others.length} other HuggingFound machine${others.length === 1 ? "" : "s"} on ${atVast && atRunpod ? "your RunPod and Vast.ai accounts" : `this ${where} account`}</b>, which this site no longer manages (rented in an earlier session, under a key since removed, or by a guest whose time ran out). ${running.length ? `${running.length} ${running.length === 1 ? "is" : "are"} running, ${money(hourly)} an hour. ` : ""}Their disks cost about ${money(perDay)} a day (${money(perDay * 30)} a month) while they sit stopped. ${others.length === 1 ? "It keeps" : "They keep"} billing until deleted.
     <ul class="small">${list.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
     <button class="primary" id="rent-others-delete">Delete ${others.length === 1 ? "it" : `all ${others.length}`}, disks and models included</button>
   </div>`;
   box.querySelector("#rent-others-delete").addEventListener("click", async () => {
-    if (!confirm(`Delete ${others.length === 1 ? "this machine" : `these ${others.length} machines`} at RunPod, with ${others.length === 1 ? "its disk and models" : "their disks and models"}?\n\n${list.join("\n")}\n\nNothing is charged for them after this.`)) return;
+    if (!confirm(`Delete ${others.length === 1 ? "this machine" : `these ${others.length} machines`} at ${where}, with ${others.length === 1 ? "its disk and models" : "their disks and models"}?\n\n${list.join("\n")}\n\nNothing is charged for them after this.`)) return;
     const btn = box.querySelector("#rent-others-delete");
     btn.disabled = true;
     btn.textContent = "Deleting";
     try {
       const { deleted } = await api.post("/api/rent/others/delete", { ids: others.map((o) => o.id) });
-      notice(`Deleted ${deleted.length} machine${deleted.length === 1 ? "" : "s"} at RunPod; about ${money(perDay)} a day no longer charged.`, "ok");
+      notice(`Deleted ${deleted.length} machine${deleted.length === 1 ? "" : "s"} at ${where}; about ${money(perDay)} a day no longer charged.`, "ok");
       box.innerHTML = "";
       state.others = [];
       renderRentBar(state.rental);
@@ -6493,6 +6543,7 @@ async function replaceMachine() {
   stopRetryingStart();
   const gb = state.rental?.gb;
   const diskGb = state.rental?.diskGb;
+  const provider = state.rental?.provider;
   if (!confirm(`Delete this machine${state.rental?.status === "RUNNING" ? ", which is running," : ""} and rent a fresh ${gb ? `${gb} GB ` : ""}one? Its models download again on the new machine.`)) return;
   try {
     state.rental = await api.post("/api/rent/delete", {});
@@ -6503,6 +6554,8 @@ async function replaceMachine() {
   }
   state.rentError = null;
   state.rentWant = (state.rentTiers ?? []).find((t) => t.gb === gb)?.gb ?? state.rentWant;
+  // The same place too: a Vast.ai machine is replaced at Vast.ai when it has one.
+  state.rentWantKey = provider === "vast" && gb ? `${gb}:vast` : null;
   // The same disk as the old one: a smaller default would not hold its models.
   if (diskGb) state.rentDisk = diskGb;
   await load();
@@ -6526,7 +6579,7 @@ function renderRentBar(r) {
     if (r?.watch) {
       const w = r.watch;
       bar.hidden = false;
-      bar.innerHTML = `<div class="wrap"><span>Watching RunPod for a ${esc(sizeName(w.gb))}: the site checks every minute, with this page closed too, and rents one at up to ${money(w.maxPricePerHour)} an hour. ${w.lastNote ? esc(w.lastNote[0].toUpperCase() + w.lastNote.slice(1)) + "." : w.checkedAt ? `Last checked ${new Date(w.checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : ""}</span><span class="buttons"><button class="ghost" id="bar-unwatch">Stop watching</button></span></div>`;
+      bar.innerHTML = `<div class="wrap"><span>Watching ${placesText()} for a ${esc(sizeName(w.gb))}: the site checks every minute, with this page closed too, and rents one at up to ${money(w.maxPricePerHour)} an hour. ${w.lastNote ? esc(w.lastNote[0].toUpperCase() + w.lastNote.slice(1)) + "." : w.checkedAt ? `Last checked ${new Date(w.checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : ""}</span><span class="buttons"><button class="ghost" id="bar-unwatch">Stop watching</button></span></div>`;
       bar.querySelector("#bar-unwatch").addEventListener("click", stopRentWatch);
       watchPoll();
       return;
@@ -6570,7 +6623,7 @@ function renderRentBar(r) {
   const busy = r.downloading ? `<span class="pill live">${r.downloading} downloading</span>` : "";
   const disk = !running && r.diskPerDay ? `, disk ${money(r.diskPerDay)} a day` : "";
   const extra = others.length ? `<button class="ghost others-note" id="bar-others" title="Machines from before that this site no longer manages, each billing for its disk">${others.length} other machine${others.length === 1 ? "" : "s"} on the account</button>` : "";
-  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}${r.cloud === "COMMUNITY" ? " (Community Cloud)" : ""}, ${esc(word)}${cost}${time}${disk}.${extra}</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}${busy ? ` ${busy}` : ""}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-delete" title="Delete the machine, its disk and its models; nothing is charged after">Delete</button><button class="ghost" id="bar-settings">Manage</button></span></div>`;
+  bar.innerHTML = `<div class="wrap"><span>Rented GPU: ${esc(r.gpu || "")}${r.gb ? ` ${r.gb} GB` : ""}${r.cloud === "COMMUNITY" ? " (Community Cloud)" : r.provider === "vast" ? " (Vast.ai)" : ""}, ${esc(word)}${cost}${time}${disk}.${extra}</span><span class="buttons"><button class="ghost" id="bar-models">${held ? `${held} model${held === 1 ? "" : "s"} on it` : "Models on it"}${busy ? ` ${busy}` : ""}</button>${running ? `<button id="bar-stop">Stop</button>` : `<button id="bar-start">Start</button>`}<button class="ghost" id="bar-delete" title="Delete the machine, its disk and its models; nothing is charged after">Delete</button><button class="ghost" id="bar-settings">Manage</button></span></div>`;
   bar.querySelector("#bar-models").addEventListener("click", openGpuModels);
   bar.querySelector("#bar-stop")?.addEventListener("click", () => rentAction("stop", "Stop the rented GPU? The hourly charge ends; its disk and models stay, and Start brings it back."));
   bar.querySelector("#bar-start")?.addEventListener("click", () => rentAction("start", null));
@@ -6616,18 +6669,19 @@ async function guardOthers() {
   }
   state.others = others;
   if (!others.length) return true;
-  const list = others.map((o) => `${o.gpu || "GPU"}${o.gpuCount > 1 ? ` × ${o.gpuCount}` : ""}, ${o.diskGb} GB disk, ${o.running ? `running at ${money(o.costPerHour || 0)} an hour` : "stopped"} (${o.id})`).join("\n");
+  const list = others.map((o) => `${o.gpu || "GPU"}${o.gpuCount > 1 ? ` × ${o.gpuCount}` : ""}${o.provider === "vast" ? " at Vast.ai" : ""}, ${o.diskGb} GB disk, ${o.running ? `running at ${money(o.costPerHour || 0)} an hour` : "stopped"} (${o.id})`).join("\n");
   const running = others.filter((o) => o.running);
+  const where = others.some((o) => o.provider === "vast") ? (others.some((o) => o.provider !== "vast") ? "RunPod and Vast.ai" : "Vast.ai") : "RunPod";
   if (running.length) {
-    alert(`Another HuggingFound machine is already running on this RunPod account:\n\n${list}\n\nOne machine at a time. Stop or delete it under Settings, Rent a GPU, before renting another.`);
+    alert(`Another HuggingFound machine is already running on your ${where} account:\n\n${list}\n\nOne machine at a time. Stop or delete it under Settings, Rent a GPU, before renting another.`);
     return false;
   }
   const perDay = others.reduce((a, o) => a + (o.diskPerDay || 0), 0);
-  if (!confirm(`${others.length} other HuggingFound machine${others.length === 1 ? "" : "s"} from before ${others.length === 1 ? "sits" : "sit"} stopped on this RunPod account, costing about ${money(perDay)} a day for ${others.length === 1 ? "its disk" : "their disks"}:\n\n${list}\n\nDelete ${others.length === 1 ? "it" : "them"} now and rent the new machine? Cancel keeps everything as it is.`)) return false;
+  if (!confirm(`${others.length} other HuggingFound machine${others.length === 1 ? "" : "s"} from before ${others.length === 1 ? "sits" : "sit"} stopped on your ${where} account, costing about ${money(perDay)} a day for ${others.length === 1 ? "its disk" : "their disks"}:\n\n${list}\n\nDelete ${others.length === 1 ? "it" : "them"} now and rent the new machine? Cancel keeps everything as it is.`)) return false;
   try {
     const { deleted } = await api.post("/api/rent/others/delete", { ids: others.map((o) => o.id) });
     state.others = [];
-    notice(`Deleted ${deleted.length} machine${deleted.length === 1 ? "" : "s"} at RunPod.`, "ok");
+    notice(`Deleted ${deleted.length} machine${deleted.length === 1 ? "" : "s"} at ${where}.`, "ok");
   } catch (err) {
     alert(`Could not delete them: ${err.message}`);
     return false;
@@ -6914,7 +6968,7 @@ async function renderImageServerStatus() {
   }
 }
 
-for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#save-github", "#clear-github"], ["#youtube-key", "YOUTUBE_API_KEY", "#save-youtube", "#clear-youtube"], ["#claude-key", "ANTHROPIC_API_KEY", "#save-claude", "#clear-claude"], ["#runpod-key", "RUNPOD_API_KEY", "#save-runpod", "#clear-runpod"]]) {
+for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#save-github", "#clear-github"], ["#youtube-key", "YOUTUBE_API_KEY", "#save-youtube", "#clear-youtube"], ["#claude-key", "ANTHROPIC_API_KEY", "#save-claude", "#clear-claude"], ["#runpod-key", "RUNPOD_API_KEY", "#save-runpod", "#clear-runpod"], ["#vast-key", "VAST_API_KEY", "#save-vast", "#clear-vast"]]) {
   $(save).addEventListener("click", async () => {
     const value = $(field).value.trim();
     try {
@@ -6924,12 +6978,14 @@ for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#sav
       return;
     }
     $(field).value = "";
-    if (key === "RUNPOD_API_KEY") state.rentOptions = null;
+    if (key === "RUNPOD_API_KEY" || key === "VAST_API_KEY") state.rentOptions = null;
     await load();
   });
   $(clear).addEventListener("click", async () => {
     // Without the key a running machine cannot be stopped from here.
-    if (key === "RUNPOD_API_KEY" && state.rental?.rented && ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(state.rental.status)) {
+    // The key of the place the machine is rented at.
+    const rentedHere = state.rental?.rented && (key === (state.rental.provider === "vast" ? "VAST_API_KEY" : "RUNPOD_API_KEY"));
+    if (rentedHere && ["RUNNING", "STARTING", "PROVISIONING", "UNKNOWN"].includes(state.rental.status)) {
       if (!confirm("A machine is rented with this key. Without the key this site cannot stop or delete it. Stop the machine first, then remove the key?")) return;
       try {
         state.rental = await api.post("/api/rent/stop", {});
@@ -6939,7 +6995,7 @@ for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#sav
       }
     }
     await api.post("/api/settings", { [key]: "" });
-    if (key === "RUNPOD_API_KEY") state.rentOptions = null;
+    if (key === "RUNPOD_API_KEY" || key === "VAST_API_KEY") state.rentOptions = null;
     await load();
   });
 }

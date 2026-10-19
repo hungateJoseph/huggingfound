@@ -23,6 +23,13 @@
 //                   itself (30); the site renews a lease while there is
 //                   activity, so a site that cannot reach RunPod, a lost
 //                   key or a closed laptop still ends the bill
+//   HF_TUNNEL_DIR   where start.sh writes the Cloudflare tunnels' logs on a
+//                   Vast.ai machine (/tmp); their HTTPS addresses are said
+//                   on /health, for the site to hand to the browser
+//   CONTAINER_ID, CONTAINER_API_KEY
+//                   set by Vast.ai on its machines: the idle stop asks
+//                   Vast.ai to stop the machine with them, since a container
+//                   that merely exits there would leave the card billing
 //
 // Two engines: stable-diffusion.cpp for single-file checkpoints (fast,
 // small), and the diffusers library through worker.py for the families
@@ -78,13 +85,37 @@ function idleWatch() {
   console.log(`No activity for ${Math.round(since / 60e3)} minutes and no lease from the site: stopping the machine to end the bill.`);
   stopServer();
   stopWorker();
-  process.exit(0);
+  stopAtVast().finally(() => process.exit(0));
+}
+// On Vast.ai the machine asks to be stopped, which ends the card's bill
+// and keeps the disk; elsewhere exiting is the stop.
+async function stopAtVast() {
+  const id = process.env.CONTAINER_ID;
+  const key = process.env.CONTAINER_API_KEY;
+  if (!id || !key) return;
+  try {
+    const res = await fetch(`${process.env.HF_VAST_API || "https://console.vast.ai/api/v0"}/instances/${encodeURIComponent(id)}/`, { method: "PUT", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ state: "stopped" }), signal: AbortSignal.timeout(15000) });
+    console.log(`Asked Vast.ai to stop this machine: HTTP ${res.status}.`);
+  } catch (err) {
+    console.log(`Could not ask Vast.ai to stop this machine (${err.message}); exiting instead.`);
+  }
+}
+// The Cloudflare tunnels' HTTPS addresses, from their logs: the latest one
+// each, since a tunnel that drops is opened again with a new address.
+const TUNNEL_DIR = process.env.HF_TUNNEL_DIR || "/tmp";
+function tunnels() {
+  const out = {};
+  for (const name of ["ollama", "agent"]) {
+    const found = fileTail(path.join(TUNNEL_DIR, `hf-tunnel-${name}.log`), 400).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/g);
+    if (found) out[name] = found.at(-1);
+  }
+  return out.ollama || out.agent ? out : null;
 }
 // Add-ons (IP-Adapters, LoRAs) live apart from models; they are applied to one.
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "23";
+const VERSION = "24";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -1148,7 +1179,7 @@ const server = http.createServer(async (req, res) => {
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
       const loaded = sd.file ? rel(sd.file) : py.dir ? (py.dir.endsWith(".safetensors") || py.dir.endsWith(".ckpt") ? rel(py.dir) : `${rel(py.dir)}/${INDEX}`) : null;
       const room = diskSpace();
-      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, diskUsedGb: room?.usedGb != null ? Math.round(room.usedGb * 10) / 10 : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, busy: busy(), idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null });
+      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, diskUsedGb: room?.usedGb != null ? Math.round(room.usedGb * 10) / 10 : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, busy: busy(), idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null, ...(tunnels() ? { tunnels: tunnels() } : {}) });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
     // The image server's recent output and the Python side's, for a look
