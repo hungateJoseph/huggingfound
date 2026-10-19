@@ -423,6 +423,24 @@ priced from `price.community`, rented with `cloud: "COMMUNITY"` and no
 data-centre placement, and labelled in the list and the bar
 (`RUNPOD_POD_CLOUD`).
 
+## Everything in a window survives leaving it (2026-10-19)
+
+A model's window is drawn afresh each time it opens, so anything kept only
+in its DOM was lost. Kept now, and drawn back as it stood (a job still
+running goes on drawing into whichever window is open):
+
+- Chat: Claude's code check and hand-off finish on each answer (`m.code`,
+  with the text so far and the phase), Improve or check (`m.improve`,
+  with "Use this as the answer"), the hand-off split (`m.handoff`), a
+  reply still streaming with its thinking, the progress row, the words
+  being typed (`chat.draft`). Finished work is saved with the
+  conversation; work cut off by a reload says so.
+- Clips and pictures (per model, in `state.runs[repo]`): each card's reply
+  box (open, words, mode, last line), the fix plan with its ticks, words
+  and carry (`fixPlans`), the scene preview and its edits
+  (`scenePending`, handed to the window on show if it was reopened while
+  Claude worked), Claude's suggestion, and the prompt and avoid words.
+
 ## Verified on hardware, and not
 
 What has actually run on a rented machine, so the same thing is not

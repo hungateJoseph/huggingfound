@@ -1580,6 +1580,12 @@ function chatFor(modelName) {
       // no storage or a broken entry
     }
     chat = { messages: Array.isArray(saved) ? saved.filter((m) => m && m.role !== "system" && typeof m.content === "string") : [], reply: null, busy: false };
+    // Claude's work on an answer that was still going when the page closed
+    // cannot pick up again: it is kept as it stood, and said to be cut short.
+    for (const m of chat.messages) {
+      for (const job of Object.values(m.code ?? {})) if (job?.status === "running") Object.assign(job, { status: "failed", why: "the page was closed before Claude finished" });
+      if (m.improve?.status === "running") Object.assign(m.improve, { status: "failed", foot: "The page was closed before this finished." });
+    }
     chats.set(modelName, chat);
   }
   return chat;
@@ -1699,6 +1705,8 @@ function renderChat(box, modelName) {
         },
       },
       context: () => ({ question: questionFor(m), answer: m.content, system: chat.messages[0]?.role === "system" ? chat.messages[0].content : "" }),
+      memo: m,
+      persist: () => saveChat(modelName, chat),
       onUse: (text, by, request) => {
         const revised = { role: "assistant", content: text, chain: [...(m.chain ?? []), { by, request }] };
         chat.messages.push(revised);
@@ -1731,7 +1739,13 @@ function renderChat(box, modelName) {
   if (chat.busy) {
     const out = addMsg("assistant", chat.reply ?? "");
     out.id = "chat-live";
-    if (!chat.reply) out.classList.add("pending");
+    // A reply still coming shows as it stands: its thinking folded above it.
+    if (chat.thinking) {
+      out.textContent = "";
+      out.append(thinkingFold(chat.thinking, !chat.reply));
+      if (chat.reply) out.append(document.createTextNode(chat.reply));
+    }
+    if (!chat.reply && !chat.thinking) out.classList.add("pending");
   }
   list.scrollTop = list.scrollHeight;
   const messages = chat.messages;
@@ -1805,6 +1819,7 @@ function renderChat(box, modelName) {
       return;
     }
     $("#chat-text").value = "";
+    chat.draft = "";
     const system = $("#chat-system").value.trim();
     try {
       localStorage.setItem(`system:${modelName}`, system);
@@ -1844,7 +1859,7 @@ function renderChat(box, modelName) {
       // model is asked to write the rest and leave marked stubs for them.
       if ($("#chat-handoff")?.checked && claudeAvailable()) {
         meter.note("Claude is reading the request for the parts to leave to it");
-        const plan = await claudeText({ kind: "code", mode: "handoff-plan", question: text, model: modelName });
+        const plan = await claudeText({ kind: "code", mode: "handoff-plan", question: text, model: modelName }, null, (st) => meter.note(st.status === "thinking" ? "Claude is reading the request for the parts to leave to it (thinking)" : "Claude is reading the request for the parts to leave to it"));
         const parts = parseHandoffParts(plan.text);
         userMsg.sent = handoffPrompt(text, parts);
         userMsg.handoff = { parts, why: plan.text ? "" : plan.why };
@@ -1947,53 +1962,85 @@ function renderChat(box, modelName) {
     const handed = /HANDOFF TO CLAUDE/i.test(m.content) || Boolean(asked?.handoff);
     const row = document.createElement("div");
     row.className = "code-tools";
-    row.innerHTML = `<button class="ghost code-fix">Claude: check and fix the code</button>${handed ? `<button class="ghost code-finish">Claude: write the parts handed to it</button>` : ""}<div class="code-result" hidden><div class="code-head"></div><div class="code-body"></div><div class="code-foot muted small"></div></div>`;
+    row.innerHTML = `<button class="ghost code-fix">Claude: check and fix the code</button>${handed ? `<button class="ghost code-finish">Claude: write the parts handed to it</button>` : ""}<div class="code-result" hidden><div class="code-head"></div><div class="code-progress" hidden><div class="progress"><div class="fill"></div></div><div class="progress-text muted small"></div></div><div class="code-body"></div><div class="code-foot muted small"></div></div>`;
     el.after(row);
-    const run = async (mode) => {
-      const out = row.querySelector(".code-result");
-      const head = out.querySelector(".code-head");
-      const body = out.querySelector(".code-body");
-      const foot = out.querySelector(".code-foot");
-      for (const b of row.querySelectorAll("button")) b.disabled = true;
-      out.hidden = false;
-      head.textContent = mode === "fix" ? "Claude is checking the code" : "Claude is writing the parts handed to it";
-      body.textContent = "";
+    // This window's row is the one a running job draws into; a window
+    // opened again takes over, and the job goes on drawing there.
+    codeRows.set(m, row);
+    const last = m.code?.lastMode;
+    if (last && m.code[last]) drawCodeJob(m, last);
+    row.querySelector(".code-fix").addEventListener("click", () => runCodeJob(m, "fix", asked));
+    row.querySelector(".code-finish")?.addEventListener("click", () => runCodeJob(m, "finish", asked));
+  }
+  // Draws a code job from what is kept on the answer: its progress while it
+  // runs, what Claude found or wrote, and the button to add its version.
+  function drawCodeJob(m, mode) {
+    const row = codeRows.get(m);
+    const job = m.code?.[mode];
+    if (!row?.isConnected || !job) return;
+    const out = row.querySelector(".code-result");
+    const head = out.querySelector(".code-head");
+    const bar = out.querySelector(".code-progress");
+    const body = out.querySelector(".code-body");
+    const foot = out.querySelector(".code-foot");
+    const running = job.status === "running";
+    for (const b of row.querySelectorAll(":scope > button")) b.disabled = running;
+    out.hidden = false;
+    const fix = mode === "fix";
+    head.textContent = running ? (fix ? "Claude is checking the code" : "Claude is writing the parts handed to it") : job.status === "failed" ? (fix ? "Claude's check" : "Claude's parts") : fix ? "Claude checked the code" : "Claude wrote the parts handed to it";
+    const sep = fix ? "=== Corrected ===" : "=== Finished ===";
+    const [lead, rest] = String(job.text ?? "").split(sep);
+    body.textContent = (lead ?? "").trim();
+    bar.hidden = !running;
+    if (running) {
+      const secs = Math.round((Date.now() - job.started) / 1000);
+      const expect = Math.max(400, m.content.length * 1.1);
+      const pct = Math.min(97, Math.round(((rest?.length ?? 0) / expect) * 100));
+      bar.querySelector(".fill").style.width = `${job.text ? (rest == null ? 2 : pct) : 0}%`;
+      bar.querySelector(".progress-text").textContent = !job.text ? (job.phase === "thinking" ? `Claude is thinking it through · ${secs} s` : `Waiting for Claude to start · ${secs} s`) : rest == null ? `Writing what it found · ${secs} s` : `Writing the ${fix ? "corrected" : "finished"} code · ${rest.split("\n").length} lines · about ${pct}% · ${secs} s`;
       foot.textContent = "Sent to Anthropic: your request and this answer.";
-      const sep = mode === "fix" ? "=== Corrected ===" : "=== Finished ===";
-      const got = await claudeText({ kind: "code", mode, model: modelName, question: asked?.content ?? "", answer: m.content }, (sofar) => {
-        // While it writes: its findings, then how far into the code it is.
-        const [lead, rest] = sofar.split(sep);
-        body.textContent = rest == null ? lead : `${lead.trim()}\n\n(writing the ${mode === "fix" ? "corrected" : "finished"} code: ${rest.split("\n").length} lines so far)`;
-      });
-      for (const b of row.querySelectorAll("button")) b.disabled = false;
-      if (!got.text) {
-        head.textContent = mode === "fix" ? "Claude's check" : "Claude's parts";
-        body.textContent = "";
-        foot.textContent = `This did not finish: ${got.why}.`;
-        return;
-      }
-      const [lead, rest] = got.text.split(sep);
-      head.textContent = mode === "fix" ? "Claude checked the code" : "Claude wrote the parts handed to it";
-      body.textContent = lead.trim();
-      if (!rest?.trim()) {
-        foot.textContent = "Claude gave no code with it.";
-        return;
-      }
-      foot.textContent = "";
-      const add = useButton(mode === "fix" ? "Add the corrected version to the chat" : "Add the finished program to the chat", () => {
-        const done = { role: "assistant", content: rest.trim(), chain: [...(m.chain ?? []), { by: "Claude", request: mode === "fix" ? "checked and fixed the code" : "wrote the parts handed to it" }] };
-        chat.messages.push(done);
-        saveChat(modelName, chat);
-        const shown = addMsg("assistant", done.content);
-        checkFor(shown, done);
-        list.scrollTop = list.scrollHeight;
-        add.disabled = true;
-        add.textContent = "Added below";
-      });
-      foot.append(add);
-    };
-    row.querySelector(".code-fix").addEventListener("click", () => run("fix"));
-    row.querySelector(".code-finish")?.addEventListener("click", () => run("finish"));
+      return;
+    }
+    foot.textContent = "";
+    if (job.status === "failed") {
+      foot.textContent = `This did not finish: ${job.why}.`;
+      return;
+    }
+    if (!rest?.trim()) {
+      foot.textContent = "Claude gave no code with it.";
+      return;
+    }
+    const add = useButton(job.added ? "Added below" : fix ? "Add the corrected version to the chat" : "Add the finished program to the chat", () => {
+      const done = { role: "assistant", content: rest.trim(), chain: [...(m.chain ?? []), { by: "Claude", request: fix ? "checked and fixed the code" : "wrote the parts handed to it" }] };
+      chat.messages.push(done);
+      job.added = true;
+      saveChat(modelName, chat);
+      const shown = addMsg("assistant", done.content);
+      checkFor(shown, done);
+      list.scrollTop = list.scrollHeight;
+      add.disabled = true;
+      add.textContent = "Added below";
+    });
+    add.disabled = Boolean(job.added);
+    foot.append(add);
+  }
+  async function runCodeJob(m, mode, asked) {
+    m.code ??= {};
+    const job = (m.code[mode] = { status: "running", text: "", phase: "waiting", started: Date.now() });
+    m.code.lastMode = mode;
+    drawCodeJob(m, mode);
+    // The clock in the progress line moves while Claude says nothing.
+    const tick = setInterval(() => drawCodeJob(m, mode), 1000);
+    const got = await claudeText({ kind: "code", mode, model: modelName, question: asked?.content ?? "", answer: m.content }, (sofar) => {
+      job.text = sofar;
+      drawCodeJob(m, mode);
+    }, (st) => {
+      job.phase = st.status;
+    });
+    clearInterval(tick);
+    Object.assign(job, got.text ? { status: "done", text: got.text } : { status: "failed", why: got.why });
+    saveChat(modelName, chat);
+    drawCodeJob(m, mode);
   }
   $("#chat-send").addEventListener("click", send);
   $("#chat-stop").addEventListener("click", () => chat.abort?.());
@@ -2012,6 +2059,9 @@ function renderChat(box, modelName) {
     renderChat(box, modelName);
     renderRemove(box, state.model, state.plan);
   });
+  // What is being typed stays with the conversation while the window is away.
+  $("#chat-text").value = chat.draft ?? "";
+  $("#chat-text").addEventListener("input", (e) => (chat.draft = e.target.value));
   $("#chat-text").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -2019,6 +2069,9 @@ function renderChat(box, modelName) {
     }
   });
 }
+
+// The window row each answer's Claude work draws into, newest window first.
+const codeRows = new WeakMap();
 
 // Handing the hard parts of a coding request to Claude. Claude names them
 // (Part lines); the model is asked to write the rest, say what it leaves,
@@ -2264,7 +2317,11 @@ function imageHelpers(context = {}) {
 // others revise it. `context()` gives what a helper needs; `check` holds
 // what the check sends and what to do with it; `onUse(text, by, request)`
 // takes a revised answer; `onImage(file, by, request)` an edited picture.
-function addImprove(anchor, { kind, current, context, check = null, onUse = null, onImage = null }) {
+// `memo` (a chat answer) keeps what this control is doing and has done, so
+// a window opened again shows it as it stands, still moving while it runs;
+// `persist` saves the conversation once it has finished.
+const improveDraws = new WeakMap();
+function addImprove(anchor, { kind, current, context, check = null, onUse = null, onImage = null, memo = null, persist = () => {} }) {
   const helpers = kind === "text" ? textHelpers(current) : imageHelpers(context());
   if (check && claudeAvailable()) helpers.unshift({ id: "claude-check", label: kind === "text" ? "Claude checks it (points out mistakes, changes nothing)" : "Claude checks it (how well it matches, what to ask for instead)" });
   const wrap = document.createElement("div");
@@ -2292,7 +2349,21 @@ function addImprove(anchor, { kind, current, context, check = null, onUse = null
   };
   select.addEventListener("change", syncPlaceholder);
   syncPlaceholder();
-  if (check?.saved) {
+  // Drawn from what the answer keeps: the newest window is the one drawn.
+  const runBtn = wrap.querySelector(".improve-run");
+  const drawKept = () => {
+    const st = memo?.improve;
+    if (!st || !wrap.isConnected) return;
+    box.hidden = false;
+    head.textContent = st.head;
+    body.textContent = st.body;
+    foot.textContent = st.foot;
+    runBtn.disabled = st.status === "running";
+    if (st.status === "done" && st.useText && onUse) foot.prepend(useButton("Use this as the answer", () => onUse(st.useText, st.useBy, st.request)));
+  };
+  if (memo) improveDraws.set(memo, drawKept);
+  if (memo?.improve) drawKept();
+  else if (check?.saved) {
     box.hidden = false;
     head.textContent = "Claude's check";
     body.textContent = check.saved;
@@ -2314,6 +2385,16 @@ function addImprove(anchor, { kind, current, context, check = null, onUse = null
     box.hidden = false;
     body.textContent = "";
     foot.innerHTML = "";
+    // What this run writes here is copied onto the answer as it goes, and
+    // into a window opened again meanwhile.
+    const st = memo ? (memo.improve = { status: "running", by, request: ask, head: "", body: "", foot: "" }) : null;
+    const sync = () => {
+      if (!st) return;
+      Object.assign(st, { head: head.textContent, body: body.textContent, foot: foot.textContent });
+      const draw = improveDraws.get(memo);
+      if (draw && draw !== drawKept) draw();
+    };
+    const syncing = st ? setInterval(sync, 300) : null;
     try {
       if (by === "claude-check") await checkWithClaude({ ...check, focus: ask, head, body, foot, scroller });
       else if (by === "claude") await improveWithClaude({ kind, request: ask, context: context(), head, body, foot, onUse, onImage });
@@ -2324,8 +2405,20 @@ function addImprove(anchor, { kind, current, context, check = null, onUse = null
       }
     } catch (err) {
       foot.textContent = `This did not finish: ${err.message}`;
+      if (st) st.failed = true;
     } finally {
       run.disabled = false;
+      if (st) {
+        clearInterval(syncing);
+        sync();
+        st.status = st.failed ? "failed" : "done";
+        delete st.failed;
+        // A revision can be taken as the answer from a window opened later too.
+        if (st.status === "done" && kind === "text" && by !== "claude-check" && body.textContent.trim()) Object.assign(st, { useText: body.textContent.trim(), useBy: by === "claude" ? "Claude" : by.slice(6) });
+        persist();
+        const draw = improveDraws.get(memo);
+        if (draw && draw !== drawKept) draw();
+      }
     }
   });
   return wrap;
@@ -2733,20 +2826,38 @@ function renderImage(box, t) {
     const avoid = (/^Avoid:\s*(.+)$/m.exec(got.text)?.[1] ?? "").trim();
     const avoidText = /^(nothing|none|-)\.?$/i.test(avoid) ? "" : avoid;
     const why = (/^Why:\s*([\s\S]+)$/m.exec(got.text)?.[1] ?? "").trim();
+    showSuggestion({ description, avoidText, why });
+  });
+  // Claude's suggestion, kept until it is used or set aside, so the window
+  // can be left and opened again with it still there.
+  function showSuggestion(sug) {
+    const out = (box.isConnected ? box : liveBox())?.querySelector("#suggest");
+    const keptRec = (state.runs ??= {})[t.repo] ??= { lines: [], active: false, failed: [] };
+    if (!out) {
+      keptRec.suggestion = sug;
+      return;
+    }
+    const kept = (state.runs ??= {})[t.repo] ??= { lines: [], active: false, failed: [] };
+    kept.suggestion = sug;
+    const { description, avoidText, why } = sug;
+    out.hidden = false;
     out.innerHTML = `<p class="muted small"><b>Claude suggests</b>${why ? ` · ${esc(why)}` : ""}</p>
       <textarea class="suggest-text" rows="4">${esc(description)}</textarea>
       ${avoidText ? `<p class="muted small">Avoid: <span class="suggest-avoid">${esc(avoidText)}</span></p>` : ""}
       <p class="tools-row"><button class="primary" id="suggest-use">Use it</button><button class="ghost" id="suggest-keep">Keep mine</button></p>`;
+    out.querySelector(".suggest-text").addEventListener("input", (e) => (sug.description = e.target.value));
     out.querySelector("#suggest-use").addEventListener("click", () => {
       $("#image-prompt").value = out.querySelector(".suggest-text").value.trim();
       if (avoidText) $("#image-negative").value = avoidText;
       out.hidden = true;
+      delete kept.suggestion;
       $("#image-prompt").focus();
     });
     out.querySelector("#suggest-keep").addEventListener("click", () => {
       out.hidden = true;
+      delete kept.suggestion;
     });
-  });
+  }
   const saveAutosave = () => rememberAutosave({ on: box.querySelector("#autosave").checked, maxMb: Number(box.querySelector("#autosave-mb").value) || 150 });
   box.querySelector("#autosave")?.addEventListener("change", saveAutosave);
   box.querySelector("#autosave-mb")?.addEventListener("change", saveAutosave);
@@ -2904,13 +3015,16 @@ function renderImage(box, t) {
     if (!prompt) return;
     const item = makeItem(prompt);
     if (!item.scene) return;
+    previewScene(item);
+  });
+  async function previewScene(item, given = null) {
     const btn = box.querySelector("#scene-preview");
-    btn.disabled = true;
+    if (btn) btn.disabled = true;
     let r;
     try {
-      r = await withScene(item, { how: "choose" });
+      r = await withScene(item, { how: "choose", given });
     } finally {
-      btn.disabled = false;
+      if (btn) btn.disabled = false;
     }
     if (!r.choice) return;
     // Made now when the machine is free; otherwise it goes next.
@@ -2918,8 +3032,34 @@ function renderImage(box, t) {
     item.notes = r.notes;
     queue.push(item);
     $("#image-prompt").value = "";
+    $("#image-prompt").dispatchEvent(new Event("input"));
     renderQueue();
     drain();
+  }
+  // Opened again: a scene preview or a suggestion left on show is back as
+  // it was, once the rest of the window is set up.
+  queueMicrotask(() => {
+    const kept = state.runs?.[t.repo];
+    if (!box.isConnected || !kept) return;
+    // The words being typed, as they were left.
+    const words = box.querySelector("#image-prompt");
+    const avoid = box.querySelector("#image-negative");
+    if (kept.draft && words && !words.value) words.value = kept.draft.prompt ?? "";
+    if (kept.draft && avoid && !avoid.value) avoid.value = kept.draft.negative ?? "";
+    const keepDraft = () => (kept.draft = { prompt: words?.value ?? "", negative: avoid?.value ?? "" });
+    words?.addEventListener("input", keepDraft);
+    avoid?.addEventListener("input", keepDraft);
+    kept.redrawScene = () => {
+      if (box.isConnected && kept.scenePending) previewScene(kept.scenePending.item, kept.scenePending);
+    };
+    if (kept.scenePending) previewScene(kept.scenePending.item, kept.scenePending);
+    else if (kept.sceneWorking) {
+      const el = box.querySelector("#suggest");
+      if (el) {
+        el.hidden = false;
+        el.innerHTML = `<p class="muted small">Claude is laying the scene out as shots; they show here first, to change before anything is sent.</p>`;
+      }
+    } else if (kept.suggestion) showSuggestion(kept.suggestion);
   });
   for (const r of box.querySelectorAll("input[name=level]")) r.addEventListener("change", () => {
     try {
@@ -2979,6 +3119,16 @@ function renderImage(box, t) {
     } else if (!on && abort) abort.closest(".abort-row")?.remove();
   };
   reply.canContinue = Boolean(video && t.startPicture);
+  // Each card's reply box, as it was left: open or not, the words typed,
+  // the mode, the last line said, and a fix plan waiting to be made.
+  reply.keep = (entry) => {
+    const all = (rec.replies ??= new Map());
+    if (!all.has(entry.id)) all.set(entry.id, { open: false, text: "", mode: "change", foot: "" });
+    return all.get(entry.id);
+  };
+  reply.restore = (entry, foot) => {
+    if (rec.fixPlans?.has(entry.id)) showFixPlan(entry.id, foot);
+  };
   renderKept(box, t.repo, rec.shown, t.agent ? reply : null);
   // A request as it will be sent: the words, what to avoid, the settings as
   // chosen right now, a seed of its own, and the files picked, read when it
@@ -3076,6 +3226,7 @@ function renderImage(box, t) {
     }
     queue.push(item);
     $("#image-prompt").value = "";
+    $("#image-prompt").dispatchEvent(new Event("input"));
     renderQueue();
     drain();
   });
@@ -3157,7 +3308,7 @@ function renderImage(box, t) {
   // buttons send the shots or the plain words. "choose" is the preview,
   // which can be read while the machine works on something else: the
   // buttons then make the scene now, add it to the queue, or drop it.
-  async function withScene(item, { how = "send" } = {}) {
+  async function withScene(item, { how = "send", given = null } = {}) {
     const el = box.querySelector("#suggest");
     const level = item.level ?? "medium";
     const asPlain = (line) => {
@@ -3176,13 +3327,16 @@ function renderImage(box, t) {
     if (!claudeAvailable() || !el) return done(asPlain("No Anthropic key for Claude to lay out the shots."));
     el.hidden = false;
     el.innerHTML = `<p class="muted small">Claude is laying the scene out as shots; they show here first, to change before anything is sent.</p>`;
-    const picture = await startingPictureFor(item, t.repo);
-    let got = await sceneShots(item.prompt, item.sceneSeconds, spec, t.repo, item.negative, picture);
+    // Shots laid out already (a window opened again on a preview) are shown
+    // as they were left; otherwise Claude lays them out.
+    if (!given && how === "choose") rec.sceneWorking = true;
+    const picture = given ? null : await startingPictureFor(item, t.repo);
+    let got = given?.got ?? (await sceneShots(item.prompt, item.sceneSeconds, spec, t.repo, item.negative, picture));
     // With the photo in front of it Claude may write no shots at all; told
     // of the photo instead of shown it, it lays out the same everyday
     // scene with the person and place kept as they are in the picture.
-    let unseen = false;
-    if (!got.shots.length && picture) {
+    let unseen = given?.unseen ?? false;
+    if (!given && !got.shots.length && picture) {
       const again = await sceneShots(item.prompt, item.sceneSeconds, spec, t.repo, item.negative, null, { pictureUnseen: true });
       if (again.shots.length) {
         got = again;
@@ -3191,6 +3345,19 @@ function renderImage(box, t) {
     }
     const remark = `${unseen ? `<p class="muted small">With the photo in front of it, Claude wrote no shots. Told of the photo instead of shown it, it laid these out; they keep the person and the place as they are in the picture.</p>` : ""}${got.note ? `<p class="muted small"><b>Claude's note:</b> ${esc(got.note)}</p>` : ""}`;
     const finals = how === "choose" ? `<button class="primary" id="scene-go" ${rec.active ? "hidden" : ""}>Generate this scene</button><button class="${rec.active ? "primary" : "ghost"}" id="scene-queue">Add to queue${rec.active ? " (runs after the request under way)" : ""}</button><button class="ghost" id="scene-discard">Discard</button>` : `<button class="primary" id="shots-send">Send these shots</button><button class="ghost" id="shots-mine">Send my words as one long clip</button>`;
+    rec.sceneWorking = false;
+    // The window was opened again while Claude worked: the shots go to the
+    // window on show, which takes the preview from here.
+    if (how === "choose" && !el.isConnected) {
+      rec.scenePending = { item, got, unseen };
+      rec.redrawScene?.();
+      return new Promise(() => {});
+    }
+    // Kept while it is on show, edits and all, for a window opened again.
+    const pending = how === "choose" ? (rec.scenePending = { item, got, unseen }) : null;
+    const settled = () => {
+      if (rec.scenePending === pending) rec.scenePending = null;
+    };
     return new Promise((resolve) => {
       // The final buttons: `take()` settles the item from what is on
       // show, or says there is nothing to send yet.
@@ -3199,6 +3366,7 @@ function renderImage(box, t) {
           const notes = take();
           if (notes === null) return;
           el.hidden = true;
+          settled();
           resolve(done(notes, choice));
         };
         el.querySelector("#shots-send")?.addEventListener("click", () => finish(null));
@@ -3206,10 +3374,12 @@ function renderImage(box, t) {
         el.querySelector("#scene-queue")?.addEventListener("click", () => finish("queue"));
         el.querySelector("#shots-mine")?.addEventListener("click", () => {
           el.hidden = true;
+          settled();
           resolve(done(asPlain("Sending your words as typed.")));
         });
         el.querySelector("#scene-discard")?.addEventListener("click", () => {
           el.hidden = true;
+          settled();
           resolve(done([], null));
         });
       };
@@ -3232,6 +3402,7 @@ function renderImage(box, t) {
       const read = () => [...list.querySelectorAll("li")].map((li) => ({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds)), text: li.querySelector(".shot-text").value.trim() })).filter((s) => s.text);
       const total = () => {
         const shots = read();
+        if (pending) pending.got = { ...pending.got, shots: [...list.querySelectorAll("li")].map((li) => ({ seconds: Number(li.querySelector(".shot-seconds").value) || spec.minSeconds, text: li.querySelector(".shot-text").value, written: Number(li.dataset.written) || 0 })) };
         const secs = shots.reduce((a, s) => a + framesFor(s.seconds, spec) / spec.fps, 0);
         const est = shots.reduce((a, s) => a + clipEstimate(spec, level, s.seconds, t.repo).seconds, 0);
         const lv = spec.levels[level] ?? spec.levels.medium;
@@ -3278,7 +3449,7 @@ function renderImage(box, t) {
       };
       const addRow = (shot) => {
         const li = document.createElement("li");
-        if (shot.text) li.dataset.written = String(Math.min(spec.maxSeconds, Math.max(spec.minSeconds, shot.seconds)));
+        if (shot.written || shot.text) li.dataset.written = String(shot.written || Math.min(spec.maxSeconds, Math.max(spec.minSeconds, shot.seconds)));
         li.innerHTML = `<label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><textarea class="shot-text" rows="2">${esc(shot.text)}</textarea><button class="ghost shot-remove" title="Remove this shot">Remove</button>`;
         li.querySelector(".shot-remove").addEventListener("click", () => {
           li.remove();
@@ -3465,22 +3636,39 @@ function renderImage(box, t) {
     foot.textContent = claudeAvailable() ? "Claude is working out which shots to make again" : "Reading which shot to make again";
     const plan = await fixPlan(entry, shots, text, t.repo);
     foot.textContent = "";
-    const wrap = foot.closest(".reply");
+    // The plan is kept with the clip, edits and all, so the window can be
+    // left and opened again without losing it.
+    (rec.fixPlans ??= new Map()).set(entry.id, { entry, text, shots, plan, level, n, word, oldQ: old[0].q, oldSeed: old[0].seed, suggested: shots.map((s) => plan.changes.get(s.index) ?? reviseWords(s.text, entry.negative, text).prompt), ticks: shots.map((s) => plan.changes.has(s.index)), texts: shots.map((s) => plan.changes.get(s.index) ?? s.text), carry: plan.carry });
+    // Into the card on show now: the window may have been opened again meanwhile.
+    const live = rec.replies?.get(entry.id)?.footEl;
+    showFixPlan(entry.id, live?.isConnected ? live : foot);
+  }
+
+  // The fix plan for a clip, drawn from what is kept: which shots are made
+  // again, in which words, and whether the change carries through.
+  function showFixPlan(id, foot) {
+    const kept = rec.fixPlans?.get(id);
+    const wrap = foot?.closest(".reply");
+    if (!kept || !wrap) return;
+    const { entry, text, shots, plan, level, n, word, suggested } = kept;
+    const group = entry.piece.group;
+    const lv = spec.levels[level] ?? spec.levels.medium;
+    const old = [{ q: kept.oldQ, seed: kept.oldSeed }];
+    wrap.hidden = false;
     wrap.querySelector(".fix")?.remove();
     const el = document.createElement("div");
     el.className = "fix";
-    const suggested = shots.map((s) => plan.changes.get(s.index) ?? reviseWords(s.text, entry.negative, text).prompt);
     const none = !plan.changes.size;
     const reading = plan.claude ? `Claude named no ${word} to make again (${esc(plan.claude)})${none ? `: tick the ${word}s to make again.` : `; the ${word} your reply names is ticked.`}` : plan.by === "Claude" ? `Claude's reading${plan.why ? `: ${esc(plan.why)}` : "."}` : none ? `No ${word} is named in the reply${plan.why && plan.why !== "no shot named in the reply" ? ` (Claude: ${esc(plan.why)})` : ""}: tick the ${word}s to make again.` : `From your words${plan.why ? ` (Claude: ${esc(plan.why)})` : ""}.`;
     el.innerHTML = `<p class="muted small"><b>The fix, ${word} by ${word}.</b> ${reading} A ticked ${word} is made again from the words in its row, with the same seed, starting from the last frame of the ${word} before; the others are kept as they are, and all are joined again.</p>
       <ol class="shots fix-shots"></ol>
-      <label class="muted small fix-carry-row"><input type="checkbox" class="fix-carry" ${plan.carry ? "checked" : ""}> Make the ${word}s after the last ticked one again too, so the change carries through them</label>
+      <label class="muted small fix-carry-row"><input type="checkbox" class="fix-carry" ${kept.carry ? "checked" : ""}> Make the ${word}s after the last ticked one again too, so the change carries through them</label>
       <p class="muted small fix-total"></p>
       <p class="tools-row"><button class="primary fix-go">${rec.active ? "Add the fix to the queue (runs after the request under way)" : "Make the fix"}</button><button class="ghost fix-discard">Discard</button></p>`;
     const list = el.querySelector(".fix-shots");
     for (const s of shots) {
       const li = document.createElement("li");
-      li.innerHTML = `<label class="shot-len"><input type="checkbox" class="fix-redo" ${plan.changes.has(s.index) ? "checked" : ""}> ${s.index} · ${s.seconds.toFixed(1)} s</label><textarea class="shot-text" rows="2">${esc(plan.changes.get(s.index) ?? s.text)}</textarea><span class="muted small fix-state"></span>`;
+      li.innerHTML = `<label class="shot-len"><input type="checkbox" class="fix-redo" ${kept.ticks[s.index - 1] ? "checked" : ""}> ${s.index} · ${s.seconds.toFixed(1)} s</label><textarea class="shot-text" rows="2">${esc(kept.texts[s.index - 1])}</textarea><span class="muted small fix-state"></span>`;
       list.append(li);
     }
     const rows = [...list.querySelectorAll("li")];
@@ -3507,17 +3695,27 @@ function renderImage(box, t) {
       tick.addEventListener("change", () => {
         // Ticked with its old words still there, a shot takes the revised ones: the same words and seed would give the same shot.
         if (tick.checked && area.value.trim() === shots[i].text) area.value = suggested[i];
+        kept.ticks[i] = tick.checked;
+        kept.texts[i] = area.value;
         total();
       });
       area.addEventListener("input", () => {
         if (!tick.checked && area.value.trim() !== shots[i].text) tick.checked = true;
+        kept.ticks[i] = tick.checked;
+        kept.texts[i] = area.value;
         total();
       });
     });
-    el.querySelector(".fix-carry").addEventListener("change", total);
+    el.querySelector(".fix-carry").addEventListener("change", (e) => {
+      kept.carry = e.target.checked;
+      total();
+    });
     total();
     wrap.append(el);
-    el.querySelector(".fix-discard").addEventListener("click", () => el.remove());
+    el.querySelector(".fix-discard").addEventListener("click", () => {
+      rec.fixPlans.delete(id);
+      el.remove();
+    });
     el.querySelector(".fix-go").addEventListener("click", () => {
       const going = redo();
       if (!going.some(Boolean)) return;
@@ -3529,6 +3727,7 @@ function renderImage(box, t) {
       const edited = made.some((s, i) => s.text !== suggested[which[i] - 1]);
       const item = { prompt: entry.prompt, negative: entry.negative ?? "", quality: null, level, q: old[0].q ?? entry.q, seed: entry.seed ?? old[0].seed ?? randomSeed(), pieces: n, shots: planned, shotsEdited: Boolean(entry.shotsEdited), scene: false, expand: false, expandSaid: true, startFile: null, replyTo: { id: entry.id, text }, fix: { group, text, redo: which, by: plan.by, edited, scene: Boolean(entry.shots) }, settings: `${which.length} of ${n} ${entry.shots ? "shots" : "pieces"} made again, ${sum.toFixed(1)} s in all at ${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} steps`, each: `${level} quality, ${lv.width} by ${lv.height}, ${lv.steps} steps`, estimate: { base: ests.reduce((a, e) => a + e.base, 0), seconds: ests.reduce((a, e) => a + e.seconds, 0) } };
       const lines = [`Fix to the earlier clip: "${text}"`];
+      rec.fixPlans.delete(id);
       el.remove();
       if (rec.active) {
         queue.push(item);
@@ -5558,7 +5757,7 @@ function qFromSettings(settings, spec, qualities) {
 // Text from Claude through the site, with the person's own key: the whole
 // answer, or a reason why there is none (the site refused, Claude
 // declined, the connection failed), for the log to say.
-async function claudeText(payload, onText = null) {
+async function claudeText(payload, onText = null, onStatus = null) {
   // With a key saved on the account, that is the key: one typed into the
   // Check an answer panel is for that panel, and a stale one there must not
   // speak for every expansion and suggestion.
@@ -5579,6 +5778,8 @@ async function claudeText(payload, onText = null) {
         out += j.text;
         onText?.(out);
       }
+      // Where Claude is while nothing is written yet: thinking, and for how long.
+      if (j.status) onStatus?.(j);
       if (j.done) end = j;
     });
   } catch (err) {
@@ -5916,13 +6117,33 @@ function addReply(card, entry, onReply) {
   const text = wrap.querySelector(".reply-text");
   const foot = wrap.querySelector(".reply-foot");
   const mode = () => wrap.querySelector(".reply-mode input:checked")?.value ?? "change";
+  // As it was left, when the window is opened again.
+  const keep = onReply.keep?.(entry) ?? null;
+  if (keep) {
+    form.hidden = !keep.open;
+    text.value = keep.text;
+    foot.textContent = keep.foot;
+    keep.footEl = foot;
+    const r = wrap.querySelector(`.reply-mode input[value="${keep.mode}"]`);
+    if (r) r.checked = true;
+    if (keep.busy) wrap.querySelector(".reply-run").disabled = true;
+    text.addEventListener("input", () => (keep.text = text.value));
+  }
   for (const r of wrap.querySelectorAll(".reply-mode input")) r.addEventListener("change", () => {
+    if (keep) keep.mode = mode();
     text.placeholder = words[mode()].hint;
     wrap.querySelector(".reply-note").textContent = words[mode()].note;
     wrap.querySelector(".reply-run").textContent = words[mode()].go;
   });
+  // Shown for the mode the box was left in.
+  if (keep) {
+    text.placeholder = words[mode()].hint;
+    wrap.querySelector(".reply-note").textContent = words[mode()].note;
+    wrap.querySelector(".reply-run").textContent = words[mode()].go;
+  }
   wrap.querySelector(".reply-go").addEventListener("click", () => {
     form.hidden = !form.hidden;
+    if (keep) keep.open = !form.hidden;
     if (!form.hidden) text.focus();
   });
   wrap.querySelector(".reply-run").addEventListener("click", async () => {
@@ -5933,15 +6154,33 @@ function addReply(card, entry, onReply) {
     }
     const run = wrap.querySelector(".reply-run");
     run.disabled = true;
+    // What the reply says as it goes is kept, and shown in the card of a
+    // window opened again meanwhile.
+    const sync = () => {
+      if (!keep) return;
+      keep.foot = foot.textContent;
+      if (keep.footEl && keep.footEl !== foot && keep.footEl.isConnected) keep.footEl.textContent = foot.textContent;
+    };
+    if (keep) keep.busy = true;
+    const syncing = keep ? setInterval(sync, 300) : null;
     try {
-      await onReply(entry, ask, foot, mode());
+      await onReply(entry, ask, keep?.footEl?.isConnected ? keep.footEl : foot, mode());
       text.value = "";
+      if (keep) keep.text = "";
     } catch (err) {
       foot.textContent = `Could not ask: ${err.message}`;
     } finally {
       run.disabled = false;
+      if (keep) {
+        clearInterval(syncing);
+        sync();
+        keep.busy = false;
+        const live = keep.footEl?.closest(".reply-wrap")?.querySelector(".reply-run");
+        if (live) live.disabled = false;
+      }
     }
   });
+  onReply.restore?.(entry, foot);
 }
 
 function safeguardText(pricePerHour) {

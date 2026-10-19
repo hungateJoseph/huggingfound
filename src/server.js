@@ -1014,10 +1014,20 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         }
         res.write(`${JSON.stringify(obj)}\n`);
       };
+      // Where Claude is, every few seconds from the second second on: the
+      // page shows it, and the line is never quiet long enough for anything
+      // between to give up on it while Claude thinks.
+      const began = Date.now();
+      let where = { phase: "waiting", thought: 0 };
+      const beat = setInterval(() => {
+        if (Date.now() - began >= 2000) line({ status: where.phase, thought: where.thought, seconds: Math.round((Date.now() - began) / 1000) });
+      }, 3000);
       try {
-        const result = await checker.review(body, (text) => line({ text }), use);
+        const result = await checker.review(body, (text) => line({ text }), use, (e) => (where = e));
+        clearInterval(beat);
         line({ done: true, ...result });
       } catch (err) {
+        clearInterval(beat);
         let message = err instanceof ReviewError ? err.message : `The check failed: ${err.message}`;
         // A refused key: which one was sent, since a key typed into the page
         // is used ahead of the one saved, and a stale one there looks like

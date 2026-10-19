@@ -584,3 +584,4 @@ details.levels-note summary { cursor: pointer; }
 .code-body { white-space: pre-wrap; font-size: 14px; }
 .code-foot { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .check.community { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 0 0 10px; font-size: 14px; }
+.code-progress { margin: 4px 0 8px; } .code-progress[hidden] { display: none; }

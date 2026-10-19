@@ -100,6 +100,8 @@ const reviewer = {
       return { declined: false, model: "claude-opus-5", note: "" };
     }
     if (input.kind === "code" && input.mode === "finish") {
+      // A while before the first word, as Claude thinks first.
+      await new Promise((r) => setTimeout(r, 4500));
       onText("Wrote:\n- mineOdds: counts the constraints around each number\n=== Finished ===\n```js\nfunction mineOdds(board) {\n  return board.map((row) => row.map(() => 0.5));\n}\nconsole.log(mineOdds([[0]]));\n```");
       return { declined: false, model: "claude-opus-5", note: "" };
     }
@@ -691,9 +693,12 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(await page.locator("#messages .msg").count(), 27);
   assert.match(await page.locator("#messages .msg").last().innerText(), /word7 is not a word/);
   assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("chat:qwen-test"))).length, 27, "kept on this computer");
-  const kept = page.locator("#messages .improve-wrap", { hasText: "Checked earlier by Claude" });
+  // Opened again, the answer's Claude box looks as it was left: the revision last asked for, with its way to use it.
+  const kept = page.locator("#messages .improve-wrap", { hasText: "Claude's revision" });
   assert.equal(await kept.count(), 1);
-  assert.match(await kept.locator(".review-body").innerText(), /This has one problem\.\nword7 is not a word\./, "the review is kept with the answer");
+  assert.match(await kept.locator(".review-body").innerText(), /word7 is not a word\./, "the revision is kept with the answer");
+  assert.match(await kept.locator(".review-foot").innerText(), /By claude-opus-5/);
+  assert.equal(await kept.locator("button", { hasText: "Use this as the answer" }).count(), 1);
 
   // A picture link in an answer shows as the picture, with its alt text as a caption; the rest stays text.
   await page.evaluate(() => addMsg("assistant", "Here it is: ![a red cat](https://example.com/cat.png) and also https://example.com/dog.jpg?x=1 done"));
@@ -737,12 +742,30 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.match(await tools.locator(".code-body").innerText(), /^Found:\n- mineOdds returns nothing/);
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).question, /HANDOFF TO CLAUDE: mineOdds/.test(reviewed.at(-1).answer)], ["fix", "write me Minesweeper combined with Scrabble", true]);
   await tools.locator(".code-finish").click();
+  // Before Claude's first word, the time it has been at it is shown.
+  await page.waitForFunction(() => /^(Waiting for Claude to start|Claude is thinking it through) · \d+ s$/.test([...document.querySelectorAll("#messages .code-tools")].at(-1)?.querySelector(".code-progress .progress-text")?.textContent ?? ""));
+  // Left and opened again while Claude works: the work is there as it stands, and goes on.
+  await page.mouse.click(8, 8);
+  await page.waitForFunction(() => document.querySelector("#modal").hidden);
+  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
+  await page.waitForSelector("#chat-send");
+  assert.match(await page.locator("#messages .code-tools").last().locator(".code-head").innerText(), /^Claude is writing the parts handed to it$/, "the running job shows in the window opened again");
+  assert.equal(await page.locator("#messages .handoff-note summary").last().innerText(), "Claude named the parts to leave to it: mineOdds, wordScore", "the split is kept with the request");
   await page.waitForFunction(() => /Add the finished program to the chat/.test([...document.querySelectorAll("#messages .code-tools")].at(-1)?.textContent ?? ""));
   assert.equal(await tools.locator(".code-head").innerText(), "Claude wrote the parts handed to it");
   assert.equal(reviewed.at(-1).mode, "finish");
   const before = await page.locator("#messages .msg.assistant").count();
   await tools.locator(".code-foot button").click();
+  // Opened again after: Claude's work and what was added look the same.
   await page.waitForFunction((n) => document.querySelectorAll("#messages .msg.assistant").length === n + 1, before);
+  await page.mouse.click(8, 8);
+  await page.waitForFunction(() => document.querySelector("#modal").hidden);
+  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
+  await page.waitForSelector("#chat-send");
+  const reopened = page.locator("#messages .code-tools").nth(-2);
+  assert.equal(await reopened.locator(".code-head").innerText(), "Claude wrote the parts handed to it");
+  assert.equal(await reopened.locator(".code-foot button").innerText(), "Added below");
+  assert.equal(await reopened.locator(".code-foot button").isDisabled(), true);
   assert.match(await page.locator("#messages .msg.assistant").last().innerText(), /return board\.map\(\(row\) => row\.map\(\(\) => 0\.5\)\);/);
   assert.match(await page.locator("#messages .chain").last().innerText(), /Claude/);
   assert.ok(await lastAnswer.count());
@@ -1685,8 +1708,25 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.match(await fixedCard.locator(".fix > p").first().innerText(), /^The fix, piece by piece\. Claude named no piece to make again \(I cannot tell which shot from this\.\); the piece your reply names is ticked\./);
   assert.deepEqual(await fixedCard.locator(".fix .fix-redo").evaluateAll((els) => els.map((e) => e.checked)), [false, false, true], "the last shot, from the words");
   const fixJobs = rentedAgent.state.jobs.length;
-  await fixedCard.locator(".fix-discard").click();
-  assert.equal(await fixedCard.locator(".fix").count(), 0);
+  // Left and opened again with the plan on show: it is there as it was, ticks and words, on the clip's card.
+  await fixedCard.locator(".fix .shot-text").nth(0).fill("the first shot, reworded by hand");
+  // Drawn afresh, as opening the window again draws it (the machine is
+  // stopped here, so a real reopen would offer Start instead of the tool).
+  await visitor.evaluate(() => renderTry(state.model, state.plan));
+  await visitor.waitForSelector("#video-seconds");
+  const refixed = visitor.locator(".image-card", { hasText: "piece 2 made again for it" }).first();
+  await refixed.locator(".fix .fix-shots li").nth(2).waitFor();
+  assert.deepEqual(await refixed.locator(".fix .fix-redo").evaluateAll((els) => els.map((e) => e.checked)), [true, false, true], "the ticks as left, the hand edit having ticked the first");
+  assert.equal(await refixed.locator(".fix .shot-text").nth(0).inputValue(), "the first shot, reworded by hand");
+  assert.equal(await refixed.locator(".reply").isHidden(), false, "the reply box is open as it was left");
+  await refixed.locator(".fix-discard").click();
+  assert.equal(await refixed.locator(".fix").count(), 0);
+  // Discarded, it stays gone when the window is opened again.
+  // Drawn afresh, as opening the window again draws it (the machine is
+  // stopped here, so a real reopen would offer Start instead of the tool).
+  await visitor.evaluate(() => renderTry(state.model, state.plan));
+  await visitor.waitForSelector("#video-seconds");
+  assert.equal(await visitor.locator(".image-card .fix").count(), 0);
   assert.equal(rentedAgent.state.jobs.length, fixJobs);
   // A scene: Claude lays the words out as shots, each with its own
   // description and length, shown first to change; each shot is made from
@@ -1716,6 +1756,12 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).seconds, reviewed.at(-1).minSeconds, reviewed.at(-1).maxSeconds, reviewed.at(-1).clip], ["scene", 12, 1, 5, true], "Claude is told the length and the model's shot range");
   assert.equal(await visitor.locator("#shots li").count(), 3);
   assert.deepEqual(await visitor.$$eval("#shots .shot-seconds", (els) => els.map((e) => e.value)), ["4", "3", "5"], "bold, bulleted and running-time lines are read all the same");
+  // Left and opened again: the preview is back as Claude laid it out, ready to change and send.
+  const reviewsBeforeReopen = reviewed.length;
+  await visitor.evaluate(() => renderTry(state.model, state.plan));
+  await visitor.waitForSelector("#shots li");
+  assert.deepEqual(await visitor.$$eval("#shots .shot-seconds", (els) => els.map((e) => e.value)), ["4", "3", "5"]);
+  assert.equal(reviewed.length, reviewsBeforeReopen, "shown again from what was kept, not asked of Claude again");
   assert.match(await visitor.locator("#suggest").innerText(), /Claude's note: the father is in frame from the first shot\./);
   assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 12\.2 s in all at low quality \(832 by 480, 20 passes each\), about [\s\S]*A lower quality above makes every shot quicker\./);
   assert.equal(await visitor.locator("#scene-go").isHidden(), true, "busy: the scene cannot be made now");

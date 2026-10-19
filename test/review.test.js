@@ -314,3 +314,41 @@ test("coding with the rented model and Claude: Claude names the hard parts, chec
   assert.throws(() => buildRequest({ kind: "code", mode: "fix", question: "q", answer: " " }), /no answer/);
   assert.throws(() => buildRequest({ kind: "code", mode: "handoff-plan", question: "" }), /request first/);
 });
+
+test("Claude's thinking is reported as it goes, and an effort setting the API refuses is asked again without it", async () => {
+  class BadRequestError extends Error {}
+  const sdk = Object.assign(function Anthropic() {}, { BadRequestError, AuthenticationError: class extends Error {}, PermissionDeniedError: class extends Error {}, RateLimitError: class extends Error {}, APIConnectionError: class extends Error {}, APIError: class extends Error {} });
+  const sent = [];
+  const events = [
+    { type: "content_block_start", content_block: { type: "thinking" } },
+    { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "Let me see. " } },
+    { type: "content_block_delta", delta: { type: "text_delta", text: "Wrote:\n- odds" } },
+  ];
+  const client = {
+    beta: {
+      messages: {
+        stream(params) {
+          sent.push(params);
+          const refuse = sent.length === 1;
+          return {
+            async *[Symbol.asyncIterator]() {
+              if (refuse) throw new BadRequestError("output_config.effort: Extra inputs are not permitted");
+              yield* events;
+            },
+            finalMessage: async () => ({ model: "claude-opus-5", stop_reason: "end_turn" }),
+          };
+        },
+      },
+    },
+  };
+  const reviewer = createReviewer({ sdk, client });
+  const heard = [];
+  let text = "";
+  const result = await reviewer.review({ kind: "code", mode: "finish", question: "q", answer: "def odds(): # HANDOFF TO CLAUDE: odds" }, (t) => (text += t), {}, (e) => heard.push(e));
+  assert.equal(result.declined, false);
+  assert.equal(text, "Wrote:\n- odds");
+  assert.deepEqual(sent.map((p) => p.output_config?.effort ?? null), ["medium", null], "asked at medium effort, then again without the setting");
+  assert.deepEqual(heard.map((e) => e.phase), ["thinking", "thinking", "writing"]);
+  assert.equal(heard.at(-1).thought, "Let me see. ".length);
+  assert.equal(buildRequest({ kind: "code", mode: "handoff-plan", question: "q" }).output_config.effort, "low");
+});

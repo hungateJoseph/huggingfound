@@ -237,12 +237,13 @@ export function buildRequest(input, { outputDir } = {}) {
     if (input.mode === "handoff-plan") {
       if (!question) throw new ReviewError("Type the coding request first.");
       const text = [`The model is ${input.model || "an open-source model"}. The request:`, `<request>\n${question}\n</request>`, "Name the parts to leave to you, as Part lines."].join("\n\n");
-      return { ...base, max_tokens: 4000, system: HANDOFF_PLAN_SYSTEM, messages: [{ role: "user", content: text }] };
+      return { ...base, max_tokens: 4000, output_config: { effort: "low" }, system: HANDOFF_PLAN_SYSTEM, messages: [{ role: "user", content: text }] };
     }
     if (!answer.trim()) throw new ReviewError("There is no answer to work on yet.");
     if (input.mode !== "fix" && input.mode !== "finish") throw new ReviewError("Unknown kind of code check.");
     const text = [`I asked ${from}:`, `<request>\n${question || "(the request was not kept)"}\n</request>`, "It answered:", `<answer>\n${answer}\n</answer>`, input.mode === "fix" ? "Check the code and fix it: the Found lines, then the corrected answer." : "Write the parts it handed off to you: the Wrote lines, then the finished program."].join("\n\n");
-    return { ...base, system: input.mode === "fix" ? CODE_FIX_SYSTEM : HANDOFF_FINISH_SYSTEM, messages: [{ role: "user", content: text }] };
+    // Medium effort: a coding check is wanted in a minute or two, not ten.
+    return { ...base, output_config: { effort: "medium" }, system: input.mode === "fix" ? CODE_FIX_SYSTEM : HANDOFF_FINISH_SYSTEM, messages: [{ role: "user", content: text }] };
   }
   if (input.kind === "text") {
     const answer = String(input.answer ?? "");
@@ -384,18 +385,40 @@ export function createReviewer({ apiKey = () => "", outputDir, sdk = null, clien
   return {
     // `use.apiKey` is a key for this one check (a visitor's own, on the
     // hosted site); it is passed to Anthropic and kept nowhere.
-    async review(input, onText, use = {}) {
-      const params = buildRequest(input, { outputDir });
+    // `onEvent` hears where Claude is: thinking (with how much so far) or
+    // writing, so a page can show progress before the first word.
+    async review(input, onText, use = {}, onEvent = () => {}) {
+      let params = buildRequest(input, { outputDir });
       const Anthropic = sdk ?? (client ? null : await loadSdk());
       const key = use.apiKey || apiKey();
       const api = client ?? (key ? new Anthropic({ apiKey: key }) : new Anthropic());
       try {
-        const stream = api.beta.messages.stream(params);
+        let stream;
         let wrote = false;
-        for await (const event of stream) {
-          if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-            wrote = true;
-            onText(event.delta.text);
+        let thought = 0;
+        for (let attempt = 0; ; attempt++) {
+          stream = api.beta.messages.stream(params);
+          try {
+            for await (const event of stream) {
+              if (event.type === "content_block_start" && event.content_block?.type === "thinking") onEvent({ phase: "thinking", thought });
+              else if (event.type === "content_block_delta" && event.delta.type === "thinking_delta") {
+                thought += event.delta.thinking?.length ?? 0;
+                onEvent({ phase: "thinking", thought });
+              } else if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+                if (!wrote) onEvent({ phase: "writing", thought });
+                wrote = true;
+                onText(event.delta.text);
+              }
+            }
+            break;
+          } catch (err) {
+            // An effort setting the API does not take: asked again without it.
+            if (attempt === 0 && !wrote && params.output_config && Anthropic && err instanceof Anthropic.BadRequestError && /output_config|effort/i.test(err.message)) {
+              const { output_config: _, ...rest } = params;
+              params = rest;
+              continue;
+            }
+            throw err;
           }
         }
         const message = await stream.finalMessage();
