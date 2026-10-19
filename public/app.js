@@ -1606,8 +1606,8 @@ function nearBottom(el) {
 // per kind in this browser.
 const CHAT_EFFORTS = {
   quick: { label: "Quick", hint: "no thinking, short answer", think: false, options: { num_predict: 400 } },
-  standard: { label: "Standard", hint: "the model's defaults" },
-  thorough: { label: "Thorough", hint: "thinks first, checks its work; slower and better", think: true, system: "Take your time. Think the problem through step by step, consider what could go wrong, and check your work before you answer. Be thorough and precise." },
+  standard: { label: "Standard", hint: "the model's defaults", cap: 8192 },
+  thorough: { label: "Thorough", hint: "thinks first, checks its work; slower and better", think: true, cap: 16384, system: "Take your time. Think the problem through step by step, consider what could go wrong, and check your work before you answer. Be thorough and precise." },
 };
 const OTHER_EFFORTS = {
   quick: { label: "Quick", hint: "fastest" },
@@ -1660,9 +1660,11 @@ function renderChat(box, modelName) {
       <small class="muted">Sent before every conversation as the system message; models follow this far more than a request typed into the chat. It sets a persona and rules, and it cannot change what a model was trained to refuse.</small>
     </details>
     ${effortHtml("chat", CHAT_EFFORTS, "")}
+    ${claudeAvailable() ? `<label class="check handoff" title="Before your message goes to the model, Claude reads it and names the parts this model is likely to get wrong. The model writes the rest, says what it leaves to Claude, and leaves marked stubs; Claude can then write those parts from the button under the answer."><input type="checkbox" id="chat-handoff" ${handoffOn() ? "checked" : ""}> Hand the hard parts to Claude <small class="muted">for coding requests: the model writes what it can, Claude the rest</small></label>` : ""}
     <div class="chat">
       <div class="chat-tools"><span class="muted small">${chat.messages.length ? "The conversation is kept in this browser until you start a new one." : `Ask anything; the answer comes from ${esc(modelName)} on ${state.plan?.remote ? "the rented GPU" : "this computer"}.`}</span><span class="tools-row"><button class="ghost" id="chat-download" ${chat.messages.length ? "" : "hidden"}>Download</button><button class="ghost" id="chat-clear">New chat</button></span></div>
       <div class="messages" id="messages"></div>
+      <div class="chat-progress" id="chat-progress" ${chat.busy ? "" : "hidden"}><div class="progress"><div class="fill"></div></div><div class="chat-progress-row"><span class="progress-text muted small"></span><button class="ghost" id="chat-stop">Stop</button></div><div class="chat-held" hidden></div></div>
       <div class="chat-input">
         <textarea id="chat-text" placeholder="Type a message" rows="2"></textarea>
         <button class="primary" id="chat-send" ${chat.busy ? "disabled" : ""}>Send</button>
@@ -1676,6 +1678,7 @@ function renderChat(box, modelName) {
   // Each finished answer has one control: Claude checks it or revises it,
   // or another model revises it; the question is the user turn before it.
   const checkFor = (el, m) => {
+    codeTools(el, m);
     if (m.chain?.length) {
       const chain = document.createElement("div");
       chain.className = "chain";
@@ -1709,6 +1712,20 @@ function renderChat(box, modelName) {
   for (const m of chat.messages) {
     if (m.role === "system") continue;
     const el = addMsg(m.role, m.content);
+    if (m.role === "user" && m.handoff) showHandoff(el, m);
+    if (m.role === "assistant" && (m.thinking || m.note)) {
+      el.textContent = "";
+      if (m.thinking) el.append(thinkingFold(m.thinking, false));
+      const body = document.createElement("div");
+      renderRich(body, m.content);
+      el.append(...body.childNodes);
+      if (m.note) {
+        const n = document.createElement("p");
+        n.className = "msg-note muted small";
+        n.textContent = m.note;
+        el.append(n);
+      }
+    }
     if (m.role === "assistant") checkFor(el, m);
   }
   if (chat.busy) {
@@ -1719,14 +1736,46 @@ function renderChat(box, modelName) {
   list.scrollTop = list.scrollHeight;
   const messages = chat.messages;
   const mine = () => $("#try")?.dataset.model === modelName;
-  const paint = (text, pending = false) => {
+  const paint = (text, pending = false, thinking = "") => {
     const el = $("#chat-live");
     if (!el) return;
     const stick = nearBottom(el.parentElement);
-    el.textContent = text;
+    el.textContent = "";
+    if (thinking) el.append(thinkingFold(thinking, !text));
+    if (text) el.append(document.createTextNode(text));
     // Empty while the model thinks: the bubble keeps saying so.
-    el.classList.toggle("pending", pending || !text);
+    el.classList.toggle("pending", pending || (!text && !thinking));
     if (stick) el.parentElement.scrollTop = el.parentElement.scrollHeight;
+  };
+  // Painted at most a few times a second: a long think is thousands of
+  // pieces, and drawing each would bog the page down.
+  let paintTimer = null;
+  let paintArgs = null;
+  const paintSoon = (text, thinking) => {
+    paintArgs = [text, false, thinking];
+    if (paintTimer) return;
+    paintTimer = setTimeout(() => {
+      paintTimer = null;
+      paint(...paintArgs);
+    }, 200);
+  };
+  // The finished answer: its thinking folded above it, its pictures shown,
+  // and a note when it stopped at the length limit.
+  const paintFinal = (el, m) => {
+    clearTimeout(paintTimer);
+    paintTimer = null;
+    el.textContent = "";
+    el.classList.remove("pending");
+    const body = document.createElement("div");
+    renderRich(body, m.content);
+    if (m.thinking) el.append(thinkingFold(m.thinking, false));
+    el.append(...body.childNodes);
+    if (m.note) {
+      const n = document.createElement("p");
+      n.className = "msg-note muted small";
+      n.textContent = m.note;
+      el.append(n);
+    }
   };
   const send = async () => {
     if (chat.busy) return;
@@ -1765,9 +1814,10 @@ function renderChat(box, modelName) {
     if (system && messages[0]?.role !== "system") messages.unshift({ role: "system", content: system });
     else if (system) messages[0].content = system;
     else if (messages[0]?.role === "system") messages.shift();
-    messages.push({ role: "user", content: text });
+    const userMsg = { role: "user", content: text };
+    messages.push(userMsg);
     saveChat(modelName, chat);
-    addMsg("user", text);
+    const userEl = addMsg("user", text);
     $("#chat-download").hidden = false;
     const out = addMsg("assistant", "");
     out.id = "chat-live";
@@ -1775,27 +1825,50 @@ function renderChat(box, modelName) {
     chat.busy = true;
     state.chatBusy = (state.chatBusy ?? 0) + 1;
     chat.reply = "";
+    chat.thinking = "";
     $("#chat-send").disabled = true;
     let reply = "";
+    let thinking = "";
+    // Stop ends the reply here; the machine is told by the dropped line.
+    const ctl = new AbortController();
+    chat.abort = () => ctl.abort();
+    const effortName = chosenEffort(box, "chat");
+    const meter = chatMeter(modelName, effortName);
+    let done = null;
     try {
+      meter.start();
       // The effort shapes this one request: a care instruction joins the
       // system message, thinking is turned on or off, the length capped.
-      const effort = CHAT_EFFORTS[chosenEffort(box, "chat")] ?? CHAT_EFFORTS.standard;
-      const sent = messages.map(({ role, content }) => ({ role, content }));
+      const effort = CHAT_EFFORTS[effortName] ?? CHAT_EFFORTS.standard;
+      // Handing the hard parts to Claude: Claude names them first, and the
+      // model is asked to write the rest and leave marked stubs for them.
+      if ($("#chat-handoff")?.checked && claudeAvailable()) {
+        meter.note("Claude is reading the request for the parts to leave to it");
+        const plan = await claudeText({ kind: "code", mode: "handoff-plan", question: text, model: modelName });
+        const parts = parseHandoffParts(plan.text);
+        userMsg.sent = handoffPrompt(text, parts);
+        userMsg.handoff = { parts, why: plan.text ? "" : plan.why };
+        saveChat(modelName, chat);
+        showHandoff(userEl, userMsg);
+        meter.note("");
+      }
+      const sent = messages.map(({ role, content, sent: asSent }) => ({ role, content: asSent ?? content }));
       if (effort.system) {
         if (sent[0]?.role === "system") sent[0] = { role: "system", content: `${sent[0].content}\n\n${effort.system}` };
         else sent.unshift({ role: "system", content: effort.system });
       }
       const body = { model: modelName, messages: sent };
       if (typeof effort.think === "boolean") body.think = effort.think;
-      if (effort.options) body.options = effort.options;
-      let res = await chatRequest(body);
+      // Every reply has an end: a model thinking in circles stops at the cap
+      // instead of holding the machine for hours.
+      if (effort.options || effort.cap) body.options = { ...(effort.cap ? { num_predict: effort.cap } : {}), ...(effort.options ?? {}) };
+      let res = await chatRequest(body, ctl.signal);
       // A model without a thinking pass refuses the knob; ask again without it.
       if (!res.ok && "think" in body) {
         const why = await res.text().catch(() => "");
         if (/think/i.test(why)) {
           delete body.think;
-          res = await chatRequest(body);
+          res = await chatRequest(body, ctl.signal);
         }
       }
       if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
@@ -1803,8 +1876,8 @@ function renderChat(box, modelName) {
       const dec = new TextDecoder();
       let buf = "";
       for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
+        const { value, done: end } = await reader.read();
+        if (end) break;
         buf += dec.decode(value, { stream: true });
         const lines = buf.split("\n");
         buf = lines.pop();
@@ -1812,38 +1885,118 @@ function renderChat(box, modelName) {
           if (!line.trim()) continue;
           const j = JSON.parse(line);
           if (j.error) throw new Error(j.error);
-          reply += j.message?.content ?? "";
+          // The model's thinking comes apart from its answer: shown as it
+          // comes, folded, so a long think is seen to be going on.
+          const th = j.message?.thinking ?? "";
+          const piece = j.message?.content ?? "";
+          if (th) thinking += th;
+          if (piece) reply += piece;
+          if (th || piece) meter.token(piece ? "answer" : "thinking");
+          if (j.done) done = j;
           chat.reply = reply;
-          paint(reply);
+          chat.thinking = thinking;
+          paintSoon(reply, thinking);
         }
       }
-      const said = { role: "assistant", content: reply };
+      const said = { role: "assistant", content: reply, ...(thinking ? { thinking } : {}) };
+      // Stopped at the cap: said, with the way on.
+      if (done?.done_reason === "length") said.note = reply ? `It stopped at the length limit of ${body.options?.num_predict ?? "the model's"} tokens; ask it to go on.` : `It thought for the whole length limit (${body.options?.num_predict ?? ""} tokens) without starting the answer. Ask again at Quick, which skips the thinking, or narrow the question.`;
       messages.push(said);
       saveChat(modelName, chat);
+      meter.finish(done?.eval_count);
       const live = $("#chat-live");
-      if (live && mine() && reply.trim()) {
+      if (live && mine()) {
         const stick = nearBottom(live.parentElement);
         // The finished answer shows its pictures; while it streamed it was plain text.
-        renderRich(live, reply);
-        checkFor(live, said);
+        paintFinal(live, said);
+        if (reply.trim()) checkFor(live, said);
         if (stick) live.parentElement.scrollTop = live.parentElement.scrollHeight;
       }
     } catch (err) {
-      paint(`${reply}${reply ? "\n\n" : ""}Something went wrong: ${err.message}`);
+      const stopped = ctl.signal.aborted;
+      meter.finish(null, stopped ? "stopped" : "failed");
+      paint(`${reply}${reply ? "\n\n" : ""}${stopped ? "Stopped." : `Something went wrong: ${err.message}`}`, false, thinking);
       if (reply) {
-        messages.push({ role: "assistant", content: reply });
+        messages.push({ role: "assistant", content: reply, ...(thinking ? { thinking } : {}) });
         saveChat(modelName, chat);
       }
     } finally {
       chat.busy = false;
+      chat.abort = null;
       state.chatBusy--;
       chat.reply = null;
+      chat.thinking = null;
       $("#chat-live")?.removeAttribute("id");
       if (mine()) $("#chat-send").disabled = false;
     }
   };
   wireEffort(box, "chat");
+  $("#chat-handoff")?.addEventListener("change", (e) => {
+    try {
+      localStorage.setItem("handoff:chat", e.target.checked ? "1" : "");
+    } catch {
+      // no storage: the switch lasts as long as the window
+    }
+  });
+  // Claude on a code answer: a check that fixes it, and, when the model
+  // handed parts off, those parts written to fit. Each result can join the
+  // conversation as Claude's version.
+  function codeTools(el, m) {
+    if (!claudeAvailable() || m.role !== "assistant" || !hasCode(m.content)) return;
+    const asked = chat.messages.slice(0, chat.messages.indexOf(m)).reverse().find((x) => x.role === "user");
+    const handed = /HANDOFF TO CLAUDE/i.test(m.content) || Boolean(asked?.handoff);
+    const row = document.createElement("div");
+    row.className = "code-tools";
+    row.innerHTML = `<button class="ghost code-fix">Claude: check and fix the code</button>${handed ? `<button class="ghost code-finish">Claude: write the parts handed to it</button>` : ""}<div class="code-result" hidden><div class="code-head"></div><div class="code-body"></div><div class="code-foot muted small"></div></div>`;
+    el.after(row);
+    const run = async (mode) => {
+      const out = row.querySelector(".code-result");
+      const head = out.querySelector(".code-head");
+      const body = out.querySelector(".code-body");
+      const foot = out.querySelector(".code-foot");
+      for (const b of row.querySelectorAll("button")) b.disabled = true;
+      out.hidden = false;
+      head.textContent = mode === "fix" ? "Claude is checking the code" : "Claude is writing the parts handed to it";
+      body.textContent = "";
+      foot.textContent = "Sent to Anthropic: your request and this answer.";
+      const sep = mode === "fix" ? "=== Corrected ===" : "=== Finished ===";
+      const got = await claudeText({ kind: "code", mode, model: modelName, question: asked?.content ?? "", answer: m.content }, (sofar) => {
+        // While it writes: its findings, then how far into the code it is.
+        const [lead, rest] = sofar.split(sep);
+        body.textContent = rest == null ? lead : `${lead.trim()}\n\n(writing the ${mode === "fix" ? "corrected" : "finished"} code: ${rest.split("\n").length} lines so far)`;
+      });
+      for (const b of row.querySelectorAll("button")) b.disabled = false;
+      if (!got.text) {
+        head.textContent = mode === "fix" ? "Claude's check" : "Claude's parts";
+        body.textContent = "";
+        foot.textContent = `This did not finish: ${got.why}.`;
+        return;
+      }
+      const [lead, rest] = got.text.split(sep);
+      head.textContent = mode === "fix" ? "Claude checked the code" : "Claude wrote the parts handed to it";
+      body.textContent = lead.trim();
+      if (!rest?.trim()) {
+        foot.textContent = "Claude gave no code with it.";
+        return;
+      }
+      foot.textContent = "";
+      const add = useButton(mode === "fix" ? "Add the corrected version to the chat" : "Add the finished program to the chat", () => {
+        const done = { role: "assistant", content: rest.trim(), chain: [...(m.chain ?? []), { by: "Claude", request: mode === "fix" ? "checked and fixed the code" : "wrote the parts handed to it" }] };
+        chat.messages.push(done);
+        saveChat(modelName, chat);
+        const shown = addMsg("assistant", done.content);
+        checkFor(shown, done);
+        list.scrollTop = list.scrollHeight;
+        add.disabled = true;
+        add.textContent = "Added below";
+      });
+      foot.append(add);
+    };
+    row.querySelector(".code-fix").addEventListener("click", () => run("fix"));
+    row.querySelector(".code-finish")?.addEventListener("click", () => run("finish"));
+  }
   $("#chat-send").addEventListener("click", send);
+  $("#chat-stop").addEventListener("click", () => chat.abort?.());
   $("#chat-download").addEventListener("click", () => {
     const lines = [`# ${modelName}`, ""];
     for (const m of chat.messages) {
@@ -1867,14 +2020,183 @@ function renderChat(box, modelName) {
   });
 }
 
+// Handing the hard parts of a coding request to Claude. Claude names them
+// (Part lines); the model is asked to write the rest, say what it leaves,
+// and leave a stub for each, marked so that Claude can find and write it.
+function handoffOn() {
+  try {
+    return localStorage.getItem("handoff:chat") === "1";
+  } catch {
+    return false;
+  }
+}
+function parseHandoffParts(text) {
+  const parts = [];
+  for (const raw of String(text ?? "").split("\n")) {
+    const m = raw.replace(/[*_`]+/g, "").trim().match(/^(?:[-\u2022]\s*)?part\s*:\s*(.+)$/i);
+    if (!m || /^none\.?$/i.test(m[1].trim())) continue;
+    const [name, what = "", why = ""] = m[1].split("|").map((x) => x.trim());
+    if (name) parts.push({ name, what, why });
+  }
+  return parts.slice(0, 4);
+}
+function handoffPrompt(text, parts) {
+  const named = parts.length ? `Claude suggests leaving these to it:\n${parts.map((p) => `- ${p.name}${p.what ? `: ${p.what}` : ""}`).join("\n")}\nAlso leave any other part you are not confident you can get right.` : "Leave to Claude any part you are not confident you can get right.";
+  return `${text}
+
+---
+How to do this: write every part you can do well, complete and runnable. Claude, a larger model, will write the hardest parts afterwards, so leave those to it instead of guessing.
+${named}
+For each part you leave to Claude:
+1. Begin your answer by saying in a sentence or two which parts you are leaving to Claude and why.
+2. In the code, write a stub with the exact name, parameters and return value that the rest of your code calls. Its body is a comment that starts with "HANDOFF TO CLAUDE: <the part's name>", followed by a method description: what it must do, its inputs and outputs, the edge cases, and how your code uses it.
+3. Call the stub from your code as if it already worked, so that the program runs once Claude fills it in.`;
+}
+// Under a request sent this way: what Claude named, and the words the model got.
+function showHandoff(el, m) {
+  el.parentElement?.querySelector(`.handoff-note[data-for="${CSS.escape(String(m.content).slice(0, 40))}"]`)?.remove();
+  const d = document.createElement("details");
+  d.className = "handoff-note muted small";
+  d.dataset.for = String(m.content).slice(0, 40);
+  const parts = m.handoff?.parts ?? [];
+  const summary = document.createElement("summary");
+  summary.textContent = parts.length ? `Claude named the parts to leave to it: ${parts.map((p) => p.name).join(", ")}` : m.handoff?.why ? `Claude could not read the request (${m.handoff.why}); the model was asked to leave what it is unsure of` : "Claude found nothing this model should leave to it; the model may still leave what it is unsure of";
+  const body = document.createElement("div");
+  body.className = "handoff-body";
+  body.textContent = `${parts.map((p) => `${p.name}: ${p.what}${p.why ? ` (${p.why})` : ""}`).join("\n")}${parts.length ? "\n\n" : ""}What the model was sent:\n${m.sent ?? m.content}`;
+  d.append(summary, body);
+  el.after(d);
+}
+const hasCode = (text) => /```|HANDOFF TO CLAUDE/i.test(String(text ?? ""));
+
+// A reply's thinking, folded above its answer: the summary says how much,
+// and opening it shows the text (the last part of it while it streams).
+// Whether it is open is remembered for the next one.
+function thinkingFold(text, live) {
+  const d = document.createElement("details");
+  d.className = "thinking";
+  d.open = Boolean(state.showThinking);
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const summary = document.createElement("summary");
+  summary.textContent = `${live ? "Thinking" : "Thought it through"} · about ${words.toLocaleString()} words`;
+  const body = document.createElement("div");
+  body.className = "thinking-text";
+  body.textContent = live && text.length > 8000 ? `…${text.slice(-8000)}` : text;
+  d.append(summary, body);
+  d.addEventListener("toggle", () => (state.showThinking = d.open));
+  if (live) requestAnimationFrame(() => (body.scrollTop = body.scrollHeight));
+  return d;
+}
+
+// How far along a reply is. A model does not say how long its answer will
+// be, so the share is a guess from this model's own past replies at this
+// effort (the length it used, learned as it goes), with a first guess
+// before there are any; the rate and the count are exact. Waiting with no
+// first word is said too, with the way to free a machine held up by an
+// earlier reply.
+const CHAT_EXPECT = { quick: 350, standard: 2500, thorough: 6000 };
+function chatMeter(model, effort) {
+  const key = `chatTokens:${model}:${effort}`;
+  let expected = 0;
+  try {
+    expected = Number(localStorage.getItem(key)) || 0;
+  } catch {
+    expected = 0;
+  }
+  const learned = expected > 0;
+  if (!learned) expected = CHAT_EXPECT[effort] ?? 2500;
+  let started = 0;
+  let first = 0;
+  let tokens = 0;
+  let thought = 0;
+  let phase = "thinking";
+  let timer = null;
+  let note = "";
+  const draw = () => {
+    const box = $("#chat-progress");
+    if (!box) return;
+    box.hidden = false;
+    const now = performance.now();
+    const text = box.querySelector(".progress-text");
+    const fill = box.querySelector(".fill");
+    const held = box.querySelector(".chat-held");
+    if (!tokens) {
+      const waited = (now - started) / 1000;
+      fill.style.width = "0%";
+      text.textContent = note ? `${note}, ${Math.round(waited)} s` : waited < 3 ? "Sending" : `Waiting for the model to start, ${Math.round(waited)} s`;
+      if (!note && waited > 30 && held.hidden) chatHeld(held);
+      return;
+    }
+    held.hidden = true;
+    const secs = (now - first) / 1000;
+    const rate = secs > 0.5 ? tokens / secs : 0;
+    const over = tokens >= expected;
+    const pct = over ? 97 : Math.min(97, Math.round((tokens / expected) * 100));
+    fill.style.width = `${pct}%`;
+    const left = !over && rate ? (expected - tokens) / rate : null;
+    const what = phase === "thinking" ? "Thinking" : `Writing the answer${thought ? ` after ${thought.toLocaleString()} tokens of thinking` : ""}`;
+    text.textContent = `${what} · ${tokens.toLocaleString()} tokens${rate ? `, ${Math.round(rate)} a second` : ""} · about ${pct}%${left != null ? `, ${shortDuration(left)} left` : ", longer than its replies usually run"}${learned ? "" : " (a first guess; it learns this model's lengths)"}`;
+  };
+  return {
+    start() {
+      started = performance.now();
+      draw();
+      timer = setInterval(draw, 500);
+    },
+    // Something before the model starts (Claude reading the request): said
+    // in the row, and the wait for the model counted from its end.
+    note(text) {
+      note = text;
+      if (!text) started = performance.now();
+      draw();
+    },
+    token(kind) {
+      if (!tokens) first = performance.now();
+      tokens++;
+      if (kind === "thinking") thought++;
+      phase = kind;
+    },
+    finish(count, how = "done") {
+      clearInterval(timer);
+      const n = Number(count) || tokens;
+      if (how === "done" && n > 0) {
+        try {
+          localStorage.setItem(key, String(learned ? Math.round(expected * 0.6 + n * 0.4) : n));
+        } catch {
+          // no storage: the first guess stays
+        }
+      }
+      const box = $("#chat-progress");
+      if (box) box.hidden = true;
+    },
+  };
+}
+// The model has not started: on a rented machine that is almost always an
+// earlier reply still going there (the page that asked for it left, or it
+// thinks at length), since Ollama answers one request at a time.
+function chatHeld(held) {
+  const r = state.rental;
+  const rented = Boolean(r?.rented);
+  const canFree = rented && r.agent && Number(r.agentVersion) >= 23;
+  held.hidden = false;
+  held.innerHTML = `<p class="muted small">${rented ? "The model has not started on this yet. The machine is most likely still busy with an earlier reply, one left running or a long think: it answers one request at a time. A model loading for the first time also takes a minute." : "The model has not started on this yet: it may be loading, or busy with an earlier reply."}</p>${canFree ? `<button class="ghost" id="chat-free">Free the machine</button>` : rented ? `<p class="muted small">To clear it, Stop and then Start the machine from the bar; its models stay.</p>` : ""}`;
+  held.querySelector("#chat-free")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Freeing the machine";
+    const res = await fetch(`${r.agent}/ollama/restart`, { method: "POST", headers: agentHeaders() }).catch(() => null);
+    held.innerHTML = `<p class="muted small">${res?.ok ? "Freed: the machine's chat server was restarted and every reply on it dropped, this one too. Send your message again." : `Could not free it (${res ? `HTTP ${res.status}` : "no answer"}). Stop and then Start the machine from the bar.`}</p>`;
+  });
+}
+
 // On the hosted site the browser talks to the rented GPU itself, so what is
 // said to the model never passes through the site; on a computer the app's
 // own server relays to Ollama.
-function chatRequest(body) {
+function chatRequest(body, signal = null) {
   const direct = state.hosted && state.chatServer?.direct && state.chatServer.url;
   // The site is told only that the machine is in use, so it is not stopped as idle mid-conversation.
   if (direct) api.post("/api/rent/touch", {}).catch(() => {});
-  return fetch(direct ? `${state.chatServer.url}/api/chat` : "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }) });
+  return fetch(direct ? `${state.chatServer.url}/api/chat` : "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), ...(signal ? { signal } : {}) });
 }
 
 // Hands the browser a file to save: a conversation, a transcript.
@@ -4625,7 +4947,7 @@ function renderRental() {
       ${capNote}${stuck}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${state.runpodKey ? "" : `<div class="notice bad">The RunPod key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
-      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}${r.agentVersion < 20 ? ", clips from reference pictures on MiniMax-H3" : ""}${r.agentVersion < 21 ? ", a disk grown after the rent read at its new size" : ""}${r.agentVersion < 22 ? ", the disk's use counted once" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
+      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}${r.agentVersion < 20 ? ", clips from reference pictures on MiniMax-H3" : ""}${r.agentVersion < 21 ? ", a disk grown after the rent read at its new size" : ""}${r.agentVersion < 22 ? ", the disk's use counted once" : ""}${r.agentVersion < 23 ? ", freeing a chat model held up by an earlier reply" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.retrying ? ` <b>Start is asked again every minute for ${Math.max(1, Math.ceil((startRetry.until - Date.now()) / 60e3))} more minutes${startRetry.tries ? ` (${startRetry.tries} so far)` : ""}; this can be left as it is.</b>` : state.rentError.noGpu && state.rentError.action === "start" ? " Start was asked again every minute for half an hour without luck." : ""}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>${state.rentError.retrying ? `<button class="ghost" id="rent-stop-retry">Stop asking</button>` : ""}` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}
@@ -5225,7 +5547,7 @@ function qFromSettings(settings, spec, qualities) {
 // Text from Claude through the site, with the person's own key: the whole
 // answer, or a reason why there is none (the site refused, Claude
 // declined, the connection failed), for the log to say.
-async function claudeText(payload) {
+async function claudeText(payload, onText = null) {
   // With a key saved on the account, that is the key: one typed into the
   // Check an answer panel is for that panel, and a stale one there must not
   // speak for every expansion and suggestion.
@@ -5242,7 +5564,10 @@ async function claudeText(payload) {
   try {
     await readLines(res, (j) => {
       if (j.error) throw new Error(j.error);
-      if (j.text) out += j.text;
+      if (j.text) {
+        out += j.text;
+        onText?.(out);
+      }
       if (j.done) end = j;
     });
   } catch (err) {

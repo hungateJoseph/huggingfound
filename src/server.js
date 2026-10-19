@@ -948,8 +948,15 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       // and a few numeric options; nothing else from the page reaches Ollama.
       const options = {};
       for (const key of ["num_predict", "num_ctx", "temperature", "top_p"]) if (Number.isFinite(body.options?.[key])) options[key] = body.options[key];
+      // The page leaving or pressing Stop ends the reply at Ollama too, so a
+      // reply nobody is reading does not hold the model for the next one.
+      const gone = new AbortController();
+      res.on("close", () => {
+        if (!res.writableEnded) gone.abort();
+      });
       const upstream = await fetchImpl(`${ollamaUrl(chatServer(ctx))}/api/chat`, {
         method: "POST",
+        signal: gone.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: String(body.model ?? ""), messages: Array.isArray(body.messages) ? body.messages.slice(-40) : [], stream: true, ...(typeof body.think === "boolean" ? { think: body.think } : {}), ...(Object.keys(options).length ? { options } : {}) }),
       });
@@ -957,7 +964,13 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const reader = upstream.body.getReader();
       let tail = "";
       for (;;) {
-        const { value, done } = await reader.read();
+        let chunk;
+        try {
+          chunk = await reader.read();
+        } catch {
+          break;
+        }
+        const { value, done } = chunk;
         if (done) break;
         res.write(value);
         tail = (tail + Buffer.from(value).toString()).slice(-4000);

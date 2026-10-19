@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +23,8 @@ let stub;
 let agent;
 let base;
 const REPO = "second-state/stable-diffusion-v1-5-GGUF";
+const fakeOllama = path.join(home, "fake-ollama");
+const ollamaPort = 20000 + Math.floor(Math.random() * 20000);
 const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q4_0.gguf";
 
 before(async () => {
@@ -31,12 +33,15 @@ before(async () => {
   const fake = path.join(home, "sd-server");
   fs.writeFileSync(fake, `#!/bin/sh\nexec "${process.execPath}" "${path.join(here, "fake-sd-server.js")}" "$@"\n`);
   fs.chmodSync(fake, 0o755);
+  // Ollama is played by a script answering its version on a port of its own.
+  fs.writeFileSync(fakeOllama, `#!${process.execPath}\nrequire("node:http").createServer((q, s) => s.end(JSON.stringify({ version: "fake" }))).listen(${ollamaPort}, "127.0.0.1");\n`);
+  fs.chmodSync(fakeOllama, 0o755);
   // A half-written part from a download cut off before the restart.
   fs.mkdirSync(path.join(modelsDir, "x", "y", "unet"), { recursive: true });
   fs.writeFileSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part"), "half");
   agent = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], {
     // The Python side is played by a Node script that speaks the same protocol.
-    env: { ...process.env, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js"), HF_DISK_GB: "50" },
+    env: { ...process.env, HF_OLLAMA_BIN: fakeOllama, OLLAMA_HOST: `127.0.0.1:${ollamaPort}`, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js"), HF_DISK_GB: "50" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let errors = "";
@@ -96,7 +101,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
   delete h.diskFreeGb;
   delete h.diskTotalGb;
   delete h.diskUsedGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "22", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "23", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
   const pre = await fetch(`${base}/jobs`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "POST" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
@@ -528,14 +533,27 @@ test("removing a model unloads it and frees the disk", async () => {
 
 test("the machine reports on itself: what it runs, holds, has loaded and how its failures went, with a journal on its disk", async () => {
   const d = await (await get("/diagnostics")).json();
-  assert.equal(d.version, "22");
+  assert.equal(d.version, "23");
   assert.ok(d.agentUptimeSeconds >= 0);
   assert.deepEqual([d.env.HF_DISK_GB, typeof d.disk.totalGb, Array.isArray(d.models), Array.isArray(d.failures), typeof d.journal], ["50", "number", true, true, "string"]);
-  assert.match(d.journal, /agent 22 started: disk 50 GB/);
+  assert.match(d.journal, /agent 23 started: disk 50 GB/);
   assert.match(d.journal, /job .* done|failed/, "jobs from the tests before are in it");
   assert.ok(d.failures.length > 0, "the failed jobs of the tests before are remembered");
   for (const k of ["at", "error", "jobId", "kind", "trace", "what"]) assert.ok(k in d.failures[0], `a failure carries ${k}`);
+  assert.equal(typeof d.ollamaLog, "string", "Ollama's log is in the report");
   const text = await (await get("/journal?lines=50")).text();
-  assert.match(text, /agent 22 started/);
+  assert.match(text, /agent 23 started/);
   assert.ok(fs.existsSync(path.join(modelsDir, "..", "journal.log")), "the journal lives on the disk beside the models");
+});
+
+test("a chat model held up by an earlier reply is freed: Ollama is started afresh and answers again", async () => {
+  const res = await fetch(`${base}/ollama/restart`, { method: "POST", headers: { Authorization: `Bearer ${SECRET}`, Origin: ORIGIN } });
+  const body = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(body));
+  assert.equal(body.ok, true);
+  assert.equal((await (await fetch(`http://127.0.0.1:${ollamaPort}/api/version`)).json()).version, "fake");
+  assert.match(await (await get("/journal?lines=20")).text(), /ollama restarted from the page \(answering after \d+ s\)/);
+  // Without the site's secret, nothing is restarted.
+  assert.equal((await fetch(`${base}/ollama/restart`, { method: "POST" })).status, 401);
+  spawnSync("pkill", ["-f", `${fakeOllama} serve`]);
 });

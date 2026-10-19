@@ -84,7 +84,7 @@ function idleWatch() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "22";
+const VERSION = "23";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -1019,6 +1019,50 @@ async function downloadFolder(repo, files, into, token, write, gb = 0) {
   write({ status: "success" });
 }
 
+// ---- Ollama ----------------------------------------------------------------------
+
+// Ollama runs beside the agent, started by start.sh with its log here.
+const OLLAMA_LOG = process.env.HF_OLLAMA_LOG || path.join(MODELS_DIR, "..", "ollama.log");
+const OLLAMA_URL = `http://127.0.0.1:${(process.env.OLLAMA_HOST || "").split(":")[1] || 11434}`;
+const OLLAMA_BIN = process.env.HF_OLLAMA_BIN || "ollama";
+
+function fileTail(file, lines) {
+  try {
+    const size = fs.statSync(file).size;
+    const fd = fs.openSync(file, "r");
+    const len = Math.min(size, 64 * 1024);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+    return buf.toString("utf8").split("\n").slice(-lines).join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// Stops every `ollama serve` and starts one again, then waits for it to answer.
+async function restartOllama() {
+  const started = Date.now();
+  spawnSync("pkill", ["-f", `${OLLAMA_BIN} serve`]);
+  await new Promise((r) => setTimeout(r, 1500));
+  spawnSync("pkill", ["-9", "-f", `${OLLAMA_BIN} serve`]);
+  const out = fs.openSync(OLLAMA_LOG, "a");
+  const child = spawn(OLLAMA_BIN, ["serve"], { detached: true, stdio: ["ignore", out, out], env: process.env });
+  child.on("error", () => {});
+  child.unref();
+  fs.closeSync(out);
+  for (let i = 0; i < 60; i++) {
+    try {
+      const res = await fetch(`${OLLAMA_URL}/api/version`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) return { ok: true, seconds: Math.round((Date.now() - started) / 1000) };
+    } catch {
+      // not up yet
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { ok: false, seconds: Math.round((Date.now() - started) / 1000) };
+}
+
 // ---- HTTP ------------------------------------------------------------------------
 
 function originAllowed(origin) {
@@ -1128,7 +1172,19 @@ const server = http.createServer(async (req, res) => {
         downloads: [...tasks.values()].slice(-10).map((t) => ({ id: t.id, key: t.key, status: t.status, error: t.error, startedAt: t.startedAt, finishedAt: t.finishedAt ?? null })),
         failures,
         journal: journalTail(120),
+        ollamaLog: fileTail(OLLAMA_LOG, 80),
       });
+    }
+    // Ollama started afresh: every chat request on it is dropped at once. A
+    // reply the page gave up on goes on generating on the machine (the
+    // proxy does not pass the page's stop along), and Ollama answers one
+    // request at a time, so a long or looping one holds up every chat after
+    // it until it ends; this ends it. The models stay on the disk.
+    if (req.method === "POST" && url.pathname === "/ollama/restart") {
+      touchActivity();
+      const took = await restartOllama();
+      journal(`ollama restarted from the page (${took.ok ? `answering after ${took.seconds} s` : `not answering after ${took.seconds} s`})`);
+      return send(res, took.ok ? 200 : 503, took);
     }
     if (req.method === "GET" && url.pathname === "/journal") {
       const lines = Math.min(5000, Math.max(20, Number(url.searchParams.get("lines")) || 500));

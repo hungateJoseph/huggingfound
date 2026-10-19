@@ -33,9 +33,24 @@ const REPLY_WORDS = 40;
 const chatBodies = [];
 const fetchImpl = (url, init) => {
   if (String(url).endsWith("/api/chat")) {
-    chatBodies.push(JSON.parse(init.body));
+    const asked = JSON.parse(init.body);
+    chatBodies.push(asked);
     const stream = new ReadableStream({
       async start(controller) {
+        // Asked to think, it thinks first, apart from its answer, as Qwen3 does.
+        if (asked.think === true) {
+          for (let i = 0; i < 10; i++) {
+            controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: "", thinking: `step${i} ` } })}\n`));
+            await new Promise((r) => setTimeout(r, 60));
+          }
+        }
+        if (/HANDOFF TO CLAUDE/.test(asked.messages.at(-1)?.content ?? "")) {
+          const answer = "I can do the board and the tiles; the mine odds are hard for me, so I leave them to Claude.\n```js\nfunction mineOdds(board) {\n  // HANDOFF TO CLAUDE: mineOdds\n  // Returns, for each hidden cell, the chance it holds a mine.\n}\nconsole.log(mineOdds([[0]]));\n```";
+          for (const piece of answer.match(/[\s\S]{1,20}/g)) controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: piece } })}\n`));
+          controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ done: true, eval_count: 60, eval_duration: 2e9 })}\n`));
+          controller.close();
+          return;
+        }
         for (let i = 0; i < REPLY_WORDS; i++) {
           controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: `word${i} ` } })}\n`));
           await new Promise((r) => setTimeout(r, 60));
@@ -73,6 +88,19 @@ const reviewer = {
       else if (/shy with the picture/.test(input.prompt)) onText(`Shot 1 (4 s): the woman as in the picture, in the same clothes and place, pulls her sweater up and over her head, camera still${input.pictureUnseen ? ", the picture's setting kept" : ""}\nShot 2 (4 s): the same woman as in the picture folds the sweater and sets it down, the place unchanged\nNote: the person and place are taken as they are in the picture.`);
       // The lines as a model dresses them: bold, a bullet, "seconds", a range as a running time, and a closing note.
       else onText("Shot 1 (4 s): a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still\n**Shot 2 (3 seconds):** the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, sunny back garden\n- Shot 3 (7–12 s) – the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence\nNote: the father is in frame from the first shot.");
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
+    // Coding: the hard parts named, the code checked and fixed, the handed-off parts written.
+    if (input.kind === "code" && input.mode === "handoff-plan") {
+      onText("Part: mineOdds | the chance each hidden cell holds a mine | constraint counting is easy to get wrong\nPart: wordScore | Scrabble scoring with premium squares | many exact rules");
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
+    if (input.kind === "code" && input.mode === "fix") {
+      onText("Found:\n- mineOdds returns nothing, so the log prints undefined\n=== Corrected ===\n```js\nfunction mineOdds(board) {\n  return board.map((row) => row.map(() => 0));\n}\n```");
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
+    if (input.kind === "code" && input.mode === "finish") {
+      onText("Wrote:\n- mineOdds: counts the constraints around each number\n=== Finished ===\n```js\nfunction mineOdds(board) {\n  return board.map((row) => row.map(() => 0.5));\n}\nconsole.log(mineOdds([[0]]));\n```");
       return { declined: false, model: "claude-opus-5", note: "" };
     }
     // A shot made shorter by hand, fitted to its new length, with what had to go.
@@ -577,7 +605,12 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.click('.effort[data-kind="chat"] input[value="thorough"]');
   await page.fill("#chat-text", "hello there");
   await page.click("#chat-send");
+  // The thinking shows as it comes, folded above the answer, with how far along the reply is.
+  await page.waitForFunction(() => /^Thinking · about \d+ words$/.test(document.querySelector("#chat-live .thinking summary")?.textContent ?? ""));
+  await page.waitForFunction(() => /^Thinking · \d+ tokens/.test(document.querySelector("#chat-progress .progress-text")?.textContent ?? ""));
   await page.waitForFunction(() => /word3 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
+  await page.waitForFunction(() => /^Writing the answer after 10 tokens of thinking · \d+ tokens.* · about \d+%.*\(a first guess; it learns this model's lengths\)$/.test(document.querySelector("#chat-progress .progress-text")?.textContent ?? ""));
+  assert.equal(chatBodies.at(-1).options.num_predict, 16384, "every reply has an end, so a model thinking in circles cannot hold the machine");
   // Scroll up while the reply is still arriving; new words must not drag the view back down.
   await page.evaluate(() => (document.querySelector("#messages").scrollTop = 0));
   await page.waitForFunction(() => /word9 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
@@ -597,6 +630,10 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
   assert.equal(await page.locator("#chat-live").count(), 0);
   assert.match(await page.locator("#messages .msg").last().innerText(), /word0 .*word39 /s, "the whole reply landed in the transcript");
+  assert.equal(await page.locator("#messages .msg").last().locator(".thinking summary").innerText(), "Thought it through · about 10 words", "the thinking stays with the answer, folded");
+  assert.equal(await page.locator("#chat-progress").isHidden(), true);
+  assert.equal(await page.evaluate(() => localStorage.getItem("chatTokens:qwen-test:thorough") ?? Object.keys(localStorage).filter((k) => k.startsWith("chatTokens:")).map((k) => localStorage.getItem(k))[0]), "40", "the reply's length is learned for the next guess");
+  assert.ok(!chatBodies.at(-1).messages.some((m) => /step\d/.test(m.content)), "the thinking is not sent back to the model");
   // A click beside the window closes it; the conversation is kept and is back when the window reopens.
   await page.mouse.click(8, 8);
   await page.waitForFunction(() => document.querySelector("#modal").hidden);
@@ -668,6 +705,48 @@ await step("a conversation survives re-renders, an outside click and closing the
   assert.equal(await pics.nth(1).locator("img").getAttribute("src"), "https://example.com/dog.jpg?x=1");
   assert.match(await page.locator("#messages .msg").last().innerText(), /Here it is:[\s\S]*done/);
   assert.equal(await page.locator("#messages .msg.user").last().locator(".msg-image").count(), 0, "what the person typed stays plain");
+  // Stop ends a reply part way: what came is kept, and the box is free again.
+  await page.click('.effort[data-kind="chat"] input[value="standard"]');
+  await page.fill("#chat-text", "a long one please");
+  await page.click("#chat-send");
+  await page.waitForFunction(() => /word3 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
+  assert.equal(chatBodies.at(-1).options.num_predict, 8192, "Standard has an end too");
+  await page.click("#chat-stop");
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled);
+  assert.match(await page.locator("#messages .msg.assistant").last().innerText(), /word3 [\s\S]*Stopped\.$/);
+  assert.equal(await page.locator("#chat-progress").isHidden(), true);
+  // Handing the hard parts to Claude: Claude names them first, the model
+  // writes the rest and leaves a marked stub, and Claude writes that part to fit.
+  await page.check("#chat-handoff");
+  assert.equal(await page.evaluate(() => localStorage.getItem("handoff:chat")), "1", "the switch is remembered");
+  await page.fill("#chat-text", "write me Minesweeper combined with Scrabble");
+  await page.click("#chat-send");
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled && /HANDOFF TO CLAUDE: mineOdds/.test([...document.querySelectorAll("#messages .msg.assistant")].at(-1)?.textContent ?? ""), null, { timeout: 15000 });
+  assert.deepEqual([reviewed.at(-1).kind, reviewed.at(-1).mode, reviewed.at(-1).question], ["code", "handoff-plan", "write me Minesweeper combined with Scrabble"]);
+  const toModel = chatBodies.at(-1).messages.at(-1).content;
+  assert.match(toModel, /^write me Minesweeper combined with Scrabble\n\n---\nHow to do this:[\s\S]*- mineOdds: the chance each hidden cell holds a mine\n- wordScore: Scrabble scoring with premium squares[\s\S]*"HANDOFF TO CLAUDE: <the part's name>", followed by a method description/);
+  assert.equal(await page.locator("#messages .msg.user").last().innerText(), "write me Minesweeper combined with Scrabble", "the conversation shows what was typed");
+  assert.equal(await page.locator("#messages .handoff-note summary").last().innerText(), "Claude named the parts to leave to it: mineOdds, wordScore");
+  const lastAnswer = page.locator("#messages .msg.assistant").last();
+  const tools = page.locator("#messages .code-tools").last();
+  assert.deepEqual(await tools.locator("> button").allInnerTexts(), ["Claude: check and fix the code", "Claude: write the parts handed to it"]);
+  // The two are separate: a check that fixes, and the handed-off parts written.
+  await tools.locator(".code-fix").click();
+  await tools.locator(".code-result .code-foot button").waitFor();
+  assert.equal(await tools.locator(".code-head").innerText(), "Claude checked the code");
+  assert.match(await tools.locator(".code-body").innerText(), /^Found:\n- mineOdds returns nothing/);
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).question, /HANDOFF TO CLAUDE: mineOdds/.test(reviewed.at(-1).answer)], ["fix", "write me Minesweeper combined with Scrabble", true]);
+  await tools.locator(".code-finish").click();
+  await page.waitForFunction(() => /Add the finished program to the chat/.test([...document.querySelectorAll("#messages .code-tools")].at(-1)?.textContent ?? ""));
+  assert.equal(await tools.locator(".code-head").innerText(), "Claude wrote the parts handed to it");
+  assert.equal(reviewed.at(-1).mode, "finish");
+  const before = await page.locator("#messages .msg.assistant").count();
+  await tools.locator(".code-foot button").click();
+  await page.waitForFunction((n) => document.querySelectorAll("#messages .msg.assistant").length === n + 1, before);
+  assert.match(await page.locator("#messages .msg.assistant").last().innerText(), /return board\.map\(\(row\) => row\.map\(\(\) => 0\.5\)\);/);
+  assert.match(await page.locator("#messages .chain").last().innerText(), /Claude/);
+  assert.ok(await lastAnswer.count());
+  await page.uncheck("#chat-handoff");
 
   // New chat starts over.
   await page.click("#chat-clear");
@@ -1758,7 +1837,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.waitForSelector("#gpu-runs li");
   // The machine's own report, to read or copy: what it runs, holds and how its failures went.
   await visitor.click("#gpu-report");
-  await visitor.waitForFunction(() => /Agent 22, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  await visitor.waitForFunction(() => /Agent 23, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
   assert.match(await visitor.locator("#gpu-report-out").innerText(), /Python 3\.12\.3, torch 2\.6\.0 \(CUDA 12\.4\), diffusers 0\.41\.0, transformers 5\.5\.3, peft 0\.18\.0, av 15\.0\.0[\s\S]*Cards: Fake A40 48 GB[\s\S]*Disk: 41\.5 GB free of 50, 8\.5 GB in the machine's folders \(a quota; the size as the site said it\)[\s\S]*No failures on this machine\.[\s\S]*Journal \(tail\):/);
   assert.equal(await visitor.locator("#gpu-report-copy").isHidden(), false);
   assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");

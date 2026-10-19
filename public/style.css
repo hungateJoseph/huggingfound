@@ -558,3 +558,28 @@ details.levels-note summary { cursor: pointer; }
 .tier-watch button, .sold-out button { font-size: 13px; padding: 4px 10px; }
 .watching { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--ink); }
 .sold-out p { margin: 0 0 6px; }
+
+/* A reply's thinking, folded, and how far along the reply is. */
+.msg .thinking { margin: 0 0 8px; }
+.msg .thinking summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.thinking-text { max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 13px; color: var(--muted); border-left: 2px solid var(--line); padding: 4px 0 4px 10px; margin-top: 6px; }
+.chat-progress { margin: 8px 0; }
+.chat-progress[hidden] { display: none; }
+.chat-progress-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
+.chat-progress-row button { font-size: 13px; padding: 4px 12px; }
+.chat-held { margin-top: 6px; }
+.chat-held[hidden] { display: none; }
+.msg-note { margin: 8px 0 0; }
+
+/* Coding with Claude: the hand-off switch, the split under a request, and the code buttons under an answer. */
+.check.handoff { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 4px 0 10px; font-size: 14px; }
+.handoff-note { margin: -2px 0 8px auto; max-width: 85%; text-align: right; }
+.handoff-note summary { cursor: pointer; }
+.handoff-body { white-space: pre-wrap; text-align: left; margin-top: 6px; padding: 8px 10px; background: var(--chip); border-radius: 8px; }
+.code-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+.code-tools > button { font-size: 13px; padding: 5px 12px; }
+.code-result { flex-basis: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.code-result[hidden] { display: none; }
+.code-head { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+.code-body { white-space: pre-wrap; font-size: 14px; }
+.code-foot { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

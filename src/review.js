@@ -153,6 +153,38 @@ Dropped: the actions left out, in a few words, or the word nothing
 
 Plain text only; no markdown.`;
 
+// Coding with a model on a rented GPU and Claude together. A check that
+// fixes: the problems found, then the whole answer corrected.
+const CODE_FIX_SYSTEM = `You check and fix code written by open-source language models that people run on rented GPUs. These models are weaker than you: their code often has bugs, does not run, calls functions or library features that do not exist, misses edge cases, or does not do what was asked. The person shows you their request and the model's answer. Find what is actually wrong and fix it. Keep the model's structure, names and style where they are sound; change what must change and add what was asked for but is missing; do not rewrite working code for taste.
+
+Reply in exactly two parts, nothing before or after:
+
+Found:
+- one line per real problem, the one that matters most first, saying where it is and what is wrong
+(or the single line "- nothing wrong" when the code is right)
+=== Corrected ===
+the complete corrected answer: every file and block in full, never only the changed lines, in fenced code blocks with the language named, each with a one-line note above it when the answer had several. When nothing was wrong, the code unchanged.`;
+
+// Which parts of a coding request the model on the rented GPU should leave
+// to Claude: the ones a model of its size tends to get wrong.
+const HANDOFF_PLAN_SYSTEM = `You help split coding work between an open-source language model that the person runs on a rented GPU and you. The person shows you a coding request and names the model. Judge which parts of the request a model of that size is likely to get wrong: non-trivial algorithms and mathematics (probability and inference, solvers, search, optimisation, physics, geometry), concurrency, security-sensitive code, parsers, intricate rules engines, exact protocol or file-format details. Ordinary structure, user interface, input handling, wiring, plain game loops and boilerplate stay with the model. Name at most four parts, the hardest first, each small and self-contained enough to be one function or module with a clear interface.
+
+Reply with only lines in this form, nothing else:
+
+Part: short name | what it must do, in one sentence | why it is hard for the model
+
+or the single line "Part: none" when the model can do all of it well.`;
+
+// Claude writes the parts the model handed off, to fit the model's code.
+const HANDOFF_FINISH_SYSTEM = `You finish code that an open-source language model wrote with some parts handed off to you. The model wrote what it could and left stubs for the parts it judged too hard, each marked with a comment containing "HANDOFF TO CLAUDE:" and a description of what the part must do; it may also have named such parts in its prose without a marked stub. Write each handed-off part so that it fits the model's code exactly: the same language, the names, parameters, return values and data structures its code already defines and calls, its style and its libraries. Do not rename or restructure the model's code; change it only where a call into your part is plainly wrong or where it would not run, and say so. The result must run as a whole.
+
+Reply in exactly two parts, nothing before or after:
+
+Wrote:
+- one line per part: its name, and in a few words how it works; then one line per change you had to make to the model's code
+=== Finished ===
+the complete program with the handed-off parts written in place of their stubs: every file and block in full, in fenced code blocks with the language named. The model's prose may be cut to one sentence; the "HANDOFF TO CLAUDE" comments go.`;
+
 // With a starting picture, the words must defer to it: the person, the
 // clothes, the place and the light are already decided, and a description
 // that re-imagines them has the model replace them. Added to the brief for
@@ -199,6 +231,19 @@ export function buildRequest(input, { outputDir } = {}) {
   const clip = replying && Boolean(input.clip);
   const request = String(input.request ?? "").trim();
   if (editing && !request) throw new ReviewError("Say what should change.");
+  if (input.kind === "code") {
+    const question = String(input.question ?? "").trim();
+    const answer = String(input.answer ?? "");
+    if (input.mode === "handoff-plan") {
+      if (!question) throw new ReviewError("Type the coding request first.");
+      const text = [`The model is ${input.model || "an open-source model"}. The request:`, `<request>\n${question}\n</request>`, "Name the parts to leave to you, as Part lines."].join("\n\n");
+      return { ...base, max_tokens: 4000, system: HANDOFF_PLAN_SYSTEM, messages: [{ role: "user", content: text }] };
+    }
+    if (!answer.trim()) throw new ReviewError("There is no answer to work on yet.");
+    if (input.mode !== "fix" && input.mode !== "finish") throw new ReviewError("Unknown kind of code check.");
+    const text = [`I asked ${from}:`, `<request>\n${question || "(the request was not kept)"}\n</request>`, "It answered:", `<answer>\n${answer}\n</answer>`, input.mode === "fix" ? "Check the code and fix it: the Found lines, then the corrected answer." : "Write the parts it handed off to you: the Wrote lines, then the finished program."].join("\n\n");
+    return { ...base, system: input.mode === "fix" ? CODE_FIX_SYSTEM : HANDOFF_FINISH_SYSTEM, messages: [{ role: "user", content: text }] };
+  }
   if (input.kind === "text") {
     const answer = String(input.answer ?? "");
     if (!answer.trim()) throw new ReviewError("There is no answer to check yet.");

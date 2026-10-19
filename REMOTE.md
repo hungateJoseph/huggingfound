@@ -357,6 +357,54 @@ The machine takes two to four minutes to start. Meanwhile:
   Fit, which asks Claude (mode `fit`) to keep the actions that fit and name
   the ones dropped.
 
+## Chat replies that never come (2026-10-19, image 23)
+
+Measured on an A100 80 GB with Qwen3.8-27B-Uncensored Q4_K_M (Ollama
+0.40.6, family qwen35, context 262144, 33.8 GB resident): about 20
+tokens a second, and 40 s of thinking (800 tokens) before the first word
+of a one-line bash answer. The page read only `message.content`, so the
+thinking (`message.thinking`) showed as an empty "Thinking" bubble for
+minutes; nothing capped a reply at Standard or Thorough; and a reply the
+page gave up on went on generating on the machine (the RunPod proxy does
+not pass a dropped connection to Ollama), with Ollama answering one
+request at a time, so later messages, and tests, got no first byte for
+minutes.
+
+- The thinking streams into a fold above the answer and stays with it
+  (not sent back to the model).
+- A progress row under the messages: thinking or writing, tokens, rate,
+  and a share of the expected length, learned per model and effort in this
+  browser (`chatTokens:<model>:<effort>`, first guesses 350, 2500, 6000);
+  Stop ends the reply.
+- Caps: Standard 8192 tokens, Thorough 16384 (Quick 400 as before); a reply
+  stopped at the cap says so.
+- No first word in 30 s: the row says the machine is likely busy with an
+  earlier reply and offers Free the machine, the agent's new
+  `POST /ollama/restart` (image 23; older machines are told to Stop and
+  Start). `/diagnostics` carries Ollama's log tail.
+- The local relay now aborts its Ollama request when the page leaves.
+
+## Coding with the rented model and Claude together (2026-10-19)
+
+With an Anthropic key, three separate things on a chat model:
+
+- Hand the hard parts to Claude (a switch under the effort, kept in this
+  browser as `handoff:chat`). Before the message goes, Claude
+  (`kind: "code", mode: "handoff-plan"`) names at most four parts a model
+  of that size tends to get wrong, as `Part: name | what | why` lines. The
+  model gets the request plus a fixed brief: write all it can, say first
+  what it leaves to Claude, and leave a stub per part whose body is a
+  comment starting `HANDOFF TO CLAUDE: <name>` with a method description,
+  called as if it worked. The transcript keeps what was typed; the words
+  sent are on the message as `sent`, shown in a fold under it.
+- Claude: check and fix the code (`mode: "fix"`), on any answer with code:
+  `Found:` lines, then `=== Corrected ===` and the whole answer corrected.
+- Claude: write the parts handed to it (`mode: "finish"`), on an answer with
+  a `HANDOFF TO CLAUDE` stub or from a handed-off request: `Wrote:` lines,
+  then `=== Finished ===` and the whole program with the parts written to
+  the model's names, signatures and style.
+  Either result joins the conversation on a click, as Claude's version.
+
 ## Verified on hardware, and not
 
 What has actually run on a rented machine, so the same thing is not

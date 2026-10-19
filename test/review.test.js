@@ -298,3 +298,19 @@ test("a clip's words are paced to its length: Claude is told how long it runs an
   assert.match(fit.system, /Dropped: the actions left out/);
   assert.throws(() => buildRequest({ kind: "prompt", mode: "fit", prompt: "x" }), /new length/);
 });
+
+test("coding with the rented model and Claude: Claude names the hard parts, checks and fixes code, and writes the parts handed to it", () => {
+  const plan = buildRequest({ kind: "code", mode: "handoff-plan", question: "write Minesweeper combined with Scrabble", model: "Qwen3.8-27B" });
+  assert.match(plan.system, /at most four parts/);
+  assert.match(plan.system, /Part: short name \| what it must do/);
+  assert.match(plan.messages[0].content, /The model is Qwen3\.8-27B\. The request:\n\n<request>\nwrite Minesweeper combined with Scrabble\n<\/request>/);
+  const fix = buildRequest({ kind: "code", mode: "fix", model: "Qwen3.8-27B", question: "a fizzbuzz", answer: "```py\nfor i in range(15): print(i)\n```" });
+  assert.match(fix.system, /=== Corrected ===/);
+  assert.match(fix.messages[0].content, /<answer>\n```py\nfor i in range\(15\)/);
+  const finish = buildRequest({ kind: "code", mode: "finish", question: "q", answer: "def odds(board):\n    # HANDOFF TO CLAUDE: odds\n    pass" });
+  assert.match(finish.system, /"HANDOFF TO CLAUDE:"/);
+  assert.match(finish.system, /=== Finished ===/);
+  assert.match(finish.system, /the names, parameters, return values and data structures its code already defines and calls/);
+  assert.throws(() => buildRequest({ kind: "code", mode: "fix", question: "q", answer: " " }), /no answer/);
+  assert.throws(() => buildRequest({ kind: "code", mode: "handoff-plan", question: "" }), /request first/);
+});
