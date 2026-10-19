@@ -5014,7 +5014,7 @@ async function loadRentOptions({ fresh = false, quiet = false } = {}) {
 // this tab closed while the browser runs; and, with the tab open, a chime,
 // the tab's title, and a notice on the page.
 function sizeName(gb) {
-  const t = (state.rentOptions ?? []).find((x) => x.gb === gb);
+  const t = [...(state.rentOptions ?? []), ...(state.rentTiers ?? [])].find((x) => x.gb === gb);
   return t?.count > 1 ? `${t.count} × ${t.gb / t.count} GB GPU machine` : `${gb} GB GPU`;
 }
 function rentWhenFreeHtml(t) {
@@ -5310,6 +5310,7 @@ function wireWatch(root) {
   for (const c of root.querySelectorAll(".watch-rent")) c.addEventListener("change", () => {
     const w = rentWatch();
     if (w) setRentWatch({ ...w, rent: c.checked });
+    renderRentBar(state.rental);
   });
 }
 
@@ -6528,6 +6529,19 @@ function renderRentBar(r) {
       bar.innerHTML = `<div class="wrap"><span>Watching RunPod for a ${esc(sizeName(w.gb))}: the site checks every minute, with this page closed too, and rents one at up to ${money(w.maxPricePerHour)} an hour. ${w.lastNote ? esc(w.lastNote[0].toUpperCase() + w.lastNote.slice(1)) + "." : w.checkedAt ? `Last checked ${new Date(w.checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : ""}</span><span class="buttons"><button class="ghost" id="bar-unwatch">Stop watching</button></span></div>`;
       bar.querySelector("#bar-unwatch").addEventListener("click", stopRentWatch);
       watchPoll();
+      return;
+    }
+    // This browser's own watch (Tell me when free): shown here on every page
+    // too, so it is never out of sight while it runs.
+    const pw = rentWatch();
+    if (pw) {
+      bar.hidden = false;
+      bar.innerHTML = `<div class="wrap"><span>Waiting for a ${esc(sizeName(pw.gb))} to be free: checked every minute while this site is open in a tab, and you are told when one is${pw.rent ? ", and it is rented" : ""}.${pw.since ? ` Since ${new Date(pw.since).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : ""}</span><span class="buttons"><button class="ghost" id="bar-page-unwatch">Stop waiting</button></span></div>`;
+      bar.querySelector("#bar-page-unwatch").addEventListener("click", () => {
+        setRentWatch(null);
+        renderRental();
+        if (state.open) openModel(state.open);
+      });
       return;
     }
     // Nothing rented, but machines from before may sit on the account billing for their disks.

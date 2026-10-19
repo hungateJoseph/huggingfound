@@ -1238,6 +1238,8 @@ test("a sold-out size can be rented the moment one is free: the site watches wit
   let body = await res.json();
   assert.deepEqual([body.rented, body.watch.gb, body.watch.diskGb, body.watch.maxPricePerHour, body.watch.holdMinutes], [false, 141, 120, 3, 45]);
   assert.ok(!("origins" in body.watch), "the page is not told the origins the machine will accept");
+  // The page loads with the watch too, after a reload or leaving Settings.
+  assert.equal((await json("/api/state")).rental.watch?.gb, 141, "the state a page loads with keeps the watch");
   const made = runpod.state.created.length;
   await server.checkWatches();
   assert.equal(runpod.state.created.length, made, "nothing free, nothing rented");

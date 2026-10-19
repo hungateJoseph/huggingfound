@@ -1006,6 +1006,11 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await h200.locator(".watch-go").click();
   await h200.locator(".watching").waitFor();
   assert.match(await h200.locator(".watching").innerText(), /^Telling you when one is free, while this page is open\./);
+  // Shown in the bar on every page too, and still there after the page loads its state again.
+  assert.match(await page.locator("#rent-bar").innerText(), /^Waiting for a 141 GB GPU to be free: checked every minute while this site is open in a tab/);
+  await page.evaluate(() => load());
+  assert.match(await page.locator("#rent-bar").innerText(), /^Waiting for a 141 GB GPU to be free/);
+  assert.equal(await page.locator("#rent-panel .tier").nth(3).locator(".watching").count(), 1, "the size still says it is watched");
   runpod.state.stock["NVIDIA H200"] = { 1: "LOW" };
   await page.click("#rent-refresh");
   await page.waitForFunction(() => /A 141 GB \(H200 SXM\) is free at RunPod now, \$3\.59 an hour\./.test(document.querySelector("#notice")?.textContent ?? ""));
@@ -1027,6 +1032,10 @@ await step("stopping from the bar frees the chat server; starting and deleting w
   await page.waitForFunction(() => /Watching RunPod for a 141 GB GPU: the site checks every minute, with this page closed too, and rents one at up to \$4\.13 an hour/.test(document.querySelector("#rent-bar")?.textContent ?? ""));
   assert.match(await page.locator("#notice").innerText(), /^Watching for a 141 GB GPU\. /);
   assert.equal(await page.locator("#rent-panel .watch-server-stop").count(), 1, "the size shows it is being watched for");
+  // Loading the page's state again (a reload, leaving Settings) keeps it on show.
+  await page.evaluate(() => load());
+  assert.match(await page.locator("#rent-bar").innerText(), /^Watching RunPod for a 141 GB GPU/);
+  assert.equal(await page.locator("#rent-panel .watch-server-stop").count(), 1, "the size still shows it is being watched for");
   // Free now: the site's minute check rents it, and the page tells.
   runpod.state.stock["NVIDIA H200"] = { 1: "LOW" };
   await server.checkWatches();

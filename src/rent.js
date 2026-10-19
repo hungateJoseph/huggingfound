@@ -384,6 +384,12 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     const w = watchSetting();
     return { watch: w ? { gb: w.gb, diskGb: w.diskGb, maxPricePerHour: w.maxPricePerHour, since: w.since, until: w.until, holdMinutes: w.holdMinutes, checkedAt: watchState.checkedAt || null, lastNote: watchState.lastError || null } : null, watchResult: watchResult(), holdUntil: Number(env().RUNPOD_HOLD_UNTIL) || null };
   }
+  // Nothing rented: a watch, or what became of the last one, comes along,
+  // in the kept answer the page loads with as in a fresh one.
+  function notRented() {
+    const info = watchInfo();
+    return { rented: false, ...(info.watch || info.watchResult ? info : {}) };
+  }
   function endWatch(kind, text) {
     save({ RUNPOD_WATCH: "", RUNPOD_WATCH_RESULT: `${kind}|${now()}|${String(text).replace(/\|/g, "/").slice(0, 300)}` });
     watchState.checkedAt = 0;
@@ -732,7 +738,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     tiers,
     // What was last learned from RunPod, with the settings that can change
     // without asking RunPod (the idle time) read live.
-    cached: () => (podId() ? { ...(last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null, agentToken: hasAgent() ? agentToken() || null : null }), idleMinutes: idleMinutes(), idleSeconds: Math.round((now() - lastActivity) / 1000) } : { rented: false }),
+    cached: () => (podId() ? { ...(last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null, agentToken: hasAgent() ? agentToken() || null : null }), idleMinutes: idleMinutes(), idleSeconds: Math.round((now() - lastActivity) / 1000) } : notRented()),
     touch() {
       noteActivity();
     },
@@ -753,9 +759,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     async status({ probe: wantProbe = true } = {}) {
       const id = podId();
       if (!id) {
-        // A watch, or what became of the last one, comes with the status.
-        const info = watchInfo();
-        return { rented: false, ...(info.watch || info.watchResult ? info : {}) };
+        return notRented();
       }
       // Several parts of a page ask at once; one answer serves them all,
       // and a fresh one is not fetched again within a few seconds.
