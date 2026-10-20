@@ -223,6 +223,25 @@ test("a watch for a sold-out size rents it at Vast.ai the moment one is free the
   assert.equal((await post("/api/rent/delete", {})).status, 200);
 });
 
+test("a Vast.ai machine is rented on a host with room for the disk asked for, and one that gives less is let go at once", async () => {
+  // Two-card hosts: one with 99 GB free, one that says 400 but gives 99, and the earlier one with room.
+  vast.state.offers.push(
+    { id: 1040, gpu_name: "H200 NVL", num_gpus: 2, gpu_ram: 143771, dph_total: 4.0, disk_space: 99, cuda_max_good: 12.8, reliability2: 0.99, geolocation: "Utah, US", storage_cost: 0.2, cpu_arch: "amd64" },
+    { id: 1041, gpu_name: "H200 NVL", num_gpus: 2, gpu_ram: 143771, dph_total: 4.1, disk_space: 400, givesDisk: 99, cuda_max_good: 12.8, reliability2: 0.99, geolocation: "Utah, US", storage_cost: 0.2, cpu_arch: "amd64" },
+  );
+  const asked = vast.state.queries.length;
+  const res = await post("/api/rent", { gb: 282, diskGb: 160, provider: "vast" });
+  assert.equal(res.status, 200, await res.clone().text());
+  const q = vast.state.queries.slice(asked).find((x) => x.num_gpus.eq === 2);
+  assert.deepEqual([q.disk_space.gte, q.allocated_storage], [160, 160], "the hosts are asked for room for the disk wanted");
+  assert.deepEqual(vast.state.created.slice(-2).map((c) => c.offerId), [1041, 1020], "the 99 GB host is never tried; the one that gave 99 GB is let go and the next taken");
+  const shortchanged = Object.keys(vast.state.instances).length ? vast.state.destroyed.at(-1) : null;
+  assert.ok(shortchanged, "the machine with too small a disk is destroyed at once");
+  const r = await json("/api/rent");
+  assert.deepEqual([r.provider, r.gpu, r.diskGb], ["vast", "H200", 160]);
+  assert.equal((await post("/api/rent/delete", {})).status, 200);
+});
+
 test("with both keys, each size lists RunPod's card and Vast.ai's, and a rent goes to the place asked for", async () => {
   const { KEY } = await import("./stub-runpod.js");
   assert.equal((await post("/api/settings", { RUNPOD_API_KEY: KEY })).status, 200);

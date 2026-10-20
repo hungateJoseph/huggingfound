@@ -39,7 +39,8 @@ export function startStubVast({ agentPort = () => 1, ollamaPort = () => 1 } = {}
       const p = url.pathname.replace(/^\/api\/v0/, "");
       if (req.method === "POST" && p === "/bundles/") {
         state.queries.push(data);
-        const offers = state.offers.filter((o) => (!data.num_gpus?.eq || o.num_gpus === data.num_gpus.eq) && (!data.gpu_ram?.gte || o.gpu_ram >= data.gpu_ram.gte) && !state.taken.has(o.id));
+        // A host's free disk is `disk_space`; one unsaid has room for anything.
+        const offers = state.offers.filter((o) => (!data.num_gpus?.eq || o.num_gpus === data.num_gpus.eq) && (!data.gpu_ram?.gte || o.gpu_ram >= data.gpu_ram.gte) && (!data.disk_space?.gte || (o.disk_space ?? Infinity) >= data.disk_space.gte) && !state.taken.has(o.id));
         return reply(200, { offers });
       }
       let m = /^\/asks\/(\d+)\/$/.exec(p);
@@ -49,11 +50,12 @@ export function startStubVast({ agentPort = () => 1, ollamaPort = () => 1 } = {}
         state.taken.add(offer.id);
         const id = state.nextId++;
         state.created.push({ offerId: offer.id, ...data });
-        state.instances[id] = { id, label: data.label, image: data.image, disk_space: data.disk, gpu_name: offer.gpu_name, num_gpus: offer.num_gpus, gpu_ram: offer.gpu_ram, dph_total: offer.dph_total, storage_cost: offer.storage_cost, geolocation: offer.geolocation, actual_status: null, intended_status: "running", cur_state: "running", status_msg: "", public_ipaddr: "127.0.0.1", env: data.env, start_date: Date.now() / 1000, polls: 0 };
+        // A host gives its free disk at most, whatever was asked for (`givesDisk` for one that says more than it has).
+        state.instances[id] = { id, label: data.label, image: data.image, disk_space: Math.min(data.disk, offer.givesDisk ?? offer.disk_space ?? data.disk), gpu_name: offer.gpu_name, num_gpus: offer.num_gpus, gpu_ram: offer.gpu_ram, dph_total: offer.dph_total, storage_cost: offer.storage_cost, geolocation: offer.geolocation, actual_status: null, intended_status: "running", cur_state: "running", status_msg: "", public_ipaddr: "127.0.0.1", env: data.env, start_date: Date.now() / 1000, polls: 0, fresh: true };
         return reply(200, { success: true, new_contract: id });
       }
       const view = (inst) => {
-        const { polls, env, ...rest } = inst;
+        const { polls, env, fresh, ...rest } = inst;
         const running = inst.actual_status === "running";
         return { ...rest, extra_env: Object.entries(env ?? {}), ports: running ? { "7860/tcp": [{ HostIp: "0.0.0.0", HostPort: String(agentPort()) }], "11434/tcp": [{ HostIp: "0.0.0.0", HostPort: String(ollamaPort()) }] } : {} };
       };
@@ -63,6 +65,11 @@ export function startStubVast({ agentPort = () => 1, ollamaPort = () => 1 } = {}
         const inst = state.instances[m[1]];
         if (req.method === "GET") {
           if (!inst) return reply(200, { instances: null });
+          // Read straight after the rent (the site checks the disk it got): no status yet.
+          if (inst.fresh) {
+            inst.fresh = false;
+            return reply(200, { instances: view(inst) });
+          }
           // A fresh or started instance comes up one step per poll: no status, loading, running.
           if (inst.intended_status === "running" && inst.actual_status !== "running" && !inst.hold) {
             inst.polls++;

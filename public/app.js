@@ -689,7 +689,7 @@ function renderModel(model, plan, choice = null) {
     // A machine from before this feature is replaced from here.
     if (plan.staleMachine) parts.push(`<div class="actions"><button class="primary" id="replace-from-model">Replace the machine</button></div>`);
     // A disk too small for the model grows from here; RunPod never shrinks one.
-    if (plan.needsDisk && plan.growTo) parts.push(`<div class="actions"><button class="primary" id="grow-from-model">Grow the disk to ${plan.growTo} GB</button> <small class="muted">About ${money(DISK_STOPPED_PER_GB_MONTH / 30 * (plan.growTo - (plan.diskGb || 0)))} a day more while the machine is stopped, half that while it runs.</small></div>`);
+    if (plan.needsDisk && plan.growTo) parts.push(plan.replaceForDisk ? `<div class="actions"><button class="primary" id="replace-for-disk">Replace it with a ${plan.growTo} GB disk</button></div>` : `<div class="actions"><button class="primary" id="grow-from-model">Grow the disk to ${plan.growTo} GB</button> <small class="muted">About ${money(DISK_STOPPED_PER_GB_MONTH / 30 * (plan.growTo - (plan.diskGb || 0)))} a day more while the machine is stopped, half that while it runs.</small></div>`);
     if (plan.twin) parts.push(`<div class="actions"><button class="primary" id="open-twin">Open ${esc(plan.twin.name)}</button></div>`);
     // What was made with the model before stays on show, with the machine
     // stopped or gone or the model not runnable here any more.
@@ -701,6 +701,10 @@ function renderModel(model, plan, choice = null) {
     body.querySelector("#replace-from-model")?.addEventListener("click", () => {
       state.rentFrom = model.id;
       replaceMachine();
+    });
+    body.querySelector("#replace-for-disk")?.addEventListener("click", () => {
+      state.rentFrom = model.id;
+      replaceMachine({ diskGb: plan.growTo });
     });
     body.querySelector("#grow-from-model")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget;
@@ -2765,7 +2769,7 @@ function renderImage(box, t) {
     ${addonHtml}
     ${settingsHtml}
     ${video && t.startPicture ? `<label class="field"><span>Starting picture${t.startPicture === "required" ? "" : " (optional)"}</span><input type="file" id="video-start" accept="image/*"><small class="muted">The clip begins from it.</small></label>` : ""}
-    ${video && t.references === true ? `<label class="field"><span>Reference pictures (optional, up to 9)</span><input type="file" id="video-refs" accept="image/*" multiple><small class="muted">Photos of the people and things to show. Used instead of the starting picture.</small></label>` : video && t.references === false ? `<p class="muted small ref-note"><span>Optional: clips from several photos at once need ${t.referenceGb ? `${t.referenceGb.toFixed(0)} GB` : "an extra part"} more on the machine${t.referenceGrowTo ? `, more than its disk has free` : ""}.</span> ${t.referenceGrowTo ? `<button class="ghost" id="grow-for-refs">Grow the disk to ${t.referenceGrowTo} GB</button>` : `<button class="ghost" id="get-refs">Add it</button>`}</p>` : ""}
+    ${video && t.references === true ? `<label class="field"><span>Reference pictures (optional, up to 9)</span><input type="file" id="video-refs" accept="image/*" multiple><small class="muted">Photos of the people and things to show. Used instead of the starting picture.</small></label>` : video && t.references === false ? `<p class="muted small ref-note"><span>Optional: clips from several photos at once need ${t.referenceGb ? `${t.referenceGb.toFixed(0)} GB` : "an extra part"} more on the machine${t.referenceGrowTo ? `, more than its disk has free` : ""}.</span> ${t.referenceGrowTo ? (state.rental?.provider === "vast" ? `<button class="ghost" id="replace-for-refs">Replace the machine with a ${t.referenceGrowTo} GB disk</button>` : `<button class="ghost" id="grow-for-refs">Grow the disk to ${t.referenceGrowTo} GB</button>`) : `<button class="ghost" id="get-refs">Add it</button>`}</p>` : ""}
     ${video && t.lastPicture ? `<label class="field"><span>Last picture</span><select id="video-last"><option value="same" ${t.lastPicture === "same" ? "selected" : ""}>the same picture: the clip ends where it began</option><option value="none" ${t.lastPicture === "none" ? "selected" : ""}>none: the clip ends where the model takes it</option><option value="file">another picture</option></select><input type="file" id="video-last-file" accept="image/*" hidden><small class="muted">${t.lastPicture === "same" ? "This LoRA was trained to come back to its starting frame, a full orbit; keep the same picture unless you want it to end elsewhere." : "The model can be given a frame to end on."}</small></label>` : ""}
     <div class="prompt-input">
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
@@ -3165,6 +3169,10 @@ function renderImage(box, t) {
     notice(`The disk is now ${t.referenceGrowTo} GB, and its models stay. Add the reference part when the machine is back.`, "ok");
     await load();
     openModel(t.repo);
+  });
+  box.querySelector("#replace-for-refs")?.addEventListener("click", () => {
+    state.rentFrom = t.repo;
+    replaceMachine({ diskGb: t.referenceGrowTo });
   });
   box.querySelector("#get-refs")?.addEventListener("click", () => runStep({ id: t.repo, name: t.repo.split("/").pop() }, state.plan, Math.max(0, (state.plan?.steps ?? []).findIndex((s) => s.optional))));
   // The queue: several requests, run one after another by one click. It is
@@ -6623,12 +6631,12 @@ async function loadOthers(panel) {
 
 // Deletes the machine, then opens renting with the same size chosen, so
 // the old one is gone before the new one is ordered.
-async function replaceMachine() {
+async function replaceMachine({ diskGb: biggerDisk = null } = {}) {
   stopRetryingStart();
   const gb = state.rental?.gb;
-  const diskGb = state.rental?.diskGb;
+  const diskGb = Math.max(Number(state.rental?.diskGb) || 0, Number(biggerDisk) || 0) || null;
   const provider = state.rental?.provider;
-  if (!confirm(`Delete this machine${state.rental?.status === "RUNNING" ? ", which is running," : ""} and rent a fresh ${gb ? `${gb} GB ` : ""}one? Its models download again on the new machine.`)) return;
+  if (!confirm(`Delete this machine${state.rental?.status === "RUNNING" ? ", which is running," : ""} and rent a fresh ${gb ? `${gb} GB ` : ""}one${biggerDisk ? ` with a ${diskGb} GB disk` : ""}? Its models download again on the new machine.`)) return;
   try {
     state.rental = await api.post("/api/rent/delete", {});
   } catch (err) {
@@ -6640,8 +6648,11 @@ async function replaceMachine() {
   state.rentWant = (state.rentTiers ?? []).find((t) => t.gb === gb)?.gb ?? state.rentWant;
   // The same place too: a Vast.ai machine is replaced at Vast.ai when it has one.
   state.rentWantKey = provider === "vast" && gb ? `${gb}:vast` : null;
-  // The same disk as the old one: a smaller default would not hold its models.
-  if (diskGb) state.rentDisk = diskGb;
+  // The same disk as the old one, or the bigger one asked for: a smaller default would not hold its models.
+  if (diskGb) {
+    state.rentDisk = diskGb;
+    state.rentDiskWant = Math.max(Number(state.rentDiskWant) || 0, diskGb);
+  }
   await load();
   $("#settings").hidden = false;
   renderRental();

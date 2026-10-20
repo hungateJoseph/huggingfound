@@ -998,10 +998,14 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     if (!vastKey()) throw new RentError("Add a Vast.ai API key in Settings to rent there.", 400);
     // Vast.ai has no plain-Ollama fallback: the tunnels are in the full image.
     if (!(await imageCheck(image))) throw new RentError("A Vast.ai machine needs HuggingFound's full machine image, which cannot be fetched right now. Rent at RunPod instead, or try again later.", 503);
-    let offer = (await tiers()).find((t) => t.gb === tier.gb)?.vast;
-    if (offer?.error && !offer.available) throw new RentError(offer.error, 502);
-    if (!offer?.available) throw new RentError(`Vast.ai has no ${tierLabel(tier)} free right now. Try another size, RunPod, or a little later.`, 503);
     const count = tier.count ?? 1;
+    // The listing assumes a 50 GB disk; a host is asked for room for the
+    // disk wanted, since Vast.ai gives a host's free disk at most and says
+    // nothing when that is less than was asked for.
+    const roomy = async () => vastFor(tier, { lists: { [count]: await vast.offers({ count, minGb: tier.min, diskGb: Math.max(disk, 50), minCuda: Number(MIN_CUDA) }) }, error: "" });
+    let offer = disk > 50 ? await roomy().catch((err) => ({ available: false, error: err.message })) : (await tiers()).find((t) => t.gb === tier.gb)?.vast;
+    if (offer?.error && !offer.available) throw new RentError(offer.error, 502);
+    if (!offer?.available) throw new RentError(`Vast.ai has no ${tierLabel(tier)} free right now${disk > 50 ? ` on a host with room for a ${disk} GB disk` : ""}. Try another size, RunPod, a smaller disk, or a little later.`, 503);
     const { secret, podEnv } = machineEnv(disk, origins, offer.pricePerHour);
     // The machine opens a Cloudflare tunnel for Ollama and one for the
     // agent, for the HTTPS addresses a browser needs.
@@ -1016,11 +1020,20 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       tried.push(pick.id);
       try {
         id = await vast.create(pick.id, { image, env: podEnv, diskGb: disk, ports: [OLLAMA_PORT, AGENT_PORT] });
+        // The disk it was given: less than asked for, and the model would not
+        // fit; that machine goes at once (nothing is on it yet) and the next host is tried.
+        const got = Number((await vast.instance(id).catch(() => null))?.disk_space);
+        if (got > 0 && got < disk - 1) {
+          await vast.destroy(id).catch(() => {});
+          lastErr = new Error(`a host gave a ${Math.floor(got)} GB disk instead of ${disk} GB`);
+          id = null;
+          continue;
+        }
       } catch (err) {
         if (err.status === 401 || err.status === 429) throw new RentError(err.message, err.status);
         // Taken by someone else meanwhile, most likely: the offers are asked again.
         lastErr = err;
-        offer = (await tiers({ fresh: true }).catch(() => null))?.find((t) => t.gb === tier.gb)?.vast ?? offer;
+        offer = (disk > 50 ? await roomy().catch(() => null) : (await tiers({ fresh: true }).catch(() => null))?.find((t) => t.gb === tier.gb)?.vast) ?? offer;
       }
     }
     if (!id) throw new RentError(`Vast.ai's ${tierLabel(tier)} offers went between listing them and renting one${lastErr ? ` (${lastErr.message})` : ""}. The sizes have been refreshed: pick again, or try in a few minutes.`, 503);

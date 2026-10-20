@@ -593,14 +593,16 @@ function diskRoom(gpu, model, needGb) {
   const diskGb = rented?.diskGb ?? (total != null ? Math.round(total) : null);
   const growTo = Math.max((diskGb ?? 0) + 10, Math.ceil((used + needGb * 1.1 + 10) / 10) * 10);
   const have = gpu.diskFreeGb != null && total != null ? ` (${free.toFixed(1)} GB free of ${Math.round(total)})` : "";
+  // A Vast.ai machine's disk is set when it is rented; the way to more is a fresh machine.
+  const vast = rented?.provider === "vast";
   return {
     runnable: false,
     needsDisk: true,
     diskGb,
     growTo,
-    reason: `${model.name} needs ${needGb.toFixed(1)} GB more on the rented machine's disk, and its ${diskGb ?? "small"} GB disk has no room for that${have}. Grow the disk to ${growTo} GB and the download goes on from the files already there; or delete models from the machine.`,
+    ...(vast ? { replaceForDisk: true } : {}),
+    reason: `${model.name} needs ${needGb.toFixed(1)} GB more on the rented machine's storage disk (where model files are kept, apart from the GPU's own memory), and its ${diskGb ?? "small"} GB disk has no room for that${have}. ${vast ? `A Vast.ai machine's disk cannot be grown: replace the machine with one that has a ${growTo} GB disk (what is on this one downloads again)` : `Grow the disk to ${growTo} GB and the download goes on from the files already there`}; or delete models from the machine.`,
     steps: [],
-    link: model.url,
   };
 }
 

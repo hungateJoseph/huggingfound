@@ -307,7 +307,12 @@ test("a model bigger than the rented machine's disk is stopped before the downlo
   assert.equal(tight.runnable, false);
   assert.equal(tight.needsDisk, true);
   assert.equal(tight.growTo, 160, "the model with a margin, over what the disk holds, in tens");
-  assert.match(tight.reason, /needs 134\.0 GB more on the rented machine's disk, and its 50 GB disk has no room for that \(48\.9 GB free of 50\)\. Grow the disk to 160 GB/);
+  assert.match(tight.reason, /needs 134\.0 GB more on the rented machine's storage disk \(where model files are kept, apart from the GPU's own memory\), and its 50 GB disk has no room for that \(48\.9 GB free of 50\)\. Grow the disk to 160 GB/);
+  assert.equal(tight.link, undefined, "no link that has nothing to do with the disk");
+  // A Vast.ai machine's disk cannot be grown: the plan says to replace it with a bigger one.
+  const atVast = buildPlan({ model, files, machine, detected: gpu({ diskFreeGb: 99, diskTotalGb: 99, rented: { rented: true, diskGb: 99, provider: "vast" } }), hasToken: false });
+  assert.deepEqual([atVast.needsDisk, atVast.replaceForDisk, atVast.growTo], [true, true, 160]);
+  assert.match(atVast.reason, /A Vast\.ai machine's disk cannot be grown: replace the machine with one that has a 160 GB disk/);
   // An older agent leaves only the disk's size, from the rental.
   const old = buildPlan({ model, files, machine, detected: gpu({ rented: { rented: true, diskGb: 100 } }), hasToken: false });
   assert.equal(old.needsDisk, true);
