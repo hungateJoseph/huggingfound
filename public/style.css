@@ -454,6 +454,7 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .lora-hit { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 0; border-top: 1px solid var(--line); }
 .lora-hit > div:first-child { flex: 1 1 260px; }
 .lora-files { flex-basis: 100%; }
+.lora-link input { flex: 1 1 260px; min-width: 0; }
 .lora-files select { max-width: 100%; }
 .boot { margin: 10px 0 4px; }
 .boot .progress { margin-bottom: 6px; }

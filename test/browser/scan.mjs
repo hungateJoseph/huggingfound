@@ -2020,10 +2020,18 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.match(await visitor.locator("#loras summary").innerText(), /LoRAs and fine-tunes\s+optional/);
   await visitor.click("#loras summary");
   await visitor.click("#lora-look");
-  const hit = visitor.locator(".lora-hit", { hasText: "Wan-TI2V-Motion-LoRA" });
+  const hit = visitor.locator("#lora-found .lora-hit", { hasText: "Wan-TI2V-Motion-LoRA" });
   await hit.waitFor();
   assert.match(await hit.innerText(), /Hugging Face\s+LoRA[\s\S]*by motionlab · 900 downloads/);
   assert.match(await visitor.locator("#lora-found").innerText(), /Civitai has no listing for this model, so only Hugging Face was searched/);
+  assert.equal(await visitor.isChecked("#lora-adult"), false, "adult results only when asked for");
+  // A pasted link is read as one item; a link it cannot read is said plainly.
+  await visitor.fill("#lora-url", "https://example.com/not-a-model");
+  await visitor.click("#lora-url-go");
+  await visitor.waitForFunction(() => /paste a PromptHero model page, a Civitai model page or a Hugging Face repository/.test(document.querySelector("#lora-linked")?.textContent ?? ""));
+  await visitor.fill("#lora-url", "https://huggingface.co/motionlab/Wan-TI2V-Motion-LoRA");
+  await visitor.press("#lora-url", "Enter");
+  await visitor.locator("#lora-linked .lora-hit", { hasText: "Wan-TI2V-Motion-LoRA" }).waitFor();
   await hit.locator(".lora-pick").click();
   await hit.locator(".lora-get").waitFor();
   assert.match(await hit.locator(".lora-file").innerText(), /wan_motion_v1\.safetensors, 307 MB/);

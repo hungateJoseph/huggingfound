@@ -230,7 +230,7 @@ export function startStubHub({ extraModels = [] } = {}) {
     }
     const detail = /^\/api\/models\/([^/]+\/[^/]+)$/.exec(url.pathname);
     if (detail) {
-      const m = all.find((x) => x.id === detail[1]);
+      const m = [...all, ...ADAPTERS].find((x) => x.id === detail[1]);
       if (!m) return json(res, 404, { error: "not found" });
       if (m.gated && !req.headers.authorization) return json(res, 401, { error: "gated" });
       return json(res, 200, { ...m, siblings: FILES[m.id] ?? [], cardData: {} });

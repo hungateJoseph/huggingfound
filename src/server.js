@@ -741,7 +741,16 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     if (req.method === "GET" && url.pathname === "/api/loras") {
       const id = String(url.searchParams.get("id") ?? "");
       if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
-      return send(res, 200, await loraFinder.find(id));
+      return send(res, 200, await loraFinder.find(id, { adult: url.searchParams.get("adult") === "1" }));
+    }
+    if (req.method === "GET" && url.pathname === "/api/loras/link") {
+      const id = String(url.searchParams.get("base") ?? "");
+      if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
+      try {
+        return send(res, 200, { item: await loraFinder.fromLink(id, String(url.searchParams.get("url") ?? "").slice(0, 500)) });
+      } catch (err) {
+        return send(res, 400, { error: err.message });
+      }
     }
     if (req.method === "GET" && url.pathname === "/api/loras/files") {
       const id = String(url.searchParams.get("id") ?? "");

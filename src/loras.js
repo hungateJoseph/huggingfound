@@ -3,7 +3,11 @@
 // their base, which the Hub files under base_model:adapter: and
 // base_model:finetune:) and Civitai (models filed under the base model's
 // name there). Nothing is downloaded here; the page picks one and the
-// machine fetches it. Civitai is asked for its safe-for-work listings only.
+// machine fetches it. Civitai is asked for its safe-for-work listings unless
+// the person asks for adult ones too, which are then marked as such. A link
+// pasted in (a PromptHero model page, a Civitai page, a Hugging Face
+// repository) is read the same way; PromptHero's model pages are copies of
+// Civitai's, named with the Civitai model's number.
 
 // A Hugging Face model and what Civitai calls the same base, for the
 // families whose LoRAs the machine can apply.
@@ -57,7 +61,7 @@ export function createLoraFinder({ fetchImpl = fetch, hubBase = "https://hugging
     return out;
   }
 
-  async function fromCivitai(base) {
+  async function fromCivitai(base, adult = false) {
     const names = CIVITAI_BASES[base];
     if (!names) return [];
     const out = [];
@@ -66,14 +70,14 @@ export function createLoraFinder({ fetchImpl = fetch, hubBase = "https://hugging
       url.searchParams.set("types", type);
       for (const n of names) url.searchParams.append("baseModels", n);
       url.searchParams.set("sort", "Most Downloaded");
-      url.searchParams.set("nsfw", "false");
-      url.searchParams.set("limit", "30");
+      url.searchParams.set("nsfw", adult ? "true" : "false");
+      url.searchParams.set("limit", adult ? "50" : "30");
       const data = await getJson(url, "Civitai");
       for (const m of data?.items ?? []) {
-        if (m.nsfw) continue;
+        if (m.nsfw && !adult) continue;
         const files = civitaiFiles(m, kind);
         if (!files.length) continue;
-        out.push({ source: "civitai", id: `civitai/${m.id}`, name: String(m.name ?? "").trim(), creator: m.creator?.username ?? "", url: `https://civitai.com/models/${m.id}`, kind, downloads: m.stats?.downloadCount ?? 0, likes: m.stats?.thumbsUpCount ?? 0, files });
+        out.push(civitaiItem(m, kind, files));
       }
     }
     return out;
@@ -82,17 +86,48 @@ export function createLoraFinder({ fetchImpl = fetch, hubBase = "https://hugging
   return {
     // Everything found for a base model, Hugging Face's and Civitai's, each
     // with an error of its own when it did not answer.
-    async find(base) {
-      return cached(`find|${base}`, async () => {
-        const [hf, civitai] = await Promise.allSettled([fromHub(base), fromCivitai(base)]);
+    async find(base, { adult = false } = {}) {
+      return cached(`find|${base}|${adult ? "adult" : "sfw"}`, async () => {
+        const [hf, civitai] = await Promise.allSettled([fromHub(base), fromCivitai(base, adult)]);
         return {
           base,
           civitaiKnown: Boolean(CIVITAI_BASES[base]),
+          adult,
           items: [...(hf.status === "fulfilled" ? hf.value : []), ...(civitai.status === "fulfilled" ? civitai.value : [])],
           hfError: hf.status === "rejected" ? hf.reason.message : null,
           civitaiError: civitai.status === "rejected" ? civitai.reason.message : null,
         };
       });
+    },
+    // A link pasted in, read as one item for this base model: a PromptHero
+    // model page or a Civitai page (its model, or the version it names),
+    // or a Hugging Face repository. Something made for another model is
+    // refused with the reason.
+    async fromLink(base, link) {
+      const where = parseLink(link);
+      if (!where) throw new Error("That is not a link HuggingFound reads: paste a PromptHero model page, a Civitai model page or a Hugging Face repository");
+      if (where.source === "hf") {
+        const info = await getJson(new URL(`/api/models/${where.id}`, hubBase), "Hugging Face").catch((err) => {
+          throw new Error(/404/.test(err.message) ? `Hugging Face has no repository ${where.id}` : err.message);
+        });
+        const tags = (info?.tags ?? []).map((t) => String(t));
+        const bases = tags.filter((t) => t.startsWith("base_model:")).map((t) => t.split(":").pop());
+        if (bases.length && !bases.includes(base)) throw new Error(`${where.id} was made for ${bases[0]}, not ${base}`);
+        const files = await this.hubFiles(where.id);
+        const kind = files.some((f) => f.kind === "lora") ? "lora" : "finetune";
+        return { source: "hf", id: where.id, name: where.id.split("/").pop(), creator: where.id.split("/")[0], url: `https://huggingface.co/${where.id}`, kind, downloads: info?.downloads ?? 0, likes: info?.likes ?? 0, adult: tags.includes("not-for-all-audiences") || tags.includes("nsfw"), files, via: where.via };
+      }
+      const m = await getJson(new URL(`/api/v1/models/${where.id}`, civitaiBase), "Civitai").catch((err) => {
+        throw new Error(/404/.test(err.message) ? `Civitai has no model ${where.id}${where.via === "prompthero" ? " (the number in the PromptHero link)" : ""}` : err.message);
+      });
+      const kind = m.type === "LORA" || m.type === "LoCon" || m.type === "DoRA" ? "lora" : m.type === "Checkpoint" ? "finetune" : null;
+      if (!kind) throw new Error(`${m.name ?? "That model"} is a Civitai ${m.type ?? "model"}, not a LoRA or a fine-tuned checkpoint`);
+      const version = (m.modelVersions ?? []).find((v) => String(v.id) === String(where.version)) ?? (m.modelVersions ?? [])[0];
+      const names = CIVITAI_BASES[base] ?? [];
+      if (version?.baseModel && !names.includes(version.baseModel)) throw new Error(`${m.name} was made for ${version.baseModel}, not ${base.split("/").pop()}`);
+      const files = civitaiFiles(m, kind, version?.id);
+      if (!files.length) throw new Error(`${m.name} has no .safetensors file the machine can use`);
+      return { ...civitaiItem(m, kind, files), via: where.via };
     },
     // A Hugging Face repository's weight files, each called a LoRA or a fine-tune by its size.
     async hubFiles(repo) {
@@ -111,11 +146,42 @@ export function createLoraFinder({ fetchImpl = fetch, hubBase = "https://hugging
   };
 }
 
+function civitaiItem(m, kind, files) {
+  return { source: "civitai", id: `civitai/${m.id}`, name: String(m.name ?? "").trim(), creator: m.creator?.username ?? "", url: `https://civitai.com/models/${m.id}`, kind, downloads: m.stats?.downloadCount ?? 0, likes: m.stats?.thumbsUpCount ?? 0, adult: Boolean(m.nsfw), files };
+}
+
+// Where a pasted link points: a Civitai model (from a Civitai page or a
+// PromptHero copy of one) with the version it names, or a Hugging Face
+// repository. Null for anything else.
+export function parseLink(link) {
+  let u;
+  try {
+    u = new URL(String(link).trim());
+  } catch {
+    return null;
+  }
+  const host = u.hostname.replace(/^www\./, "");
+  if (/^civitai\.(com|red|green)$/.test(host)) {
+    const m = /^\/models\/(\d+)/.exec(u.pathname);
+    return m ? { source: "civitai", id: m[1], version: u.searchParams.get("modelVersionId") || null, via: "civitai" } : null;
+  }
+  if (host === "prompthero.com") {
+    // /ai-models/minimax-h3-nsfw-unlocked-2925727-download: the Civitai model's number.
+    const m = /^\/ai-models\/[\w-]*?-?(\d{4,})(?:-download)?\/?$/.exec(u.pathname);
+    return m ? { source: "civitai", id: m[1], version: null, via: "prompthero" } : null;
+  }
+  if (host === "huggingface.co" || host === "hf.co") {
+    const m = /^\/([\w.-]+)\/([\w.-]+)/.exec(u.pathname);
+    return m && !["models", "datasets", "spaces", "docs", "blog"].includes(m[1]) ? { source: "hf", id: `${m[1]}/${m[2]}`, via: "huggingface" } : null;
+  }
+  return null;
+}
+
 // The files of a Civitai model's newest version the machine can use, each
 // kept on the machine under a plain name of its own (Civitai's names hold
 // spaces and other scripts). A fine-tune's best precision comes first.
-export function civitaiFiles(m, kind) {
-  const v = (m.modelVersions ?? [])[0];
+export function civitaiFiles(m, kind, versionId = null) {
+  const v = (m.modelVersions ?? []).find((x) => versionId != null && String(x.id) === String(versionId)) ?? (m.modelVersions ?? [])[0];
   if (!v) return [];
   const files = (v.files ?? [])
     .filter((f) => /\.safetensors$/i.test(String(f.name ?? "")) && ["Model", "Pruned Model"].includes(f.type ?? "Model") && CIVITAI_DOWNLOAD.test(String(f.downloadUrl ?? "")))

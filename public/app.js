@@ -4500,6 +4500,22 @@ function saveLoraBook(repo, book) {
   }
 }
 const loraKey = (repo, file) => `${repo}/${file}`;
+// Whether the finder asks Civitai for adult listings too: off unless ticked, kept in this browser.
+function loraAdult() {
+  try {
+    return localStorage.getItem("lorasAdult") === "1";
+  } catch {
+    return false;
+  }
+}
+function setLoraAdult(on) {
+  try {
+    if (on) localStorage.setItem("lorasAdult", "1");
+    else localStorage.removeItem("lorasAdult");
+  } catch {
+    // no storage: it lasts as long as the page
+  }
+}
 // LoRAs and fine-tunes on the machine came with image 25; an older
 // machine would make the clip without them, so it is said instead.
 const LORA_AGENT = 25;
@@ -4559,7 +4575,7 @@ function wireLoras(box, t) {
       const here = loraHere(t, key);
       const on = key in b.on;
       return `<div class="lora-row ${here ? "" : "gone"}" data-key="${esc(key)}">
-        <label class="check"><input type="checkbox" class="lora-on" ${on && here ? "checked" : ""} ${here ? "" : "disabled"}> <b>${esc(i.name)}</b> <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.trigger?.length ? ` · trigger: ${esc(i.trigger.join(", "))}` : ""}</span></label>
+        <label class="check"><input type="checkbox" class="lora-on" ${on && here ? "checked" : ""} ${here ? "" : "disabled"}> <b>${esc(i.name)}</b>${i.adult ? ' <span class="pill adult">18+</span>' : ""} <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.trigger?.length ? ` · trigger: ${esc(i.trigger.join(", "))}` : ""}</span></label>
         ${here ? `<label class="lora-scale small">strength <input type="range" class="lora-strength" min="0" max="1.5" step="0.05" value="${Number(b.on[key] ?? i.scale ?? 1)}"> <output>${Number(b.on[key] ?? i.scale ?? 1).toFixed(2)}</output></label>` : `<span class="muted small">not on this machine</span> <button class="ghost lora-readd">Add again</button>`}
         <button class="ghost lora-forget" title="Take it off the list${here ? " and off the machine" : ""}">Remove</button>
       </div>`;
@@ -4567,9 +4583,12 @@ function wireLoras(box, t) {
     body.innerHTML = `
       ${fts.length ? `<div class="lora-group"><p class="small"><b>Model version</b> <span class="muted">a fine-tune runs in place of the model's own transformer</span></p>
         <label class="check"><input type="radio" name="lora-ft" value="" ${b.finetune ? "" : "checked"}> ${esc(t.repo.split("/").pop())} as published</label>
-        ${fts.map(([key, i]) => `<label class="check ${loraHere(t, key) ? "" : "gone"}"><input type="radio" name="lora-ft" value="${esc(key)}" ${b.finetune === key ? "checked" : ""} ${loraHere(t, key) ? "" : "disabled"}> <b>${esc(i.name)}</b> <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.fp ? ` · ${esc(i.fp)}` : ""}${loraHere(t, key) ? "" : " · not on this machine"}</span> ${loraHere(t, key) ? "" : `<button class="ghost lora-readd" data-key="${esc(key)}">Add again</button>`} <button class="ghost lora-forget" data-key="${esc(key)}">Remove</button></label>`).join("")}</div>` : ""}
+        ${fts.map(([key, i]) => `<label class="check ${loraHere(t, key) ? "" : "gone"}"><input type="radio" name="lora-ft" value="${esc(key)}" ${b.finetune === key ? "checked" : ""} ${loraHere(t, key) ? "" : "disabled"}> <b>${esc(i.name)}</b>${i.adult ? ' <span class="pill adult">18+</span>' : ""} <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.fp ? ` · ${esc(i.fp)}` : ""}${loraHere(t, key) ? "" : " · not on this machine"}</span> ${loraHere(t, key) ? "" : `<button class="ghost lora-readd" data-key="${esc(key)}">Add again</button>`} <button class="ghost lora-forget" data-key="${esc(key)}">Remove</button></label>`).join("")}</div>` : ""}
       ${los.length ? `<div class="lora-group"><p class="small"><b>LoRAs</b> <span class="muted">tick to use; up to four at once</span></p>${los.map(row).join("")}</div>` : ""}
       <p class="tools-row"><button class="ghost" id="lora-look">${b.found ? "Look again" : "Look for LoRAs"}</button><span class="muted small">on Hugging Face and Civitai, made for ${esc(t.repo.split("/").pop())}. Nothing is used unless you tick it.</span></p>
+      <label class="check small"><input type="checkbox" id="lora-adult" ${loraAdult() ? "checked" : ""}> Include 18+ results <span class="muted">adult LoRAs from Civitai, marked 18+; for adults only</span></label>
+      <div class="tools-row lora-link"><input type="url" id="lora-url" placeholder="Or paste a link: a PromptHero model page, a Civitai model page or a Hugging Face repository"><button class="ghost" id="lora-url-go">Read the link</button></div>
+      <div id="lora-linked"></div>
       <div id="lora-found"></div>`;
     if (b.found) drawFound(b.found);
     body.querySelectorAll(".lora-on").forEach((c) => c.addEventListener("change", () => {
@@ -4625,7 +4644,35 @@ function wireLoras(box, t) {
       if (item) addToMachine(item, btn);
     }));
     body.querySelector("#lora-look").addEventListener("click", look);
+    body.querySelector("#lora-adult").addEventListener("change", (e) => {
+      setLoraAdult(e.target.checked);
+      look();
+    });
+    const go = body.querySelector("#lora-url-go");
+    const field = body.querySelector("#lora-url");
+    go.addEventListener("click", () => readLink(field.value));
+    field.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        readLink(field.value);
+      }
+    });
   };
+  // A pasted link, read as one item, with its files to pick from.
+  async function readLink(link) {
+    const out = body.querySelector("#lora-linked");
+    if (!String(link).trim()) return;
+    out.innerHTML = `<p class="muted small">Reading the link</p>`;
+    let item;
+    try {
+      ({ item } = await api.get(`/api/loras/link?base=${encodeURIComponent(t.repo)}&url=${encodeURIComponent(String(link).trim())}`));
+    } catch (err) {
+      out.innerHTML = `<p class="notice bad small">${esc(err.message)}</p>`;
+      return;
+    }
+    out.innerHTML = `${hitCard(item, item.via === "prompthero" ? "From PromptHero, a copy of this Civitai model." : "")}${item.source === "civitai" ? civitaiNote() : ""}`;
+    out.querySelector(".lora-pick").addEventListener("click", (e) => pickFile(item, e.currentTarget));
+  }
   async function look() {
     const out = body.querySelector("#lora-found");
     const btn = body.querySelector("#lora-look");
@@ -4634,7 +4681,7 @@ function wireLoras(box, t) {
     out.innerHTML = `<p class="muted small">Asking Hugging Face and Civitai</p>`;
     let found;
     try {
-      found = await api.get(`/api/loras?id=${encodeURIComponent(t.repo)}`);
+      found = await api.get(`/api/loras?id=${encodeURIComponent(t.repo)}${loraAdult() ? "&adult=1" : ""}`);
     } catch (err) {
       out.innerHTML = `<p class="notice bad small">Could not look: ${esc(err.message)}</p>`;
       btn.disabled = false;
@@ -4642,7 +4689,7 @@ function wireLoras(box, t) {
       return;
     }
     const nb = book();
-    nb.found = { at: Date.now(), civitaiKnown: found.civitaiKnown, hfError: found.hfError, civitaiError: found.civitaiError, items: found.items.slice(0, 80) };
+    nb.found = { at: Date.now(), adult: Boolean(found.adult), civitaiKnown: found.civitaiKnown, hfError: found.hfError, civitaiError: found.civitaiError, items: found.items.slice(0, 100) };
     save(nb);
     draw();
   }
@@ -4650,8 +4697,7 @@ function wireLoras(box, t) {
     const out = body.querySelector("#lora-found");
     // Fine-tunes take a MiniMax-H3 transformer's place only; elsewhere they are left out.
     const items = found.items.filter((i) => i.kind !== "finetune" || found.civitaiKnown);
-    const have = new Set(Object.values(book().items).map((i) => i.repo));
-    const card = (i) => `<div class="lora-hit" data-id="${esc(i.id)}"><div><b>${esc(i.name)}</b> <span class="pill">${sourceName(i.source)}</span> <span class="pill">${i.kind === "finetune" ? "Fine-tune" : "LoRA"}</span>${have.has(i.id) ? ` <span class="pill ok">added</span>` : ""}<br><span class="muted small">${i.creator ? `by ${esc(i.creator)} · ` : ""}${Number(i.downloads || 0).toLocaleString()} downloads · <a href="${esc(i.url)}" target="_blank" rel="noopener">page</a></span></div><button class="ghost lora-pick">Add to the machine</button><div class="lora-files"></div></div>`;
+    const card = (i) => hitCard(i);
     const fts = items.filter((i) => i.kind === "finetune");
     const los = items.filter((i) => i.kind !== "finetune");
     const notes = [found.hfError ? `Hugging Face did not answer (${found.hfError}).` : "", found.civitaiError ? `Civitai did not answer (${found.civitaiError}).` : "", found.civitaiKnown ? "" : "Civitai has no listing for this model, so only Hugging Face was searched."].filter(Boolean).join(" ");
@@ -4661,6 +4707,10 @@ function wireLoras(box, t) {
       ${los.length ? `<details class="lora-list" open><summary class="small"><b>${los.length} LoRA${los.length === 1 ? "" : "s"}</b> <span class="muted">small add-ons for style, motion or speed, most downloaded first</span></summary>${los.map(card).join("")}</details>` : ""}
       ${civitaiNote()}`;
     out.querySelectorAll(".lora-pick").forEach((btn) => btn.addEventListener("click", () => pickFile(items.find((i) => i.id === btn.closest(".lora-hit").dataset.id), btn)));
+  }
+  function hitCard(i, note = "") {
+    const have = new Set(Object.values(book().items).map((x) => x.repo));
+    return `<div class="lora-hit" data-id="${esc(i.id)}"><div><b>${esc(i.name)}</b> <span class="pill">${sourceName(i.source)}</span> <span class="pill">${i.kind === "finetune" ? "Fine-tune" : "LoRA"}</span>${i.adult ? ' <span class="pill adult">18+</span>' : ""}${have.has(i.id) ? ` <span class="pill ok">added</span>` : ""}<br><span class="muted small">${note ? `${esc(note)} ` : ""}${i.creator ? `by ${esc(i.creator)} · ` : ""}${Number(i.downloads || 0).toLocaleString()} downloads · <a href="${esc(i.url)}" target="_blank" rel="noopener">page</a></span></div><button class="ghost lora-pick">Add to the machine</button><div class="lora-files"></div></div>`;
   }
   const civitaiNote = () => (state.civitaiToken ? "" : `<p class="muted small">Civitai lets only signed-in accounts download: add your Civitai API key in Settings (Hugging Face and Civitai) to add one from there.</p>`);
   // A repository's or Civitai model's files, one to pick when there are several.
@@ -4692,7 +4742,7 @@ function wireLoras(box, t) {
     if (first >= 0) select.value = String(first);
     slot.querySelector(".lora-get").addEventListener("click", (e) => {
       const f = files[Number(select.value)];
-      addToMachine({ repo: item.id, file: f.file, name: files.length > 1 && item.kind !== "finetune" ? `${item.name} (${f.label.replace(/\.safetensors$/i, "")})` : item.name, kind: f.kind ?? item.kind, source: item.source, url: item.url, gb: f.gb ?? null, fp: f.fp ?? null, trigger: f.trigger ?? [], download: item.source === "civitai" ? f.url : null, scale: 1 }, e.currentTarget, slot.querySelector(".lora-progress"));
+      addToMachine({ repo: item.id, file: f.file, name: files.length > 1 && item.kind !== "finetune" ? `${item.name} (${f.label.replace(/\.safetensors$/i, "")})` : item.name, kind: f.kind ?? item.kind, source: item.source, url: item.url, gb: f.gb ?? null, fp: f.fp ?? null, trigger: f.trigger ?? [], download: item.source === "civitai" ? f.url : null, scale: 1, ...(item.adult ? { adult: true } : {}) }, e.currentTarget, slot.querySelector(".lora-progress"));
     });
   }
   // The machine fetches the file; the list follows its progress, then keeps it.
@@ -4705,6 +4755,7 @@ function wireLoras(box, t) {
       say(loraMachineTooOld());
       return;
     }
+    if (item.adult && !confirm(`${item.name} is marked for adults (18+) where it is published: it is made for explicit content. Add it to the machine?`)) return;
     btn.disabled = true;
     let id;
     try {

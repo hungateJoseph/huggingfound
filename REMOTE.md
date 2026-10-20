@@ -556,6 +556,17 @@ told to be replaced rather than make the clip without them.
   test/comfy-minimax.test.js when `HF_TEST_PYTHON` names a Python with
   torch, diffusers, peft and safetensors).
 
+Links and adult listings (2026-10-20): a link pasted under the finder is
+read as one item (`/api/loras/link`, `parseLink`): a PromptHero model page
+(`prompthero.com/ai-models/<name>-<number>-download`, a copy of the Civitai
+model with that number), a Civitai page (civitai.com, .red or .green; the
+version a `modelVersionId` names, else the newest) or a Hugging Face
+repository. One made for another base model is refused with the reason.
+"Include 18+ results" (off unless ticked, kept in this browser as
+`lorasAdult`) asks Civitai with `nsfw=true`; adult items carry an 18+ mark
+and are confirmed once before the download, as adult models are elsewhere
+on the site.
+
 Not yet verified on hardware: DaSiWa loading and its clips, Civitai
 downloads with a real key, any Civitai LoRA, several LoRAs at once.
 
