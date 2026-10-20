@@ -1970,7 +1970,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.waitForSelector("#gpu-runs li");
   // The machine's own report, to read or copy: what it runs, holds and how its failures went.
   await visitor.click("#gpu-report");
-  await visitor.waitForFunction(() => /Agent 24, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  await visitor.waitForFunction(() => /Agent 25, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
   assert.match(await visitor.locator("#gpu-report-out").innerText(), /Python 3\.12\.3, torch 2\.6\.0 \(CUDA 12\.4\), diffusers 0\.41\.0, transformers 5\.5\.3, peft 0\.18\.0, av 15\.0\.0[\s\S]*Cards: Fake A40 48 GB[\s\S]*Disk: 41\.5 GB free of 50, 8\.5 GB in the machine's folders \(a quota; the size as the site said it\)[\s\S]*No failures on this machine\.[\s\S]*Journal \(tail\):/);
   assert.equal(await visitor.locator("#gpu-report-copy").isHidden(), false);
   assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");
@@ -2007,6 +2007,57 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   acceptDialogs = false;
   assert.ok(rentedAgent.state.deleted.length > 0);
   await visitor.keyboard.press("Escape");
+});
+
+await step("hosted: a video model's LoRAs are found on Hugging Face, added to the machine, used for the next clip at the strength set, and still ticked when the window opens again", async () => {
+  // The clip model on the machine again, for this step alone.
+  const WAN_HERE = { repo: "Wan-AI/Wan2.2-TI2V-5B-Diffusers", file: "model_index.json", gb: 20.4, engine: "diffusers" };
+  rentedAgent.state.files.push(WAN_HERE);
+  await visitor.evaluate(() => openModel("Wan-AI/Wan2.2-TI2V-5B-Diffusers"));
+  await visitor.waitForSelector("#loras").catch(async (err) => {
+    throw new Error(`${err.message}\n${await visitor.locator("#modal-body").innerText().catch(() => "")}`.slice(0, 1500));
+  });
+  assert.match(await visitor.locator("#loras summary").innerText(), /LoRAs and fine-tunes\s+optional/);
+  await visitor.click("#loras summary");
+  await visitor.click("#lora-look");
+  const hit = visitor.locator(".lora-hit", { hasText: "Wan-TI2V-Motion-LoRA" });
+  await hit.waitFor();
+  assert.match(await hit.innerText(), /Hugging Face\s+LoRA[\s\S]*by motionlab · 900 downloads/);
+  assert.match(await visitor.locator("#lora-found").innerText(), /Civitai has no listing for this model, so only Hugging Face was searched/);
+  await hit.locator(".lora-pick").click();
+  await hit.locator(".lora-get").waitFor();
+  assert.match(await hit.locator(".lora-file").innerText(), /wan_motion_v1\.safetensors, 307 MB/);
+  const jobs = rentedAgent.state.jobs.length;
+  await hit.locator(".lora-get").click();
+  await visitor.waitForFunction(() => /is on the machine and ticked/.test(document.querySelector("#notice")?.textContent ?? ""), null, { timeout: 20000 });
+  assert.ok(rentedAgent.state.downloads.some((d) => d.addon && d.repo === "motionlab/Wan-TI2V-Motion-LoRA" && d.files[0] === "wan_motion_v1.safetensors"), "the machine fetched it");
+  const row = visitor.locator(".lora-row", { hasText: "Wan-TI2V-Motion-LoRA" });
+  assert.equal(await row.locator(".lora-on").isChecked(), true);
+  await row.locator(".lora-strength").evaluate((r) => {
+    r.value = "0.8";
+    r.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  assert.match(await visitor.locator("#loras-count").innerText(), /^1 LoRA on$/);
+  // The next clip carries it.
+  await visitor.fill("#image-prompt", "a kite over a field");
+  await visitor.click("#image-go");
+  for (let i = 0; i < 100 && rentedAgent.state.jobs.length === jobs; i++) await new Promise((r) => setTimeout(r, 100));
+  const sent = rentedAgent.state.jobs.at(-1);
+  assert.equal(sent.prompt.endsWith("a kite over a field"), true, sent.prompt);
+  assert.deepEqual(sent.loras, [{ repo: "motionlab/Wan-TI2V-Motion-LoRA", file: "wan_motion_v1.safetensors", scale: 0.8 }]);
+  assert.equal(sent.finetune, undefined);
+  await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 30000 });
+  // The window opened again shows the same: ticked, at 0.8.
+  await visitor.evaluate(() => openModel("Wan-AI/Wan2.2-TI2V-5B-Diffusers"));
+  await visitor.waitForSelector("#loras[open] .lora-row");
+  const again = visitor.locator(".lora-row", { hasText: "Wan-TI2V-Motion-LoRA" });
+  assert.equal(await again.locator(".lora-on").isChecked(), true);
+  assert.equal(await again.locator(".lora-strength").inputValue(), "0.8");
+  // Unticked, the next clip goes without it.
+  await again.locator(".lora-on").uncheck();
+  assert.match(await visitor.locator("#loras-count").innerText(), /^optional$/);
+  await visitor.click("#close-modal");
+  rentedAgent.state.files = rentedAgent.state.files.filter((f) => f !== WAN_HERE);
 });
 
 await step("hosted: deleting the account deletes the machine and signs out", async () => {

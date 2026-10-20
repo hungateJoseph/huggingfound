@@ -1,3 +1,4 @@
+import { CIVITAI_DOWNLOAD } from "./loras.js";
 import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -854,10 +855,16 @@ export function pullImageRepoOnAgent(repo, files, fetchImpl = fetch, agent = "",
   return agentDownload(`Downloading ${list.length} files of ${repo} on the rented GPU`, "/download-repo", { repo, files: list, token: token || undefined, gb: Number(gb) > 0 ? Number(gb) : undefined }, fetchImpl, agent, owner, { machine, restarted });
 }
 
-export function pullAddonOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "", machine = null, restarted = false } = {}) {
+// `sources` names the files that come from Civitai, by their download
+// address, fetched there with the person's Civitai token.
+export function pullAddonOnAgent(repo, files, fetchImpl = fetch, agent = "", { owner = null, token = "", machine = null, restarted = false, sources = null, civitaiToken = "" } = {}) {
   const list = Array.isArray(files) ? files.map((f) => String(f ?? "")) : [];
   if (!REPO_RE.test(String(repo)) || !list.length || list.length > 40 || !list.every((f) => SUBPATH_RE.test(f))) throw new Error("Bad add-on arguments");
-  return agentDownload(`Downloading the add-on ${repo} on the rented GPU`, "/download-addon", { repo, files: list, token: token || undefined }, fetchImpl, agent, owner, { machine, restarted });
+  const from = sources && typeof sources === "object" ? Object.fromEntries(Object.entries(sources).map(([f, u]) => [String(f), String(u)])) : {};
+  if (Object.entries(from).some(([f, u]) => !list.includes(f) || !CIVITAI_DOWNLOAD.test(u))) throw new Error("An add-on file may come from a Civitai download address only");
+  const civitai = Object.keys(from).length > 0;
+  if (civitai && !civitaiToken) throw new Error("Civitai lets only signed-in accounts download: add your Civitai API token in Settings (Civitai), then try again");
+  return agentDownload(`Downloading the add-on ${repo} on the rented GPU`, "/download-addon", { repo, files: list, token: token || undefined, ...(civitai ? { sources: from, civitaiToken } : {}) }, fetchImpl, agent, owner, { machine, restarted });
 }
 
 export async function removeAgentAddon(repo, file, fetchImpl = fetch, agent = "") {

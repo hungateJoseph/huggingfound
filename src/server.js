@@ -33,6 +33,7 @@ import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
 import { RentError, TIERS, createRental, tierFor, agentFetch } from "./rent.js";
 import { VastError } from "./vast.js";
+import { createLoraFinder } from "./loras.js";
 import { createStock } from "./stock.js";
 import { createPush } from "./push.js";
 import { AuthError, GUEST_HOURS, createAccounts } from "./accounts.js";
@@ -56,7 +57,7 @@ const NOT_HOSTED = new Set(["/api/scan", "/api/voices/gather", "/api/storage", "
 // machine, have it download models, and follow those downloads.
 const SIGNED_IN = new Set(["/api/settings", "/api/rent", "/api/run", "/api/remove", "/api/chat-server", "/api/account/delete"]);
 // The keys a hosted account may keep; everything else is for the local app.
-const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "VAST_API_KEY", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "RUNPOD_SLOW_DCS", "RUNPOD_COMMUNITY", "HF_TOKEN"]);
+const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "VAST_API_KEY", "CIVITAI_TOKEN", "ANTHROPIC_API_KEY", "RUNPOD_IDLE_MINUTES", "RUNPOD_MAX_SPEND", "RUNPOD_PRESENCE_MINUTES", "HIDDEN_MODELS", "RUNPOD_REGISTRY_AUTH", "RUNPOD_SLOW_DCS", "RUNPOD_COMMUNITY", "HF_TOKEN"]);
 // Models a person has hidden from search and Browse: ids, comma-separated.
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
@@ -146,6 +147,9 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // The Hugging Face token for gated models: the person's own on the hosted
   // site (kept with their account), the settings file's in the app.
   const tokenFor = (ctx) => (hosted ? ctx.settings().HF_TOKEN || "" : env().HF_TOKEN || "");
+  const civitaiTokenFor = (ctx) => (hosted ? ctx.settings().CIVITAI_TOKEN || "" : env().CIVITAI_TOKEN || "");
+  // LoRAs and fine-tunes for a video model, from Hugging Face and Civitai.
+  const loraFinder = createLoraFinder({ fetchImpl, ...(hubBase ? { hubBase } : {}), ...(civitaiBase ? { civitaiBase } : {}) });
   // A model published as pieces often has a twin in the folder the
   // diffusers library loads, named with -Diffusers. Looked up once.
   const twins = new Map();
@@ -388,6 +392,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         chatServer: remote ? { url: remote, agent: imageAgent(ctx) || null, gpuGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).comfortableGb, rented: rentedChat(ctx), direct: hosted } : null,
         runpodKey: saved.RUNPOD_API_KEY ? mask(saved.RUNPOD_API_KEY) : "",
         vastKey: saved.VAST_API_KEY ? mask(saved.VAST_API_KEY) : "",
+        civitaiToken: saved.CIVITAI_TOKEN ? mask(saved.CIVITAI_TOKEN) : "",
         registryAuth: saved.RUNPOD_REGISTRY_AUTH || "",
         rental: ctx.rental ? ctx.rental.cached() : hosted ? null : { rented: false },
         rentTiers: TIERS,
@@ -480,7 +485,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         if (typeof body.HF_TOKEN !== "string") return send(res, 400, { error: "HF_TOKEN must be a string" });
         updates.HF_TOKEN = body.HF_TOKEN.trim();
       }
-      for (const [key, pattern, what] of [["GITHUB_TOKEN", /^[\w-]{20,255}$/, "a GitHub token"], ["YOUTUBE_API_KEY", /^[\w-]{20,80}$/, "a YouTube API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"], ["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"], ["VAST_API_KEY", /^[\w-]{20,200}$/, "a Vast.ai API key"]]) {
+      for (const [key, pattern, what] of [["GITHUB_TOKEN", /^[\w-]{20,255}$/, "a GitHub token"], ["YOUTUBE_API_KEY", /^[\w-]{20,80}$/, "a YouTube API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"], ["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"], ["VAST_API_KEY", /^[\w-]{20,200}$/, "a Vast.ai API key"], ["CIVITAI_TOKEN", /^[\w-]{20,200}$/, "a Civitai API key"]]) {
         if (key in body) {
           if (typeof body[key] !== "string") return send(res, 400, { error: `${key} must be a string` });
           const value = body[key].trim();
@@ -731,6 +736,22 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       }
       return send(res, 200, { model, plan, choice });
     }
+    // LoRAs and fine-tunes for a video model: what Hugging Face and Civitai
+    // have for it, and a repository's files once one is picked.
+    if (req.method === "GET" && url.pathname === "/api/loras") {
+      const id = String(url.searchParams.get("id") ?? "");
+      if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
+      return send(res, 200, await loraFinder.find(id));
+    }
+    if (req.method === "GET" && url.pathname === "/api/loras/files") {
+      const id = String(url.searchParams.get("id") ?? "");
+      if (!/^[\w.-]+\/[\w.-]+$/.test(id) || id.startsWith("civitai/")) return send(res, 400, { error: "Bad repository" });
+      try {
+        return send(res, 200, { files: await loraFinder.hubFiles(id) });
+      } catch (err) {
+        return send(res, 502, { error: err.message });
+      }
+    }
     // Every download or run of this person's: what is going now, and what
     // finished in the last minutes, each with the model it was for.
     if (req.method === "GET" && url.pathname === "/api/runs") {
@@ -939,7 +960,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
             : body.kind === "pull-image-repo"
               ? pullImageRepoOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token, gb: Number(args.gb) || 0, machine, restarted })
             : body.kind === "pull-addon"
-              ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token, machine, restarted })
+              ? pullAddonOnAgent(String(args.repo ?? ""), args.files, fetchImpl, agent, { owner, token, machine, restarted, sources: args.sources ?? null, civitaiToken: civitaiTokenFor(ctx) })
               : pullImageOnAgent(String(args.repo ?? ""), String(args.file ?? ""), fetchImpl, agent, { owner, token, machine, restarted });
           run.finished.then(release);
           if (body.stopAfter) stopWhenDone(ctx, run);

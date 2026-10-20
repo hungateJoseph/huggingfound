@@ -75,6 +75,8 @@ async function load() {
   if (state.runpodKey !== s.runpodKey || state.vastKey !== (s.vastKey || "")) state.others = null;
   state.runpodKey = s.runpodKey;
   state.vastKey = s.vastKey || "";
+  state.civitaiToken = s.civitaiToken || "";
+  $("#civitai-status").textContent = s.civitaiToken ? `A key is saved (${s.civitaiToken}).` : "No key saved; LoRAs come from Hugging Face only.";
   $("#vast-status").textContent = s.vastKey ? `A key is saved (${s.vastKey}).` : s.rental?.rented && s.rental.provider === "vast" ? "No key saved, but a Vast.ai machine is still rented: enter the key of the account that rented it to stop or delete it." : "No key saved; only RunPod is used.";
   state.registryAuth = s.registryAuth || "";
   if (state.others == null) loadOthersState();
@@ -2782,6 +2784,7 @@ function renderImage(box, t) {
       <input type="text" id="image-negative" placeholder="anime, cartoon, drawing, blurry, extra fingers">
       <small class="muted">Models can't read "no" in the description, so list unwanted things here.</small>
     </label>
+    ${video && t.engine === "diffusers" && t.agent ? `<details class="loras" id="loras" ${loraSummary(t).on ? "open" : ""}><summary>LoRAs and fine-tunes <span class="muted small" id="loras-count">${esc(loraSummary(t).text)}</span></summary><div id="loras-body"></div></details>` : ""}
     ${t.agent ? `<div class="queue" id="queue" hidden>
       <p class="muted small"><b>Queue.</b> Runs one after another by itself; each result is kept here.</p>
       <ol id="queue-list"></ol>
@@ -3170,6 +3173,7 @@ function renderImage(box, t) {
     await load();
     openModel(t.repo);
   });
+  if (box.querySelector("#loras")) wireLoras(box, t);
   box.querySelector("#replace-for-refs")?.addEventListener("click", () => {
     state.rentFrom = t.repo;
     replaceMachine({ diskGb: t.referenceGrowTo });
@@ -3848,7 +3852,16 @@ function renderImage(box, t) {
       target = base;
       extra = { addon: { kind: t.addonKind, repo: t.repo, file: variant.file, lora: variant.lora, scale: Number(box.querySelector("#addon-scale").value) }, ipImage, xl: base.xl };
     }
-    return { ...target, prompt: item.expanded ?? item.prompt, negative: extra.negative ?? item.negative, quality: item.q, video, seed: item.seed ?? null, ...extra };
+    // The LoRAs ticked for this model and a fine-tune, if one is chosen.
+    let prompt = item.expanded ?? item.prompt;
+    if (video && !addon && t.engine === "diffusers" && t.agent) {
+      const part = loraJobPart(t);
+      extra = { ...extra, ...part.job };
+      // A LoRA's trigger words lead the description, where it looks for them.
+      const missing = part.trigger.filter((w) => !String(prompt).toLowerCase().includes(w.toLowerCase()));
+      if (missing.length) prompt = `${missing.join(", ")}, ${prompt}`;
+    }
+    return { ...target, prompt, negative: extra.negative ?? item.negative, quality: item.q, video, seed: item.seed ?? null, ...extra };
   }
 
   // A finished result: timed against the guess, kept in this browser,
@@ -4463,8 +4476,277 @@ async function resetAgent(agent, jobId, onLine) {
   onLine("The machine is back.");
 }
 
+// ---- LoRAs and fine-tunes for a video model -----------------------------
+// Optional, per model: LoRAs found on Hugging Face and Civitai for the
+// model, added to the machine one by one, then ticked (each at its own
+// strength) for the clips made here; and a fine-tuned version of the
+// model (DaSiWa's MiniMax-H3, say) used in its transformer's place. What
+// was added and ticked is kept in this browser under the model, so the
+// window shows the same when it is opened again.
+function loraBook(repo) {
+  try {
+    const b = JSON.parse(localStorage.getItem(`loras:${repo}`) || "null");
+    if (b && typeof b === "object") return { items: b.items ?? {}, on: b.on ?? {}, finetune: b.finetune ?? null, found: b.found ?? null };
+  } catch {
+    // no storage: nothing ticked
+  }
+  return { items: {}, on: {}, finetune: null, found: null };
+}
+function saveLoraBook(repo, book) {
+  try {
+    localStorage.setItem(`loras:${repo}`, JSON.stringify(book));
+  } catch {
+    // no storage: it lasts as long as the page
+  }
+}
+const loraKey = (repo, file) => `${repo}/${file}`;
+// LoRAs and fine-tunes on the machine came with image 25; an older
+// machine would make the clip without them, so it is said instead.
+const LORA_AGENT = 25;
+function loraMachineTooOld() {
+  const v = state.rental?.agentVersion;
+  return v != null && v < LORA_AGENT ? `This machine runs an older HuggingFound image (version ${v}) that does not take LoRAs or fine-tunes; replace the machine for one on the current image (its models download again).` : "";
+}
+// What is on the machine of what was added: an add-on's key is "repo/file".
+function loraHere(t, key) {
+  return (t.addonsHere ?? []).includes(key);
+}
+function loraSummary(t) {
+  const book = loraBook(t.repo);
+  const on = Object.keys(book.on).filter((k) => loraHere(t, k) && book.items[k]);
+  const ft = book.finetune && loraHere(t, book.finetune) ? book.items[book.finetune] : null;
+  const parts = [ft ? `${ft.name}` : "", on.length ? `${on.length} LoRA${on.length === 1 ? "" : "s"} on` : ""].filter(Boolean);
+  return { on: parts.length > 0, text: parts.length ? parts.join(", ") : "optional" };
+}
+// The part of a job the LoRAs and the fine-tune make, and their trigger words.
+function loraJobPart(t) {
+  const book = loraBook(t.repo);
+  const loras = [];
+  const trigger = [];
+  for (const [key, scale] of Object.entries(book.on)) {
+    const item = book.items[key];
+    if (!item) continue;
+    if (!loraHere(t, key)) throw new Error(`the LoRA ${item.name} is not on the machine any more (a new machine, or removed); add it again under LoRAs, or untick it`);
+    loras.push({ repo: item.repo, file: item.file, scale: Number(scale) });
+    trigger.push(...(item.trigger ?? []));
+  }
+  if (loras.length > 4) throw new Error("four LoRAs at most at once; untick some");
+  let finetune = null;
+  if (book.finetune) {
+    const item = book.items[book.finetune];
+    if (item && !loraHere(t, book.finetune)) throw new Error(`the fine-tune ${item.name} is not on the machine any more; add it again under LoRAs, or choose the model as published`);
+    if (item) finetune = { repo: item.repo, file: item.file };
+  }
+  if ((loras.length || finetune) && loraMachineTooOld()) throw new Error(loraMachineTooOld());
+  return { job: { ...(loras.length ? { loras } : {}), ...(finetune ? { finetune } : {}) }, trigger: [...new Set(trigger)].slice(0, 8) };
+}
+function wireLoras(box, t) {
+  const body = box.querySelector("#loras-body");
+  const count = box.querySelector("#loras-count");
+  const book = () => loraBook(t.repo);
+  const save = (b) => {
+    saveLoraBook(t.repo, b);
+    count.textContent = loraSummary(t).text;
+  };
+  const fmtGb = (gb) => (gb ? (gb < 1 ? `${Math.round(gb * 1024)} MB` : `${gb.toFixed(1)} GB`) : "");
+  const sourceName = (s) => (s === "civitai" ? "Civitai" : "Hugging Face");
+  const draw = () => {
+    const b = book();
+    const mine = Object.entries(b.items);
+    const fts = mine.filter(([, i]) => i.kind === "finetune");
+    const los = mine.filter(([, i]) => i.kind !== "finetune");
+    const row = ([key, i]) => {
+      const here = loraHere(t, key);
+      const on = key in b.on;
+      return `<div class="lora-row ${here ? "" : "gone"}" data-key="${esc(key)}">
+        <label class="check"><input type="checkbox" class="lora-on" ${on && here ? "checked" : ""} ${here ? "" : "disabled"}> <b>${esc(i.name)}</b> <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.trigger?.length ? ` · trigger: ${esc(i.trigger.join(", "))}` : ""}</span></label>
+        ${here ? `<label class="lora-scale small">strength <input type="range" class="lora-strength" min="0" max="1.5" step="0.05" value="${Number(b.on[key] ?? i.scale ?? 1)}"> <output>${Number(b.on[key] ?? i.scale ?? 1).toFixed(2)}</output></label>` : `<span class="muted small">not on this machine</span> <button class="ghost lora-readd">Add again</button>`}
+        <button class="ghost lora-forget" title="Take it off the list${here ? " and off the machine" : ""}">Remove</button>
+      </div>`;
+    };
+    body.innerHTML = `
+      ${fts.length ? `<div class="lora-group"><p class="small"><b>Model version</b> <span class="muted">a fine-tune runs in place of the model's own transformer</span></p>
+        <label class="check"><input type="radio" name="lora-ft" value="" ${b.finetune ? "" : "checked"}> ${esc(t.repo.split("/").pop())} as published</label>
+        ${fts.map(([key, i]) => `<label class="check ${loraHere(t, key) ? "" : "gone"}"><input type="radio" name="lora-ft" value="${esc(key)}" ${b.finetune === key ? "checked" : ""} ${loraHere(t, key) ? "" : "disabled"}> <b>${esc(i.name)}</b> <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.fp ? ` · ${esc(i.fp)}` : ""}${loraHere(t, key) ? "" : " · not on this machine"}</span> ${loraHere(t, key) ? "" : `<button class="ghost lora-readd" data-key="${esc(key)}">Add again</button>`} <button class="ghost lora-forget" data-key="${esc(key)}">Remove</button></label>`).join("")}</div>` : ""}
+      ${los.length ? `<div class="lora-group"><p class="small"><b>LoRAs</b> <span class="muted">tick to use; up to four at once</span></p>${los.map(row).join("")}</div>` : ""}
+      <p class="tools-row"><button class="ghost" id="lora-look">${b.found ? "Look again" : "Look for LoRAs"}</button><span class="muted small">on Hugging Face and Civitai, made for ${esc(t.repo.split("/").pop())}. Nothing is used unless you tick it.</span></p>
+      <div id="lora-found"></div>`;
+    if (b.found) drawFound(b.found);
+    body.querySelectorAll(".lora-on").forEach((c) => c.addEventListener("change", () => {
+      const key = c.closest(".lora-row").dataset.key;
+      const nb = book();
+      if (c.checked) {
+        if (Object.keys(nb.on).length >= 4) {
+          c.checked = false;
+          notice("Four LoRAs at most at once; untick one first.", "info");
+          return;
+        }
+        nb.on[key] = Number(nb.items[key]?.scale ?? 1);
+      } else delete nb.on[key];
+      save(nb);
+    }));
+    body.querySelectorAll(".lora-strength").forEach((r) => r.addEventListener("input", () => {
+      const key = r.closest(".lora-row").dataset.key;
+      r.nextElementSibling.textContent = Number(r.value).toFixed(2);
+      const nb = book();
+      nb.items[key].scale = Number(r.value);
+      if (key in nb.on) nb.on[key] = Number(r.value);
+      save(nb);
+    }));
+    body.querySelectorAll('input[name="lora-ft"]').forEach((r) => r.addEventListener("change", () => {
+      const nb = book();
+      nb.finetune = r.value || null;
+      save(nb);
+    }));
+    body.querySelectorAll(".lora-forget").forEach((btn) => btn.addEventListener("click", async () => {
+      const key = btn.dataset.key || btn.closest(".lora-row")?.dataset.key;
+      const nb = book();
+      const item = nb.items[key];
+      if (!item) return;
+      if (loraHere(t, key)) {
+        if (!confirm(`Remove ${item.name} from the machine and from this list?`)) return;
+        try {
+          await api.post("/api/remove", { kind: "gpu-addon", repo: item.repo, file: item.file });
+          t.addonsHere = (t.addonsHere ?? []).filter((k) => k !== key);
+        } catch (err) {
+          notice(`Could not remove it from the machine: ${err.message}`, "bad");
+          return;
+        }
+      }
+      delete nb.items[key];
+      delete nb.on[key];
+      if (nb.finetune === key) nb.finetune = null;
+      save(nb);
+      draw();
+    }));
+    body.querySelectorAll(".lora-readd").forEach((btn) => btn.addEventListener("click", () => {
+      const key = btn.dataset.key || btn.closest(".lora-row")?.dataset.key;
+      const item = book().items[key];
+      if (item) addToMachine(item, btn);
+    }));
+    body.querySelector("#lora-look").addEventListener("click", look);
+  };
+  async function look() {
+    const out = body.querySelector("#lora-found");
+    const btn = body.querySelector("#lora-look");
+    btn.disabled = true;
+    btn.textContent = "Looking";
+    out.innerHTML = `<p class="muted small">Asking Hugging Face and Civitai</p>`;
+    let found;
+    try {
+      found = await api.get(`/api/loras?id=${encodeURIComponent(t.repo)}`);
+    } catch (err) {
+      out.innerHTML = `<p class="notice bad small">Could not look: ${esc(err.message)}</p>`;
+      btn.disabled = false;
+      btn.textContent = "Look again";
+      return;
+    }
+    const nb = book();
+    nb.found = { at: Date.now(), civitaiKnown: found.civitaiKnown, hfError: found.hfError, civitaiError: found.civitaiError, items: found.items.slice(0, 80) };
+    save(nb);
+    draw();
+  }
+  function drawFound(found) {
+    const out = body.querySelector("#lora-found");
+    // Fine-tunes take a MiniMax-H3 transformer's place only; elsewhere they are left out.
+    const items = found.items.filter((i) => i.kind !== "finetune" || found.civitaiKnown);
+    const have = new Set(Object.values(book().items).map((i) => i.repo));
+    const card = (i) => `<div class="lora-hit" data-id="${esc(i.id)}"><div><b>${esc(i.name)}</b> <span class="pill">${sourceName(i.source)}</span> <span class="pill">${i.kind === "finetune" ? "Fine-tune" : "LoRA"}</span>${have.has(i.id) ? ` <span class="pill ok">added</span>` : ""}<br><span class="muted small">${i.creator ? `by ${esc(i.creator)} · ` : ""}${Number(i.downloads || 0).toLocaleString()} downloads · <a href="${esc(i.url)}" target="_blank" rel="noopener">page</a></span></div><button class="ghost lora-pick">Add to the machine</button><div class="lora-files"></div></div>`;
+    const fts = items.filter((i) => i.kind === "finetune");
+    const los = items.filter((i) => i.kind !== "finetune");
+    const notes = [found.hfError ? `Hugging Face did not answer (${found.hfError}).` : "", found.civitaiError ? `Civitai did not answer (${found.civitaiError}).` : "", found.civitaiKnown ? "" : "Civitai has no listing for this model, so only Hugging Face was searched."].filter(Boolean).join(" ");
+    out.innerHTML = `${notes ? `<p class="muted small">${esc(notes)}</p>` : ""}
+      ${!items.length ? `<p class="muted small">Nothing found for this model.</p>` : ""}
+      ${fts.length ? `<details class="lora-list"><summary class="small"><b>${fts.length} fine-tuned version${fts.length === 1 ? "" : "s"}</b> <span class="muted">used instead of the model's own transformer; one file of 10 to 60 GB on the machine's disk</span></summary>${fts.map(card).join("")}</details>` : ""}
+      ${los.length ? `<details class="lora-list" open><summary class="small"><b>${los.length} LoRA${los.length === 1 ? "" : "s"}</b> <span class="muted">small add-ons for style, motion or speed, most downloaded first</span></summary>${los.map(card).join("")}</details>` : ""}
+      ${civitaiNote()}`;
+    out.querySelectorAll(".lora-pick").forEach((btn) => btn.addEventListener("click", () => pickFile(items.find((i) => i.id === btn.closest(".lora-hit").dataset.id), btn)));
+  }
+  const civitaiNote = () => (state.civitaiToken ? "" : `<p class="muted small">Civitai lets only signed-in accounts download: add your Civitai API key in Settings (Hugging Face and Civitai) to add one from there.</p>`);
+  // A repository's or Civitai model's files, one to pick when there are several.
+  async function pickFile(item, btn) {
+    const slot = btn.parentElement.querySelector(".lora-files");
+    let files = item.files;
+    if (!files) {
+      btn.disabled = true;
+      btn.textContent = "Reading its files";
+      try {
+        ({ files } = await api.get(`/api/loras/files?id=${encodeURIComponent(item.id)}`));
+      } catch (err) {
+        slot.innerHTML = `<p class="notice bad small">${esc(err.message)}</p>`;
+        btn.disabled = false;
+        btn.textContent = "Add to the machine";
+        return;
+      }
+      btn.disabled = false;
+      btn.textContent = "Add to the machine";
+    }
+    if (!files?.length) {
+      slot.innerHTML = `<p class="muted small">No weights file the machine can use.</p>`;
+      return;
+    }
+    const usable = files.filter((f) => !f.unreadable);
+    slot.innerHTML = `<div class="tools-row"><select class="lora-file">${files.map((f, n) => `<option value="${n}" ${f.unreadable ? "disabled" : ""}>${esc(f.label)}${f.gb ? `, ${fmtGb(f.gb)}` : ""}${f.fp ? `, ${esc(f.fp)}` : ""}${f.unreadable ? ` (${esc(f.unreadable)})` : ""}</option>`).join("")}</select><button class="primary lora-get" ${usable.length ? "" : "disabled"}>Download it onto the machine</button></div><p class="muted small lora-progress"></p>`;
+    const select = slot.querySelector(".lora-file");
+    const first = files.findIndex((f) => !f.unreadable);
+    if (first >= 0) select.value = String(first);
+    slot.querySelector(".lora-get").addEventListener("click", (e) => {
+      const f = files[Number(select.value)];
+      addToMachine({ repo: item.id, file: f.file, name: files.length > 1 && item.kind !== "finetune" ? `${item.name} (${f.label.replace(/\.safetensors$/i, "")})` : item.name, kind: f.kind ?? item.kind, source: item.source, url: item.url, gb: f.gb ?? null, fp: f.fp ?? null, trigger: f.trigger ?? [], download: item.source === "civitai" ? f.url : null, scale: 1 }, e.currentTarget, slot.querySelector(".lora-progress"));
+    });
+  }
+  // The machine fetches the file; the list follows its progress, then keeps it.
+  async function addToMachine(item, btn, line = null) {
+    const say = (text) => {
+      if (line) line.textContent = text;
+      else notice(text, "info");
+    };
+    if (loraMachineTooOld()) {
+      say(loraMachineTooOld());
+      return;
+    }
+    btn.disabled = true;
+    let id;
+    try {
+      ({ id } = await api.post("/api/run", { kind: "pull-addon", args: { repo: item.repo, files: [item.file], ...(item.download ? { sources: { [item.file]: item.download } } : {}) }, where: "rented", model: t.repo, title: `Add ${item.name} to the machine` }));
+    } catch (err) {
+      btn.disabled = false;
+      say(`Could not start: ${err.message}`);
+      return;
+    }
+    say("Downloading onto the machine");
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const run = (await api.get("/api/runs").catch(() => ({ runs: [] }))).runs.find((r) => r.id === id);
+      if (!run) continue;
+      if (run.status === "running") {
+        say(run.last || "Downloading onto the machine");
+        continue;
+      }
+      if (run.status !== "done") {
+        btn.disabled = false;
+        say(`It did not finish: ${run.last || run.status}`);
+        return;
+      }
+      break;
+    }
+    const key = loraKey(item.repo, item.file);
+    t.addonsHere = [...new Set([...(t.addonsHere ?? []), key])];
+    const nb = book();
+    const { download, ...kept } = item;
+    nb.items[key] = { ...kept, ...(download ? { download } : {}) };
+    // A LoRA is ticked as it arrives; a fine-tune is chosen.
+    if (item.kind === "finetune") nb.finetune = key;
+    else if (Object.keys(nb.on).length < 4) nb.on[key] = item.scale ?? 1;
+    save(nb);
+    notice(`${item.name} is on the machine${item.kind === "finetune" ? " and chosen as the model version" : " and ticked"}; the next clip uses it.`, "ok");
+    draw();
+  }
+  draw();
+}
+
 // Hands one job to the machine and returns its id.
-async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false, seed = null, lastInit = null, references = null }, onLine = () => {}) {
+async function submitJob(agent, { repo, file, prompt, negative, quality, init = null, strength = null, video = false, addon = null, ipImage = null, xl = false, seed = null, lastInit = null, references = null, loras = null, finetune = null }, onLine = () => {}) {
   const q = quality ?? { steps: 20, size: 512, cfg: 7, sampler: "euler_a", scheduler: "discrete" };
   // An add-on on an SDXL base draws at SDXL's size.
   const width = addon && xl ? 1024 : (q.width ?? q.size);
@@ -4480,6 +4762,9 @@ async function submitJob(agent, { repo, file, prompt, negative, quality, init = 
     body.fps = q.fps;
     if (lastInit) body.lastInit = lastInit;
     if (references?.length) body.references = references;
+    // The LoRAs ticked for this model, and a fine-tune in its transformer's place.
+    if (loras?.length) body.loras = loras;
+    if (finetune) body.finetune = finetune;
   }
   if (init) {
     body.init = init;
@@ -7065,7 +7350,7 @@ async function renderImageServerStatus() {
   }
 }
 
-for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#save-github", "#clear-github"], ["#youtube-key", "YOUTUBE_API_KEY", "#save-youtube", "#clear-youtube"], ["#claude-key", "ANTHROPIC_API_KEY", "#save-claude", "#clear-claude"], ["#runpod-key", "RUNPOD_API_KEY", "#save-runpod", "#clear-runpod"], ["#vast-key", "VAST_API_KEY", "#save-vast", "#clear-vast"]]) {
+for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#save-github", "#clear-github"], ["#youtube-key", "YOUTUBE_API_KEY", "#save-youtube", "#clear-youtube"], ["#claude-key", "ANTHROPIC_API_KEY", "#save-claude", "#clear-claude"], ["#runpod-key", "RUNPOD_API_KEY", "#save-runpod", "#clear-runpod"], ["#vast-key", "VAST_API_KEY", "#save-vast", "#clear-vast"], ["#civitai-key", "CIVITAI_TOKEN", "#save-civitai", "#clear-civitai"]]) {
   $(save).addEventListener("click", async () => {
     const value = $(field).value.trim();
     try {

@@ -345,7 +345,7 @@ npm start</code>
         </div>
       </details>
       <details class="section" id="sec-hf">
-        <summary><h3>Hugging Face token</h3><span class="muted small">Optional; unlocks gated models</span></summary>
+        <summary><h3>Hugging Face and Civitai</h3><span class="muted small">Optional; gated models, and LoRAs from Civitai</span></summary>
       <label class="field">
         <span>Hugging Face token (optional)</span>
         <input type="password" id="token" autocomplete="off" placeholder="hf_...">
@@ -355,6 +355,16 @@ npm start</code>
       <div class="actions">
         <button class="primary" id="save-token">Save</button>
         <button class="ghost" id="clear-token">Remove token</button>
+      </div>
+      <label class="field">
+        <span>Civitai API key (optional)</span>
+        <input type="password" id="civitai-key" autocomplete="off" placeholder="Civitai key">
+        <small class="muted">For LoRAs and fine-tuned models from Civitai, found under "LoRAs and fine-tunes" in a video model's window: Civitai lets only signed-in accounts download them. On civitai.com open your account settings, then API Keys, and add one. The rented GPU fetches the files with it; it is sent only to Civitai.</small>
+      </label>
+      <p class="muted small" id="civitai-status"></p>
+      <div class="actions">
+        <button class="primary" id="save-civitai">Save</button>
+        <button class="ghost" id="clear-civitai">Remove</button>
       </div>
       </details>
       <details class="section local-only" id="sec-servers">

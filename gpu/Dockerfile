@@ -56,7 +56,7 @@ RUN LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /o
  && ! (LD_LIBRARY_PATH=/opt/huggingfound/lib ldd /opt/huggingfound/bin/sd-server /opt/huggingfound/bin/sd-cli | grep "not found" | grep -v "libcuda.so.1")
 # Built from the repository root (docker build -f gpu/Dockerfile .) so the
 # agent can take the folder-layout merge from src/ rather than a copy.
-COPY gpu/agent.js gpu/start.sh gpu/worker.py src/convert.js /opt/huggingfound/
+COPY gpu/agent.js gpu/start.sh gpu/worker.py gpu/comfy_minimax.py src/convert.js /opt/huggingfound/
 RUN chmod +x /opt/huggingfound/start.sh /opt/huggingfound/bin/sd-cli /opt/huggingfound/bin/sd-server
 
 ENV PATH=/opt/node/bin:/opt/huggingfound/bin:$PATH \

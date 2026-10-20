@@ -115,7 +115,7 @@ function tunnels() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "24";
+const VERSION = "25";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -473,7 +473,7 @@ function startJob(input) {
     try {
       const file = modelFile(input.repo, input.file);
       if (!fs.existsSync(file)) throw new Error("that model is not on this machine yet");
-      if (input.file === INDEX || input.addon) {
+      if (input.file === INDEX || input.addon || input.loras?.length || input.finetune) {
         // An add-on is applied by the Python side to a base it loads itself,
         // a folder or a single checkpoint.
         const adapters = [];
@@ -483,6 +483,18 @@ function startJob(input) {
           const lora = input.addon.lora ? addonFile(input.addon.repo, input.addon.lora) : null;
           if (lora && !fs.existsSync(lora)) throw new Error("the add-on's LoRA is not on this machine yet");
           adapters.push({ kind: input.addon.kind, path: main, lora, scale: input.addon.scale, faceid: /faceid/i.test(input.addon.file), plus: /plus/i.test(input.addon.file), xl: /sdxl/i.test(input.addon.file) });
+        }
+        // A fine-tuned transformer in the base's place, then the LoRAs
+        // ticked for the model, each at its own strength.
+        if (input.finetune) {
+          const path = addonFile(input.finetune.repo, input.finetune.file);
+          if (!fs.existsSync(path)) throw new Error("that fine-tune is not on this machine yet");
+          adapters.push({ kind: "transformer", path });
+        }
+        for (const l of input.loras ?? []) {
+          const path = addonFile(l.repo, l.file);
+          if (!fs.existsSync(path)) throw new Error(`the LoRA ${l.file} is not on this machine yet`);
+          adapters.push({ kind: "lora", path, scale: l.scale });
         }
         const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, lastInit: input.lastInit ?? undefined, references: input.references?.length ? input.references : undefined, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined, seed: input.seed ?? undefined };
         let answer;
@@ -883,7 +895,10 @@ async function fetchRanges(src, headers, total, tmp, onBytes) {
   }
 }
 
-async function download(repo, file, token, write, saveAs = file, dest = modelFile(repo, saveAs, true)) {
+// `source` fetches the file from elsewhere than the hub: a Civitai
+// download address with the person's Civitai token (`{ url, token }`),
+// checked by the caller. The Hugging Face token never goes there.
+async function download(repo, file, token, write, saveAs = file, dest = modelFile(repo, saveAs, true), source = null) {
   const key = dest;
   // Another task has this very file in hand: wait for it rather than fail.
   if (downloading.has(key)) {
@@ -898,13 +913,14 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
   downloading.add(key);
   try {
     const headers = { "User-Agent": "huggingfound-gpu" };
-    const auth = token || process.env.HF_TOKEN || "";
+    const auth = source ? source.token || "" : token || process.env.HF_TOKEN || "";
     if (auth) headers.Authorization = `Bearer ${auth}`;
     write({ status: "starting" });
-    const url = `${HUB}/${repo}/resolve/main/${file}`;
+    const url = source ? source.url : `${HUB}/${repo}/resolve/main/${file}`;
+    const where = source ? "Civitai" : "Hugging Face";
     const res = await fetch(url, { headers, redirect: "follow" });
-    if (res.status === 401 || res.status === 403) throw new Error("this file is gated; it needs a Hugging Face token with the licence accepted");
-    if (!res.ok) throw new Error(`Hugging Face answered HTTP ${res.status}`);
+    if (res.status === 401 || res.status === 403) throw new Error(source ? "Civitai refused the download: it needs your Civitai API token (Settings, Civitai), and some files also want their licence accepted on the model's page" : "this file is gated; it needs a Hugging Face token with the licence accepted");
+    if (!res.ok) throw new Error(`${where} answered HTTP ${res.status}`);
     const total = Number(res.headers.get("content-length")) || 0;
     const room = diskSpace();
     if (total && room && room.freeGb < total / 1024 ** 3 + 0.5) {
@@ -955,7 +971,7 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
         // The file's own address once redirected (a content network): the
         // token stays with the hub, where it belongs.
         const src = res.url || url;
-        const plain = new URL(src).origin === new URL(HUB).origin ? headers : { "User-Agent": headers["User-Agent"] };
+        const plain = new URL(src).origin === new URL(source ? source.url : HUB).origin ? headers : { "User-Agent": headers["User-Agent"] };
         try {
           await fetchRanges(src, plain, total, tmp, progress);
         } catch (err) {
@@ -964,7 +980,7 @@ async function download(repo, file, token, write, saveAs = file, dest = modelFil
           received = 0;
           lastPct = -1;
           const whole = await fetch(url, { headers, redirect: "follow" });
-          if (!whole.ok) throw new Error(`Hugging Face answered HTTP ${whole.status}`);
+          if (!whole.ok) throw new Error(`${where} answered HTTP ${whole.status}`);
           await single(whole.body);
         }
       } else {
@@ -1006,7 +1022,12 @@ async function downloadRepo(repo, files, token, write, gb = 0) {
 }
 
 // An add-on's files, kept apart from the models.
-async function downloadAddon(repo, files, token, write) {
+// A file from Civitai: its download address and only that, so a page cannot
+// send the machine off to fetch anything else with the person's token.
+// HF_CIVITAI_ORIGIN stands in for civitai.com in tests.
+const CIVITAI_ORIGIN = (process.env.HF_CIVITAI_ORIGIN || "https://civitai.com").replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+const CIVITAI_DOWNLOAD = new RegExp(`^${CIVITAI_ORIGIN}\\/api\\/download\\/models\\/\\d+(\\?(type=\\w+&)?(format=\\w+&)?fileId=\\d+)?$`);
+async function downloadAddon(repo, files, token, write, sources = {}, sourceToken = "") {
   const missing = files.filter((f) => !fs.existsSync(addonFile(repo, f)));
   if (!missing.length) {
     write({ status: "already here" });
@@ -1016,7 +1037,8 @@ async function downloadAddon(repo, files, token, write) {
   for (const [i, f] of files.entries()) {
     if (fs.existsSync(addonFile(repo, f))) continue;
     write({ status: `file ${i + 1} of ${files.length}: ${f}` });
-    await download(repo, f, token, (line) => (line.status === "success" ? null : write(line)), f, addonFile(repo, f));
+    const source = sources[f] ? { url: sources[f], token: sourceToken } : null;
+    await download(repo, f, token, (line) => (line.status === "success" ? null : write(line)), f, addonFile(repo, f), source);
   }
   write({ status: "success" });
 }
@@ -1273,7 +1295,10 @@ const server = http.createServer(async (req, res) => {
       const repo = String(body.repo ?? "");
       const files = Array.isArray(body.files) ? body.files.map((f) => String(f ?? "")) : [];
       if (!REPO_RE.test(repo) || files.length === 0 || files.length > 40 || !files.every((f) => SUBPATH_RE.test(f))) return send(res, 400, { error: "Bad add-on name" });
-      return answerDownload(req, res, body, (write) => downloadAddon(repo, files, typeof body.token === "string" ? body.token : "", write), `/download-addon|${repo}`);
+      // Files from Civitai come with their download address; nothing else is fetched from there.
+      const sources = body.sources && typeof body.sources === "object" ? body.sources : {};
+      if (Object.entries(sources).some(([f, u]) => !files.includes(f) || !CIVITAI_DOWNLOAD.test(String(u)))) return send(res, 400, { error: "An add-on file may come from a Civitai download address only" });
+      return answerDownload(req, res, body, (write) => downloadAddon(repo, files, typeof body.token === "string" ? body.token : "", write, sources, typeof body.civitaiToken === "string" ? body.civitaiToken : ""), `/download-addon|${repo}`);
     }
     if (req.method === "POST" && url.pathname === "/download-repo") {
       touchActivity();
@@ -1375,6 +1400,14 @@ const server = http.createServer(async (req, res) => {
         if (!/\.(safetensors|ckpt)$/i.test(file) && file !== INDEX) return send(res, 400, { error: "An add-on applies to a checkpoint or a folder model, not to a GGUF file" });
         addon = { kind, repo: String(a.repo), file: String(a.file), lora: a.lora ? String(a.lora) : null, scale: Math.min(2, Math.max(0, Number(a.scale) || (kind === "lora" ? 0.8 : 0.6))) };
       }
+      // LoRAs for a folder model (up to four, each at its own strength) and a
+      // fine-tuned transformer in its place, all from the add-on files here.
+      const named = (x) => x && typeof x === "object" && REPO_RE.test(String(x.repo ?? "")) && SUBPATH_RE.test(String(x.file ?? ""));
+      const loras = Array.isArray(body.loras) ? body.loras : [];
+      if (loras.length > 4 || !loras.every(named) || (body.finetune && !named(body.finetune))) return send(res, 400, { error: "Bad LoRA or fine-tune name" });
+      if ((loras.length || body.finetune) && file !== INDEX) return send(res, 400, { error: "LoRAs and fine-tunes apply to a folder model" });
+      const loraList = loras.map((l) => ({ repo: String(l.repo), file: String(l.file), scale: Math.min(2, Math.max(0, Number(l.scale ?? 1))) }));
+      const finetune = body.finetune ? { repo: String(body.finetune.repo), file: String(body.finetune.file) } : null;
       let ipImage = null;
       if (body.ipImage) {
         const data = String(body.ipImage).replace(/^data:image\/\w+;base64,/, "");
@@ -1419,7 +1452,7 @@ const server = http.createServer(async (req, res) => {
       }
       // The same seed with revised words keeps a scene close to the one before.
       const seed = Number.isInteger(body.seed) && body.seed >= 0 && body.seed < 2 ** 31 ? body.seed : null;
-      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed, lastInit, references });
+      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed, lastInit, references, loras: loraList, finetune });
       return send(res, 202, { id: job.id, status: job.status });
     }
     const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})(\/result|\/last)?$/);

@@ -23,6 +23,9 @@ const workerLog = path.join(home, "worker-requests.log");
 let stub;
 let agent;
 let base;
+// Civitai's download address, played locally: it answers only its own key.
+let civitai;
+const civitaiAsked = [];
 const REPO = "second-state/stable-diffusion-v1-5-GGUF";
 const fakeOllama = path.join(home, "fake-ollama");
 const ollamaPort = 20000 + Math.floor(Math.random() * 20000);
@@ -30,6 +33,16 @@ const FILE = "stable-diffusion-v1-5-pruned-emaonly-Q4_0.gguf";
 
 before(async () => {
   stub = await startStubHub();
+  civitai = http.createServer((req, res) => {
+    civitaiAsked.push({ url: req.url, auth: req.headers.authorization ?? null });
+    if (req.headers.authorization !== "Bearer civitai-key") {
+      res.writeHead(401);
+      return res.end("{}");
+    }
+    res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": "11" });
+    res.end("lora-weight");
+  });
+  await new Promise((r) => civitai.listen(0, "127.0.0.1", r));
   // sd-server is played by a script that takes the same flags.
   const fake = path.join(home, "sd-server");
   fs.writeFileSync(fake, `#!/bin/sh\nexec "${process.execPath}" "${path.join(here, "fake-sd-server.js")}" "$@"\n`);
@@ -42,7 +55,7 @@ before(async () => {
   fs.writeFileSync(path.join(modelsDir, "x", "y", "unet", "stale.safetensors.part"), "half");
   agent = spawn(process.execPath, [path.join(here, "..", "gpu", "agent.js")], {
     // The Python side is played by a Node script that speaks the same protocol.
-    env: { ...process.env, HF_OLLAMA_BIN: fakeOllama, OLLAMA_HOST: `127.0.0.1:${ollamaPort}`, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js"), HF_DISK_GB: "50", HF_TUNNEL_DIR: path.join(home, "tunnels") },
+    env: { ...process.env, HF_OLLAMA_BIN: fakeOllama, OLLAMA_HOST: `127.0.0.1:${ollamaPort}`, HF_AGENT_PORT: "0", HF_AGENT_HOST: "127.0.0.1", HF_MODELS_DIR: modelsDir, SD_SERVER: fake, SD_PORT: String(sdPort), HF_HUB: stub.base, HF_ORIGINS: `${ORIGIN},http://localhost:*`, HF_AGENT_TOKEN: SECRET, FAKE_SD_LOG: sdLog, HF_CHUNK_BYTES: "16384", HF_CHUNK_STREAMS: "3", HF_PYTHON: process.execPath, HF_WORKER: path.join(here, "fake-worker.js"), FAKE_WORKER_LOG: workerLog, HF_FFMPEG: path.join(here, "fake-ffmpeg.js"), HF_DISK_GB: "50", HF_TUNNEL_DIR: path.join(home, "tunnels"), HF_CIVITAI_ORIGIN: `http://127.0.0.1:${civitai.address().port}` },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let errors = "";
@@ -60,6 +73,7 @@ before(async () => {
 });
 
 after(() => {
+  civitai?.close();
   agent.kill();
   stub.server.close();
 });
@@ -102,7 +116,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
   delete h.diskFreeGb;
   delete h.diskTotalGb;
   delete h.diskUsedGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "24", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "25", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
   // On Vast.ai the Cloudflare tunnels' addresses are read from their logs
   // and said on /health: the latest each, since a dropped tunnel comes back
   // with a new one.
@@ -560,16 +574,16 @@ test("removing a model unloads it and frees the disk", async () => {
 
 test("the machine reports on itself: what it runs, holds, has loaded and how its failures went, with a journal on its disk", async () => {
   const d = await (await get("/diagnostics")).json();
-  assert.equal(d.version, "24");
+  assert.equal(d.version, "25");
   assert.ok(d.agentUptimeSeconds >= 0);
   assert.deepEqual([d.env.HF_DISK_GB, typeof d.disk.totalGb, Array.isArray(d.models), Array.isArray(d.failures), typeof d.journal], ["50", "number", true, true, "string"]);
-  assert.match(d.journal, /agent 24 started: disk 50 GB/);
+  assert.match(d.journal, /agent 25 started: disk 50 GB/);
   assert.match(d.journal, /job .* done|failed/, "jobs from the tests before are in it");
   assert.ok(d.failures.length > 0, "the failed jobs of the tests before are remembered");
   for (const k of ["at", "error", "jobId", "kind", "trace", "what"]) assert.ok(k in d.failures[0], `a failure carries ${k}`);
   assert.equal(typeof d.ollamaLog, "string", "Ollama's log is in the report");
   const text = await (await get("/journal?lines=50")).text();
-  assert.match(text, /agent 24 started/);
+  assert.match(text, /agent 25 started/);
   assert.ok(fs.existsSync(path.join(modelsDir, "..", "journal.log")), "the journal lives on the disk beside the models");
 });
 
@@ -584,3 +598,35 @@ test("a chat model held up by an earlier reply is freed: Ollama is started afres
   assert.equal((await fetch(`${base}/ollama/restart`, { method: "POST" })).status, 401);
   spawnSync("pkill", ["-f", `${fakeOllama} serve`]);
 });
+
+test("an add-on from Civitai is fetched from its download address with the Civitai key, never the Hugging Face token; a job's LoRAs and fine-tune reach the worker", async () => {
+  const civ = `http://127.0.0.1:${civitai.address().port}`;
+  const file = "v101_f1001.safetensors";
+  // Only Civitai's download address, and only for the files asked for.
+  assert.equal((await post("/download-addon", { repo: "civitai/11", files: [file], sources: { [file]: "https://evil.example/x" }, civitaiToken: "civitai-key" })).status, 400);
+  assert.equal((await post("/download-addon", { repo: "civitai/11", files: [file], sources: { "other.safetensors": `${civ}/api/download/models/101?fileId=1001` }, civitaiToken: "civitai-key" })).status, 400);
+  // Without the key, Civitai's refusal is said plainly.
+  let lines = (await (await post("/download-addon", { repo: "civitai/11", files: [file], token: "hf-token-never-for-civitai", sources: { [file]: `${civ}/api/download/models/101?fileId=1001` } })).text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.match(lines.at(-1).error, /Civitai refused the download: it needs your Civitai API token/);
+  assert.equal(civitaiAsked.at(-1).auth, null, "the Hugging Face token never goes to Civitai");
+  lines = (await (await post("/download-addon", { repo: "civitai/11", files: [file], sources: { [file]: `${civ}/api/download/models/101?fileId=1001` }, civitaiToken: "civitai-key" })).text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines.at(-1).status, "success", JSON.stringify(lines.at(-1)));
+  assert.equal(civitaiAsked.at(-1).url, "/api/download/models/101?fileId=1001");
+  const kept = path.join(home, "addons", "civitai", "11", file);
+  assert.equal(fs.readFileSync(kept, "utf8"), "lora-weight");
+  // A fine-tune already on the machine, and a video model to use them with.
+  const ft = path.join(home, "addons", "civitai", "2877206", "v3391862_f3281578.safetensors");
+  fs.mkdirSync(path.dirname(ft), { recursive: true });
+  fs.writeFileSync(ft, "finetune");
+  const dir = path.join(modelsDir, "test", "Video-Model");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "model_index.json"), JSON.stringify({ _class_name: "MiniMaxH3ModularPipeline" }));
+  assert.equal((await post("/jobs", { repo: "test/Video-Model", file: "model_index.json", prompt: "a dancer", loras: [{ repo: "civitai/11", file: "../../etc/passwd" }] })).status, 400, "names are checked");
+  assert.equal((await post("/jobs", { repo: "test/Video-Model", file: "model_index.json", prompt: "a dancer", loras: Array.from({ length: 5 }, () => ({ repo: "civitai/11", file })) })).status, 400, "four LoRAs at most");
+  const res = await post("/jobs", { repo: "test/Video-Model", file: "model_index.json", prompt: "a dancer", frames: 33, fps: 16, loras: [{ repo: "civitai/11", file, scale: 0.7 }], finetune: { repo: "civitai/2877206", file: "v3391862_f3281578.safetensors" } });
+  assert.equal(res.status, 202, await res.clone().text());
+  await finish((await res.json()).id);
+  const load = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.op === "load").at(-1);
+  assert.deepEqual(load.adapters, [{ kind: "transformer", path: ft }, { kind: "lora", path: kept, scale: 0.7 }]);
+});
+

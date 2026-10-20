@@ -280,7 +280,9 @@ export function addonVariants(files, videoBase = null) {
   const weights = files.filter((f) => /\.(bin|safetensors)$/i.test(f.name) && !/image_encoder/i.test(f.name) && !/\.safetensors\.index\.json$/i.test(f.name));
   // A LoRA for a video model: its weights, applied to that model's transformer.
   if (videoBase) {
-    const variants = weights.filter((f) => /\.safetensors$/i.test(f.name) && !/^(media|images?|assets?|examples?|samples?)\//i.test(f.name)).map((f) => {
+    // A file of several GB is a whole transformer (a fine-tune), not a
+    // LoRA: it is used from the base model's window, not applied as one.
+    const variants = weights.filter((f) => /\.safetensors$/i.test(f.name) && !/^(media|images?|assets?|examples?|samples?)\//i.test(f.name) && !((f.gb ?? 0) > 4)).map((f) => {
       const stem = f.name.replace(/\.safetensors$/i, "");
       return { file: f.name, lora: null, xl: false, gb: f.gb ?? 0, label: stem.split("/").pop().replace(/[-_]/g, " "), faceid: false };
     });
@@ -311,6 +313,10 @@ function addonPlan({ model, files, detected }) {
   const baseName = videoBase ? videoBase.split("/").pop() : null;
   const what = kind === "video-lora" ? `a LoRA for ${baseName}: it changes how that video model moves, frames or styles a clip` : kind === "ip-adapter" ? "an IP-Adapter: it steers a base model's picture with a reference image (a face, a style, a subject)" : "a LoRA: it changes how a base model draws";
   if (!variants.length) {
+    // A fine-tuned version of a video model, in a repository of its own.
+    if (videoBase && files.some((f) => /\.safetensors$/i.test(f.name) && (f.gb ?? 0) > 4)) {
+      return { runnable: false, addon: true, reason: `${model.name} is a fine-tuned version of ${baseName}: a whole transformer used in place of the model's own. Open ${baseName}, and under "LoRAs and fine-tunes" in its window look for it and add it to the machine.`, steps: [], link: `https://huggingface.co/${videoBase}` };
+    }
     return { runnable: false, addon: true, reason: `${model.name} is an add-on with no weights HuggingFound recognises. It makes nothing by itself.`, steps: [], link: model.url };
   }
   if (!detected.gpu?.url) {
@@ -513,7 +519,7 @@ function diffusersPlan({ model, files, machine, detected, hasToken = false, twin
   const speed = { text: video ? "A short clip takes a few minutes on a data-centre card; the first one longer while the model loads." : "A picture takes some seconds to a minute on a data-centre card; the first one longer while the model loads.", seconds: null };
   // An image-to-video model animates a picture; a text-to-video one may take one as well.
   const startPicture = video ? (/image-to-video/.test(model.pipeline ?? "") && !(model.tags ?? []).includes("text-to-video") ? "required" : "optional") : null;
-  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, modular, ltx), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}), ...(repo.reference ? { references: referenceDone, referenceGb: repo.reference.gb, ...(referenceRoom ? { referenceGrowTo: referenceRoom.growTo } : {}) } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
+  return { runnable: true, runner: "diffusers", file: repo, fit, tierGb: recommendedGb(repo.gb, modular, ltx), speed, measured: "", steps, qualities, ...(videoSpec ? { video: videoSpec } : {}), fast, style: imageStyle(model), remote: detected.gpu.url, tryWith: { kind: video ? "video" : "image", repo: model.id, file: "model_index.json", agent: detected.gpu.url, engine: "diffusers", ...(startPicture ? { startPicture } : {}), ...(video ? { addonsHere: (detected.gpu.addons ?? []).slice(0, 400) } : {}), ...(repo.reference ? { references: referenceDone, referenceGb: repo.reference.gb, ...(referenceRoom ? { referenceGrowTo: referenceRoom.growTo } : {}) } : {}) }, remove: [{ kind: "gpu-file", repo: model.id, file: "model_index.json" }] };
 }
 
 // How a folder model sits on the rented machine's card or cards: whole,

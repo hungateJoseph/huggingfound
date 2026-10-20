@@ -22,6 +22,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,7 @@ def unload():
     state["kind"] = None
     state["adapters"] = []
     state["loras"] = []
+    state["loraWeights"] = {}
     state["modular"] = False
     state["workflow"] = None
     gc.collect()
@@ -107,8 +109,12 @@ def load(req):
         return {"ok": True, "kind": state["kind"], "already": True}
     # The same modular model with other LoRAs (or none): swapped on the
     # loaded transformer rather than loading 130 GB again.
-    if state["pipe"] is not None and state.get("modular") and state.get("dir") == model_dir and model_dir and all((a.get("kind") or "lora") == "lora" for a in list(adapters) + list(state.get("adapters") or [])):
-        swap_loras(state["pipe"], adapters, dtype_of(state["pipe"]))
+    # A fine-tune that stays the same is kept as it is; only its LoRAs change.
+    def not_loras(items):
+        return [a for a in items if (a.get("kind") or "lora") != "lora"]
+
+    if state["pipe"] is not None and state.get("modular") and state.get("dir") == model_dir and model_dir and not_loras(adapters) == not_loras(state.get("adapters") or []) and all((a.get("kind") or "lora") in ("lora", "transformer") for a in adapters):
+        swap_loras(state["pipe"], [a for a in adapters if (a.get("kind") or "lora") == "lora"], dtype_of(state["pipe"]))
         state.update(adapters=adapters, key=key)
         return {"ok": True, "kind": state["kind"], "already": True, "mode": state.get("mode"), "note": MODE_NOTES.get(state.get("mode"), "")}
     unload()
@@ -131,11 +137,15 @@ def load(req):
         # Wan, LTX, Mochi and CogVideoX name their pipelines after themselves.
         kind = "video" if any(w in cls for w in ("Video", "Wan", "LTX", "Mochi", "CogVideoX", "Allegro", "Latte", "SkyReels", "Hunyuan", "MiniMax")) else "image"
         weights = folder_gb(model_dir)
-        pipe, mode = load_folder(model_dir, dtype, weights, workflow)
+        # A fine-tuned transformer from a single file (DaSiWa's MiniMax-H3)
+        # takes the base transformer's place as the pipeline loads.
+        swap = next((a for a in adapters if a.get("kind") == "transformer"), None)
+        pipe, mode = load_folder(model_dir, dtype, weights, workflow, swap)
     with contextlib.suppress(Exception):
         pipe.set_progress_bar_config(disable=True)
     for adapter in adapters:
-        apply_adapter(pipe, adapter, dtype)
+        if adapter.get("kind") != "transformer":
+            apply_adapter(pipe, adapter, dtype)
     vram = torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0
     if single:
         mode = place(pipe, weights, vram)
@@ -223,7 +233,7 @@ def place(pipe, weights, vram):
     return "offload"
 
 
-def load_folder(model_dir, dtype, weights, workflow=None):
+def load_folder(model_dir, dtype, weights, workflow=None, swap=None):
     """Loads a folder model the way its size allows: whole on one card,
     spread over several, at 8 or 4 bits when it would not fit otherwise,
     or streamed from the machine's memory as a last resort. Pipelines a
@@ -239,7 +249,9 @@ def load_folder(model_dir, dtype, weights, workflow=None):
     # The newer "modular" pipelines (MiniMax-H3 among them) load through
     # their own class and take their inputs by name.
     if "Modular" in cls:
-        return load_modular(model_dir, dtype, weights, n, first, total, workflow)
+        return load_modular(model_dir, dtype, weights, n, first, total, workflow, swap)
+    if swap:
+        raise ValueError("a transformer from a single file takes the place of a MiniMax-H3 transformer only")
     # Components the index names whose folders were left on the Hub (LTX-2.5's
     # prompt-enhancing Gemma, which the app has Claude for): passed as absent,
     # and marked absent in the index on the disk as well, which every loader
@@ -319,8 +331,13 @@ def apply_adapter(pipe, adapter, dtype):
         if state.get("modular") or not hasattr(pipe, "load_lora_weights"):
             apply_transformer_lora(pipe, path, scale)
             return
-        pipe.load_lora_weights(folder, weight_name=name, adapter_name="addon")
-        pipe.set_adapters(["addon"], adapter_weights=[scale])
+        # Several at once, each under a name of its own and at its own strength.
+        taken = state.setdefault("loras", [])
+        adapter_name = f"addon{len(taken)}"
+        pipe.load_lora_weights(folder, weight_name=name, adapter_name=adapter_name)
+        taken.append(adapter_name)
+        state.setdefault("loraWeights", {})[adapter_name] = scale
+        pipe.set_adapters(taken, adapter_weights=[state["loraWeights"].get(n, 1.0) for n in taken])
         return
     faceid = bool(adapter.get("faceid"))
     plus = bool(adapter.get("plus"))
@@ -343,17 +360,22 @@ def apply_adapter(pipe, adapter, dtype):
 
 
 # ---- LoRAs on a video model's transformer ------------------------------------------
-# A LoRA trained with ai-toolkit (the MiniMax-H3 extension) names its
-# modules as ComfyUI does, "diffusion_model.blocks.N.attn.qkv_proj" and so
-# on; the transformer the library loads names them "transformer_blocks.N.
-# attn.to_q" with the three projections apart. The tensors are renamed,
-# the fused projection split in three, and the adapter set on the
-# transformer itself, which takes LoRAs whatever pipeline wraps it.
+# LoRAs for MiniMax-H3 name their modules as ComfyUI does: "diffusion_model.
+# blocks.N.attn.qkv_proj" (ai-toolkit, most of Hugging Face and Civitai),
+# sometimes with an ".alpha" per module (a strength that scales the LoRA by
+# alpha / rank), or in Kohya's spelling "lora_unet_blocks_N_attn_qkv_proj"
+# with lora_down / lora_up. The transformer the library loads names them
+# "transformer_blocks.N.attn.to_q" with the three projections apart and the
+# gated feed-forward's halves as [up | gate] where ComfyUI has [gate | up].
+# The tensors are renamed, the fused projection split in three, the
+# feed-forward's halves swapped, the alpha folded in, and the adapters set
+# on the transformer itself, which takes LoRAs whatever pipeline wraps it.
 LORA_RENAMES = (
     (".attn.out_proj", ".attn.to_out.0"),
     (".mlp.fc1", ".ff.net.0.proj"),
     (".mlp.fc2", ".ff.net.2"),
 )
+KOHYA_LORA = re.compile(r"^lora_unet_(token_refiner_)?blocks_(\d+)_(attn_qkv_proj|attn_out_proj|mlp_fc1|mlp_fc2|attn_q_norm|attn_k_norm)\.(.+)$")
 
 
 def dtype_of(pipe):
@@ -366,36 +388,55 @@ def dtype_of(pipe):
 
 def convert_video_lora(sd):
     """A LoRA state dict in the transformer's own names, with how many
-    tensors were left as they were (none, when the file is already so)."""
+    tensors were left aside (none, when every tensor is a LoRA's)."""
     import torch
 
-    out = {}
-    foreign = 0
+    # Kohya's spelling first, into ComfyUI's.
+    plain = {}
     for key, value in sd.items():
-        k = key
-        if k.startswith("diffusion_model."):
-            k = k[len("diffusion_model.") :]
+        m = KOHYA_LORA.match(key)
+        if m:
+            refiner, n, module, rest = m.groups()
+            key = f"{'token_refiner.' if refiner else ''}blocks.{n}.{module.replace('_', '.', 1)}.{rest}"
+        plain[key] = value
+    # Each module's A, B and alpha together.
+    modules = {}
+    foreign = 0
+    for key, value in plain.items():
+        k = key[len("diffusion_model.") :] if key.startswith("diffusion_model.") else key
+        k = k.replace(".lora_down.weight", ".lora_A.weight").replace(".lora_up.weight", ".lora_B.weight")
+        for tail, part in ((".lora_A.weight", "A"), (".lora_B.weight", "B"), (".alpha", "alpha")):
+            if k.endswith(tail):
+                modules.setdefault(k[: -len(tail)], {})[part] = value
+                break
+        else:
+            foreign += 1
+    out = {}
+    for name, parts in modules.items():
+        a, b = parts.get("A"), parts.get("B")
+        if a is None or b is None:
+            foreign += len(parts)
+            continue
+        if "alpha" in parts:
+            b = b * (float(parts["alpha"]) / a.shape[0])
+        k = name
         if k.startswith("blocks."):
             k = "transformer_blocks." + k[len("blocks.") :]
         if k.startswith("token_refiner.blocks."):
             k = "token_refiner.refiner_blocks." + k[len("token_refiner.blocks.") :]
-        for a, b in LORA_RENAMES:
-            k = k.replace(a, b)
-        k = k.replace(".lora_down.weight", ".lora_A.weight").replace(".lora_up.weight", ".lora_B.weight")
-        if ".attn.qkv_proj." in k:
-            if ".lora_A." in k:
-                for part in ("to_q", "to_k", "to_v"):
-                    out[k.replace("qkv_proj", part)] = value
-            elif ".lora_B." in k:
-                for part, piece in zip(("to_q", "to_k", "to_v"), torch.chunk(value, 3, dim=0)):
-                    out[k.replace("qkv_proj", part)] = piece.contiguous()
-            else:
-                foreign += 1
+        if k.endswith(".mlp.fc1"):
+            # [gate | up] in ComfyUI's order, [up | gate] in the library's.
+            gate, up = torch.chunk(b, 2, dim=0)
+            b = torch.cat([up, gate], dim=0)
+        for x, y in LORA_RENAMES:
+            k = k.replace(x, y)
+        if k.endswith(".attn.qkv_proj"):
+            for part, piece in zip(("to_q", "to_k", "to_v"), torch.chunk(b, 3, dim=0)):
+                out[f"{k[: -len('qkv_proj')]}{part}.lora_A.weight"] = a
+                out[f"{k[: -len('qkv_proj')]}{part}.lora_B.weight"] = piece.contiguous()
             continue
-        if not (".lora_A." in k or ".lora_B." in k or k.endswith(".alpha")):
-            foreign += 1
-            continue
-        out[k] = value
+        out[f"{k}.lora_A.weight"] = a
+        out[f"{k}.lora_B.weight"] = b.contiguous()
     return out, foreign
 
 
@@ -414,17 +455,22 @@ def apply_transformer_lora(pipe, path, scale, name="addon"):
         raise ValueError("this model's transformer takes no LoRA")
     sd, foreign = convert_video_lora(load_file(path))
     if not sd:
-        raise ValueError("the LoRA file holds no tensors in a layout this model's transformer takes")
+        raise ValueError(f"{os.path.basename(path)} holds no tensors in a layout this model's transformer takes")
     known = {n for n, _ in transformer.named_modules()}
     wanted = {k.rsplit(".lora_", 1)[0] for k in sd if ".lora_" in k}
     missing = sorted(m for m in wanted if m not in known)
     if missing:
-        raise ValueError(f"the LoRA names {len(missing)} of {len(wanted)} modules this model does not have ({', '.join(missing[:3])}…); it was made for another model or layout")
+        raise ValueError(f"{os.path.basename(path)} names {len(missing)} of {len(wanted)} modules this model does not have ({', '.join(missing[:3])}…); it was made for another model or layout")
     device = next(transformer.parameters()).device
     sd = {k: v.to(device=device, dtype=next(transformer.parameters()).dtype) for k, v in sd.items()}
+    # Several LoRAs at once, each under a name of its own and at its own strength.
+    taken = state.setdefault("loras", [])
+    while name in taken:
+        name = f"{name}_"
     transformer.load_lora_adapter(sd, adapter_name=name, prefix=None)
-    transformer.set_adapters([name], weights=[scale])
-    state.setdefault("loras", []).append(name)
+    taken.append(name)
+    state.setdefault("loraWeights", {})[name] = scale
+    transformer.set_adapters(taken, weights=[state["loraWeights"].get(n, 1.0) for n in taken])
     say({"progress": 0, "note": f"LoRA {os.path.basename(path)} on the transformer at strength {scale:g}: {len(wanted)} modules{f', {foreign} tensors not of a LoRA left aside' if foreign else ''}"})
 
 
@@ -436,6 +482,7 @@ def swap_loras(pipe, adapters, dtype):
         with contextlib.suppress(Exception):
             transformer.delete_adapters(names)
     state["loras"] = []
+    state["loraWeights"] = {}
     for adapter in adapters:
         apply_adapter(pipe, adapter, dtype)
 
@@ -507,7 +554,7 @@ def workflows(pipe):
     return []
 
 
-def load_modular(model_dir, dtype, weights, n, first, total, wanted_workflow=None):
+def load_modular(model_dir, dtype, weights, n, first, total, wanted_workflow=None, swap=None):
     """A modular pipeline: the blocks come from the library or from the
     repository's own code, and the components are loaded afterwards, each
     from the model's own folder whatever repository the index names. Whole
@@ -544,7 +591,15 @@ def load_modular(model_dir, dtype, weights, n, first, total, wanted_workflow=Non
                 wanted = {s.name for s in pipe.blocks.get_workflow(workflow).expected_components}
                 names = [name for name in names if name in wanted]
         folders = {name: os.path.join(model_dir, str(getattr(specs.get(name), "subfolder", "") or "")) for name in names}
-        local = {name: model_dir for name, folder in folders.items() if os.path.isdir(folder)}
+        # The transformer a single file replaces is never read from the disk:
+        # the one the workflow uses, built from its config with the file's weights.
+        swapped = None
+        if swap:
+            swapped = next((name for name in ("transformer", "transformer_ref") if name in names), None)
+            if not swapped:
+                raise ValueError("this model's workflow has no transformer for the fine-tune to replace")
+            names = [name for name in names if name != swapped]
+        local = {name: model_dir for name, folder in folders.items() if os.path.isdir(folder) and name != swapped}
         needed = sum(folder_gb(folders[name]) for name in local) or weights
         loaded = {"torch_dtype": dtype, "local_files_only": True, "trust_remote_code": True}
         if local:
@@ -553,6 +608,15 @@ def load_modular(model_dir, dtype, weights, n, first, total, wanted_workflow=Non
             pipe.load_components(names=names, **loaded)
         else:
             pipe.load_components(**loaded)
+        if swapped:
+            from comfy_minimax import load_transformer
+
+            say({"progress": 0, "note": f"reading {os.path.basename(str(swap['path']))} in place of the base {swapped}"})
+            model, info = load_transformer(str(swap["path"]), folders[swapped], dtype)
+            pipe.update_components(**{swapped: model})
+            needed += info["gb"]
+            unused = f"; {len(info['extra'])} tensors not used" if info["extra"] else ""
+            say({"progress": 0, "note": f"{os.path.basename(str(swap['path']))}: {info['blocks']} blocks{', the curve form' if info['curve'] else ''}, {info['gb']:.1f} GB at {str(dtype).replace('torch.', '')}{unused}"})
         missing = [name for name in (names or list(getattr(pipe, "component_names", []) or [])) if getattr(pipe, name, None) is None]
         if missing:
             # The library's reason follows a line break; the whole note comes along.

@@ -509,6 +509,56 @@ Not yet verified on Vast.ai itself: the search filters as Vast.ai takes
 them, a rent, the image pull time, the tunnels coming up and carrying
 chat streams and picture jobs, the self-stop with the container key.
 
+## LoRAs and fine-tunes for video models (2026-10-20, image 25)
+
+Every video model on the GPU has an optional "LoRAs and fine-tunes" fold
+under its prompt. "Look for LoRAs" asks Hugging Face for repositories that
+name the model as their base (`base_model:adapter:` and
+`base_model:finetune:`) and Civitai for models filed under its base there
+(`CIVITAI_BASES` in src/loras.js; "MiniMax H3" so far), safe-for-work
+listings only. One is added to the machine with the existing pull-addon
+step; a Civitai file comes from its download address
+(`civitai.com/api/download/models/…`, the only form the agent fetches
+from there) with the person's Civitai key (Settings, Hugging Face and
+Civitai, `CIVITAI_TOKEN`), stored as `civitai/<model id>/v<version>_f<file>.
+safetensors`. Civitai lets only signed-in accounts download, LoRAs too.
+
+Ticked LoRAs (up to four, each with a strength) and a chosen fine-tune go
+with each clip (`loras`, `finetune` on the agent's /jobs) and become the
+worker's adapters; what is added and ticked is kept in this browser per
+model (`loras:<repo>`), so the window reads the same when opened again. A
+LoRA's trigger words lead the description. A machine before image 25 is
+told to be replaced rather than make the clip without them.
+
+- LoRAs for MiniMax-H3 come in three spellings: ComfyUI's
+  (`diffusion_model.blocks.N.attn.qkv_proj.lora_A`), the same with an
+  `.alpha` per module, and Kohya's (`lora_unet_blocks_N_attn_qkv_proj.
+  lora_down`). The worker renames them, splits the fused projection, folds
+  alpha / rank into B, and swaps the feed-forward's halves: ComfyUI keeps
+  `fc1` as [gate | up] and the library as [up | gate] (checked against the
+  published weights). Before image 25 that swap was missing, so a LoRA's
+  feed-forward part went to the wrong half (the orbit LoRA included).
+- A fine-tune (DaSiWa's MiniMax-H3 and the other Civitai checkpoints filed
+  under MiniMax H3) is a whole transformer in ComfyUI's layout.
+  gpu/comfy_minimax.py builds the library's transformer from the base's
+  config and reads the file in: query, key and value split, the halves
+  swapped, 8-bit weights turned back (integers times row scale, then the
+  ConvRot rotation: a normalised Hadamard over groups of 256, its own
+  inverse; checked on Comfy-Org's int8 file against its bf16 twin, cosine
+  0.9999), fp8 with its scale, and the curve form (ComfyUI's pruned
+  MiniMax-H3): the time embedder replaced by the 1025-row table read at t
+  in [0, 1] and narrow AdaLN projections with no activation. The base's
+  own 67 GB transformer is never read; DaSiWa's comes to about 39 GB at
+  bf16. 4-bit packs, GGUF and several-head distilled files are refused
+  with the reason.
+- Checked on a tiny transformer with the real library
+  (test/comfy_minimax_check.py, test/minimax_lora_check.py, run by
+  test/comfy-minimax.test.js when `HF_TEST_PYTHON` names a Python with
+  torch, diffusers, peft and safetensors).
+
+Not yet verified on hardware: DaSiWa loading and its clips, Civitai
+downloads with a real key, any Civitai LoRA, several LoRAs at once.
+
 ## Verified on hardware, and not
 
 What has actually run on a rented machine, so the same thing is not

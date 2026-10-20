@@ -25,6 +25,11 @@ export const MODELS = [
   { id: "John6666/pony-realism-v23-sdxl", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion-xl", "not-for-all-audiences", "diffusers:StableDiffusionXLPipeline"], downloads: 25000, likes: 90, createdAt: "2026-08-01T00:00:00.000Z" },
 ];
 
+// LoRAs for a video model, found by their base model.
+export const ADAPTERS = [
+  { id: "motionlab/Wan-TI2V-Motion-LoRA", pipeline_tag: "text-to-video", library_name: "diffusers", tags: ["lora", "base_model:adapter:Wan-AI/Wan2.2-TI2V-5B-Diffusers"], downloads: 900, likes: 12, createdAt: "2026-08-01T00:00:00.000Z" },
+];
+
 export const FILES = {
   "bartowski/Llama-3.2-3B-Instruct-GGUF": [
     { rfilename: "README.md", size: 12000 },
@@ -114,6 +119,7 @@ export const FILES = {
     { rfilename: "vae/config.json", size: 800 },
     { rfilename: "vae/diffusion_pytorch_model.safetensors", size: 0.25 * 1024 ** 3 },
   ],
+  "motionlab/Wan-TI2V-Motion-LoRA": [{ rfilename: "README.md", size: 2000 }, { rfilename: "wan_motion_v1.safetensors", size: 0.3 * 1024 ** 3 }],
   "Wan-AI/Wan2.2-TI2V-5B-Diffusers": [
     { rfilename: "model_index.json", size: 500 },
     { rfilename: "scheduler/scheduler_config.json", size: 300 },
@@ -194,7 +200,8 @@ export function startStubHub({ extraModels = [] } = {}) {
     const all = [...MODELS, ...extraModels];
 
     if (url.pathname === "/api/models") {
-      let items = all;
+      // LoRAs answer only a search by their base model, so they stay out of every other list.
+      let items = (url.searchParams.get("filter") ?? "").startsWith("base_model:") ? [...all, ...ADAPTERS] : all;
       const pipeline = url.searchParams.get("pipeline_tag");
       if (pipeline) items = items.filter((m) => m.pipeline_tag === pipeline);
       const filters = (url.searchParams.get("filter") ?? "").split(",").filter(Boolean);
@@ -203,6 +210,9 @@ export function startStubHub({ extraModels = [] } = {}) {
       if (search) items = items.filter((m) => search.split(/\s+/).every((t) => m.id.toLowerCase().includes(t)));
       return json(res, 200, items.slice(0, Number(url.searchParams.get("limit") || 100)));
     }
+    // A repository's files as the tree API lists them.
+    const tree = /^\/api\/models\/([^/]+\/[^/]+)\/tree\/main$/.exec(url.pathname);
+    if (tree) return json(res, 200, (FILES[tree[1]] ?? []).map((f) => ({ type: "file", path: f.rfilename, size: f.size, ...(f.size > 10e6 ? { lfs: { size: f.size } } : {}) })));
     const disc = /^\/api\/models\/([^/]+\/[^/]+)\/discussions(?:\/(\d+))?$/.exec(url.pathname);
     if (disc) {
       if (disc[2]) {
