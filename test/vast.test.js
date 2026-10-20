@@ -107,6 +107,7 @@ test("a size rented at Vast.ai runs the image with its tunnels, and its HTTPS ad
   assert.equal(res.status, 200, await res.clone().text());
   let r = await res.json();
   assert.deepEqual([r.rented, r.provider, r.cloud, r.gpu, r.gb, r.diskGb, r.url, r.costPerHour], [true, "vast", "VAST", "H100 SXM", 80, 60, "", 2.05]);
+  assert.ok(Math.abs(r.startAskedAt - Date.now()) < 5000, "the status says when the machine was asked for, for the page's progress");
   const made = vast.state.created.at(-1);
   assert.equal(made.offerId, 1011);
   assert.deepEqual([made.image, made.disk, made.label, made.runtype, made.cancel_unavail], [GPU_IMAGE, 60, "huggingfound", "args", true]);
@@ -145,9 +146,12 @@ test("a Vast.ai machine stops and starts, with new tunnels learned after the sta
   // Started again on a host whose card someone else has meanwhile.
   const inst = Object.values(vast.state.instances)[0];
   inst.gpuTaken = true;
+  const before = (await json("/api/rent")).startAskedAt;
+  await new Promise((done) => setTimeout(done, 5));
   res = await post("/api/rent/start", {});
   assert.equal(res.status, 200, await res.clone().text());
   r = await json("/api/rent");
+  assert.ok(r.startAskedAt > before, "a start begins the wait afresh");
   assert.deepEqual([r.status, r.waitingForGpu], ["EXITED", true]);
   // The card comes free: it runs, with fresh tunnels.
   inst.gpuTaken = false;

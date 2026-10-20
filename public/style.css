@@ -442,6 +442,13 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .progress.small { height: 5px; margin-top: 6px; max-width: 280px; }
 .progress-text { margin-top: 4px; }
 .progress-files { color: var(--ink); font-size: 15px; margin-right: 6px; }
+.boot { margin: 10px 0 4px; }
+.boot .progress { margin-bottom: 6px; }
+.boot p { margin: 4px 0; }
+.boot-steps { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); }
+.boot-step.done { color: var(--ok); }
+.boot-step.now { color: var(--ink); font-weight: 600; }
+.warn-text { color: var(--warn); }
 @keyframes progress-stripes { from { background-position: 0 0; } to { background-position: 28px 0; } }
 .rent-offer select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
 .browse-invite { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; align-items: center; margin: 10px 0 6px; }
@@ -592,3 +599,7 @@ details.levels-note summary { cursor: pointer; }
 .rent-when-fields { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 8px; font-size: 14px; }
 .rent-when-fields input { width: 5.5em; margin: 0 4px; }
 .tier-watch .rent-when, .sold-out .rent-when { font-size: 13px; padding: 4px 10px; }
+
+/* Settings advice in a summary: what to set here, and what cannot be set yet. */
+.said .line.setting b { color: var(--ok); }
+.said .line.missing b { color: var(--warn); }

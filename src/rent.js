@@ -569,6 +569,9 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       watchResult: watchResult(),
       slowDataCenters: slowDataCenters(),
       startedAt: pod.startedAt ?? null,
+      // When the machine was last asked for (rented, started or restarted),
+      // for the page's account of how far it has got since.
+      startAskedAt: Number(env().RUNPOD_START_ASKED) || null,
       // Whether RunPod has a container up for the pod: one listed as
       // running whose container has not come yet (the image still being
       // fetched by a fresh host, or a host not delivering) has no runtime.
@@ -601,7 +604,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   const vastDiskPerDay = (gb) => Math.round(((Number(gb) || 0) * (Number(env().RUNPOD_POD_DISK_RATE) || 0)) / 30 * 10000) / 10000;
 
   function forget(id) {
-    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "", RUNPOD_POD_CLOUD: "", RUNPOD_HOLD_UNTIL: "", RUNPOD_AGENT_TOKEN: "", RUNPOD_POD_PROVIDER: "", RUNPOD_POD_URL: "", RUNPOD_POD_AGENT_URL: "", RUNPOD_POD_DISK_RATE: "", RUNPOD_POD_RUN_SINCE: "" };
+    const updates = { RUNPOD_POD_ID: "", RUNPOD_POD_GB: "", RUNPOD_POD_DISK_GB: "", RUNPOD_POD_AGENT: "", RUNPOD_POD_COST: "", RUNPOD_POD_CLOUD: "", RUNPOD_HOLD_UNTIL: "", RUNPOD_AGENT_TOKEN: "", RUNPOD_POD_PROVIDER: "", RUNPOD_POD_URL: "", RUNPOD_POD_AGENT_URL: "", RUNPOD_POD_DISK_RATE: "", RUNPOD_POD_RUN_SINCE: "", RUNPOD_START_ASKED: "" };
     if (id && agentFor(id)) agentTokens.delete(agentFor(id));
     if (id && urlFor(id) && env().OLLAMA_SERVER === urlFor(id)) {
       updates.OLLAMA_SERVER = "";
@@ -893,7 +896,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     tiers,
     // What was last learned from RunPod, with the settings that can change
     // without asking RunPod (the idle time) read live.
-    cached: () => (podId() ? { ...(last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null, agentToken: hasAgent() ? agentToken() || null : null }), idleMinutes: idleMinutes(), idleSeconds: Math.round((now() - lastActivity) / 1000) } : notRented()),
+    cached: () => (podId() ? { ...(last ?? { rented: true, id: podId(), status: "UNKNOWN", ready: false, images: hasAgent(), imagesReady: false, gb: Number(env().RUNPOD_POD_GB) || null, url: urlFor(podId()), agent: hasAgent() ? agentFor(podId()) : null, agentToken: hasAgent() ? agentToken() || null : null, provider: onVast() ? "vast" : "runpod", startAskedAt: Number(env().RUNPOD_START_ASKED) || null }), idleMinutes: idleMinutes(), idleSeconds: Math.round((now() - lastActivity) / 1000) } : notRented()),
     touch() {
       noteActivity();
     },
@@ -1023,7 +1026,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     if (!id) throw new RentError(`Vast.ai's ${tierLabel(tier)} offers went between listing them and renting one${lastErr ? ` (${lastErr.message})` : ""}. The sizes have been refreshed: pick again, or try in a few minutes.`, 503);
     const totalGb = (pick.memory || tier.gb / count) * count;
     lastActivity = now();
-    save({ RUNPOD_POD_ID: id, RUNPOD_POD_PROVIDER: "vast", RUNPOD_POD_CLOUD: "VAST", RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: "1", RUNPOD_POD_COST: String(pick.pricePerHour), RUNPOD_POD_DISK_RATE: pick.storagePerGbMonth != null ? String(pick.storagePerGbMonth) : "", RUNPOD_AGENT_TOKEN: secret, RUNPOD_POD_URL: "", RUNPOD_POD_AGENT_URL: "", RUNPOD_POD_RUN_SINCE: "", RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+    save({ RUNPOD_POD_ID: id, RUNPOD_POD_PROVIDER: "vast", RUNPOD_POD_CLOUD: "VAST", RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: "1", RUNPOD_POD_COST: String(pick.pricePerHour), RUNPOD_POD_DISK_RATE: pick.storagePerGbMonth != null ? String(pick.storagePerGbMonth) : "", RUNPOD_AGENT_TOKEN: secret, RUNPOD_POD_URL: "", RUNPOD_POD_AGENT_URL: "", RUNPOD_POD_RUN_SINCE: "", RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()), RUNPOD_START_ASKED: String(now()) });
     othersCache = { at: 0, key: "", list: null };
     last = summarize({ id, status: "PROVISIONING", cost: pick.pricePerHour, runtime: null, gpu: { id: pick.name, count }, mounts: { persistent: { size: disk } }, dataCenterId: pick.location || null }, false);
     return last;
@@ -1108,7 +1111,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       if (!pod?.id) throw new RentError("RunPod did not return a machine id.", 502);
       const totalGb = (pick.memory || tier.gb / count) * count;
       lastActivity = now();
-      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_PROVIDER: "", RUNPOD_POD_CLOUD: pick.cloud ?? "SECURE", RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(pick.pricePerHour ?? offer?.pricePerHour ?? pod.cost ?? ""), RUNPOD_AGENT_TOKEN: secret, RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      save({ RUNPOD_POD_ID: pod.id, RUNPOD_POD_PROVIDER: "", RUNPOD_POD_CLOUD: pick.cloud ?? "SECURE", RUNPOD_POD_GB: String(totalGb), RUNPOD_POD_DISK_GB: String(disk), RUNPOD_POD_AGENT: full ? "1" : "", RUNPOD_POD_COST: String(pick.pricePerHour ?? offer?.pricePerHour ?? pod.cost ?? ""), RUNPOD_AGENT_TOKEN: secret, RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()), RUNPOD_START_ASKED: String(now()) });
       registerToken();
       othersCache = { at: 0, key: "", list: null };
       point(pod.id, totalGb);
@@ -1154,7 +1157,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     async start() {
       const id = podId();
       if (!id) throw new RentError("Nothing is rented.", 404);
-      save({ RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      save({ RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()), RUNPOD_START_ASKED: String(now()) });
       lastActivity = now();
       try {
         if (onVast()) {
@@ -1188,7 +1191,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
     async restart() {
       const id = podId();
       if (!id) throw new RentError("Nothing is rented.", 404);
-      save({ RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()) });
+      save({ RUNPOD_LAST_STOP: "", RUNPOD_LAST_ACTIVITY: String(now()), RUNPOD_START_ASKED: String(now()) });
       lastActivity = now();
       try {
         if (onVast()) {

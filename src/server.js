@@ -25,9 +25,10 @@ import { DATA_DIR, OUTPUT_DIR, UPLOAD_DIR, agentModels, agentModelList, clearOut
 import { estimate, guessSizeGb, speedTier } from "./speed.js";
 import { gatherVoices, headline, isFresh, readVoices, searchVoices, writeVoices } from "./voices.js";
 import { createCivitai, createGithub, createHackerNews, createLemmy, createReddit, createYoutube, matchKnown } from "./sources.js";
-import { cleanSummary, extractiveSummary, summarize, summarizerModel } from "./summarize.js";
+import { cleanSummary, collectVoices, extractiveSummary, summarize, summarizerModel } from "./summarize.js";
 import { rankModels } from "./find.js";
-import { isAddon, qualityScore } from "./quality.js";
+import { isAddon, kindOf, qualityScore } from "./quality.js";
+import { settingsAdvice, wantedSettings } from "./settings.js";
 import { refusalSignals } from "./refusals.js";
 import { ReviewError, createReviewer } from "./review.js";
 import { RentError, TIERS, createRental, tierFor, agentFetch } from "./rent.js";
@@ -649,6 +650,14 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       out.youtubeConfigured = youtube().configured();
       return send(res, 200, out);
     }
+    // The settings people suggest that HuggingFound has no control for, across
+    // every gathered model, the most asked-for first: what to build next.
+    if (req.method === "GET" && url.pathname === "/api/settings/wanted") {
+      const index = readVoices(voicesFile);
+      const kinds = new Map([...(readScan(scanFile)?.models ?? []), ...PICKS].map((m) => [m.id, kindOf(m)]));
+      const entries = Object.entries(index).map(([id, e]) => ({ id, kind: kinds.get(id) ?? null, settings: e.summary?.settings ?? settingsAdvice(collectVoices(e, isFresh(e.web) ? e.web.data : null)) }));
+      return send(res, 200, { models: entries.length, wanted: wantedSettings(entries) });
+    }
     // The full picture for one model: card excerpt and discussions with their first comments.
     if (req.method === "GET" && url.pathname === "/api/voices") {
       const id = url.searchParams.get("id") ?? "";
@@ -667,7 +676,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const summary = await summarize(withComments, isFresh(entry.web) ? entry.web.data : null, { model: writtenSummaries ? await summarizerModel(fetchImpl) : null, fetchImpl });
       index[id] = { ...entry, summary };
       writeVoices(index, voicesFile);
-      return send(res, 200, { id, card: entry.card, gatheredAt: entry.at, discussions, summary: cleanSummary(summary) });
+      return send(res, 200, { id, card: entry.card, gatheredAt: entry.at, discussions, summary: cleanSummary(summary, kindFor(id)) });
     }
     if (req.method === "GET" && url.pathname === "/api/model") {
       const id = url.searchParams.get("id") ?? "";
@@ -1275,7 +1284,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // The one line of what people say, for a listing card.
   function withVoice(m) {
     const entry = readVoicesCached()[m.id];
-    const summary = cleanSummary(entry?.summary ?? null);
+    const summary = cleanSummary(entry?.summary ?? null, kindOf(m));
     // The Hub's one-line description keeps its own field; `summary` is what people say.
     const blurb = typeof m.summary === "string" ? m.summary : (m.blurb ?? "");
     return { ...m, blurb, voice: entry ? headline(entry) : null, talked: entry ? entry.discussions.length : null, summary, refusals: entry ? refusalSignals({ ...entry, name: m.name, id: m.id }, summary) : null };
@@ -1290,8 +1299,11 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const entry = index[id];
       if (!entry) continue;
       if (!entry.summary || entry.summary.at < entry.at) {
-        entry.summary = { ...extractiveSummary({ ...entry, name: id.split("/").pop() }), at: new Date().toISOString() };
+        entry.summary = { ...extractiveSummary({ ...entry, name: id.split("/").pop() }, isFresh(entry.web) ? entry.web.data : null), at: new Date().toISOString() };
         extracted++;
+      } else if (!entry.summary.settings) {
+        // A summary from before settings advice was read: add it, keep the lines.
+        entry.summary.settings = settingsAdvice(collectVoices(entry, isFresh(entry.web) ? entry.web.data : null));
       }
     }
     writeVoices(index, voicesFile);
@@ -1318,6 +1330,13 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     emit(`${done} summaries written by ${model}.`);
   }
 
+  // What kind of model an id is (text, images, video, speech...), from the
+  // scan or the curated picks; null when neither knows it.
+  function kindFor(id) {
+    const m = (readScan(scanFile)?.models ?? []).find((x) => x.id === id) ?? PICKS.find((x) => x.id === id);
+    return m ? kindOf(m) : null;
+  }
+
   function readVoicesCached() {
     let mtime = 0;
     try {
@@ -1326,7 +1345,13 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       return {};
     }
     const cached = VOICES_CACHE.get(voicesFile);
-    if (!cached || cached.mtime !== mtime) VOICES_CACHE.set(voicesFile, { mtime, index: readVoices(voicesFile) });
+    if (!cached || cached.mtime !== mtime) {
+      const index = readVoices(voicesFile);
+      // Summaries written before settings advice was read get it here, in
+      // memory, so cards show it before the next gathering writes it down.
+      for (const entry of Object.values(index)) if (entry.summary && !entry.summary.settings) entry.summary.settings = settingsAdvice(collectVoices(entry, isFresh(entry.web) ? entry.web.data : null));
+      VOICES_CACHE.set(voicesFile, { mtime, index });
+    }
     return VOICES_CACHE.get(voicesFile).index;
   }
 

@@ -1078,6 +1078,18 @@ await step("a Vast.ai key adds its cards to the same list, each marked Vast.ai, 
   assert.match(await page.locator("#rent-bar").innerText(), /Rented GPU: H100 SXM 80 GB \(Vast\.ai\)/);
   await page.waitForSelector("#rent-panel .rent-card");
   assert.match(await page.locator("#rent-panel .rent-head").innerText(), /H100 SXM, 80 GB at Vast\.ai/);
+  // While it starts, how far it has got: a bar, the stage, the time so far and the usual time.
+  const boot = page.locator("#rent-panel [data-boot-slot]");
+  await boot.locator(".boot").waitFor();
+  assert.match(await boot.innerText(), /^\d+% · Vast\.ai sets up the host\. \d+ s so far; usually 5 to 20 minutes/);
+  assert.equal(await boot.locator(".progress .fill").count(), 1);
+  await page.evaluate(() => rentalTick());
+  await page.waitForFunction(() => /The host fetches the machine image\./.test(document.querySelector("#rent-panel [data-boot-slot]")?.textContent ?? ""));
+  assert.match(await boot.locator(".boot-steps").innerText(), /✓ Vast\.ai sets up the host\s+● the host fetches the machine image\s+○ the machine opens its secure address\s+○ Ollama and the agent start/);
+  const pctBefore = Number((await boot.innerText()).match(/^(\d+)%/)[1]);
+  await page.evaluate(() => rentalTick());
+  await page.waitForFunction(() => /The machine opens its secure address\./.test(document.querySelector("#rent-panel [data-boot-slot]")?.textContent ?? ""));
+  assert.ok(Number((await boot.innerText()).match(/^(\d+)%/)[1]) > pctBefore, "the bar moves on with the stage");
   acceptDialogs = true;
   await page.click("#rent-delete");
   await page.waitForSelector("#rent-panel .tier.vast");

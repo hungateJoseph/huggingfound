@@ -1,10 +1,14 @@
 import { ollamaUrl } from "./runners.js";
+import { givesSetting, settingsAdvice, settingsLines } from "./settings.js";
 
 // Turns what people wrote about a model into a couple of short lines a
 // person can scan: the strengths users mention, then the complaints, then
 // what the author claims. A chat model already installed in Ollama writes
 // them when one is running; otherwise the lines are lifted from the most
 // opinionated sentences in the text. Either way nothing is quoted at length.
+// Advice about settings (steps, CFG, temperature, quantization) is kept apart
+// from the opinions and shown in HuggingFound's terms: which preset or box to
+// use, or that HuggingFound has no control for it yet (settings.js).
 
 // Words that make a sentence a judgement of the model; topical words alone
 // (coding, anime, vram) are not enough, or titles and requests slip through.
@@ -63,7 +67,7 @@ export function extractiveSummary(entry, web = null) {
   const scored = [];
   for (const u of users) {
     for (const s of sentences(u.text)) {
-      if (NOISE.test(s) || REQUEST.test(s) || META.test(s) || ERRORISH.test(s)) continue;
+      if (NOISE.test(s) || REQUEST.test(s) || META.test(s) || ERRORISH.test(s) || givesSetting(s)) continue;
       const hits = (s.match(new RegExp(OPINION.source, "gi")) ?? []).length;
       if (!hits && !/^People make:|thumbs up/.test(s)) continue;
       const topical = (s.match(new RegExp(TOPIC.source, "gi")) ?? []).length;
@@ -87,7 +91,7 @@ export function extractiveSummary(entry, web = null) {
   if (short.length < 2 && authorLine) short.push(`Author: ${tidy(authorLine)}`);
   const long = userLines.map((l) => `Users: ${l}`);
   if (authorLine) long.push(`Author: ${tidy(authorLine, 160)}`);
-  return { short, long, by: "extract", sources: users.length };
+  return { short, long, by: "extract", sources: users.length, settings: settingsAdvice({ users, author }) };
 }
 
 // Which installed chat model can write the summaries: the first one Ollama
@@ -106,6 +110,7 @@ export async function summarizerModel(fetchImpl = fetch) {
 const PROMPT = `You summarize what people say about an AI model for someone choosing a model to run at home.
 Write at most 5 lines. Each line under 100 characters, plain words, no markdown, no quotes, no names of commenters.
 Start user opinions with "Users:" (strengths first, then complaints). If there are no user comments, write one line starting with "Author:" that says what the author claims.
+Leave out advice about settings such as steps, CFG, temperature, context length or quantization; it is listed separately.
 Do not invent anything that is not in the text. Never write a line saying there are no complaints or nothing to report; leave it out. If the text has nothing useful at all, write exactly: Nothing said yet.`;
 
 export async function modelSummary(model, entry, web, fetchImpl = fetch) {
@@ -126,7 +131,7 @@ export async function modelSummary(model, entry, web, fetchImpl = fetch) {
       .map((l) => l.replace(/^[\s*\-•\d.)]+/, "").trim())
       .map((l) => (/^(users?|author|complaints?|strengths?|weaknesses?)\s*:/i.test(l) ? l.replace(/^(users?|strengths?|weaknesses?|complaints?)\s*:/i, "Users:").replace(/^author\s*:/i, "Author:") : `Users: ${l}`)),
   );
-  return { short: lines.slice(0, 2), long: lines, by: model, sources: users.length };
+  return { short: lines.slice(0, 2), long: lines, by: model, sources: users.length, settings: settingsAdvice({ users, author }) };
 }
 
 // Filler a chat model tends to add ("Users: No complaints mentioned.") and
@@ -141,10 +146,17 @@ export function cleanLines(lines) {
     .slice(0, 5);
 }
 
-export function cleanSummary(summary) {
+// What a summary shows: the opinions, cleaned, then the settings advice for
+// this kind of model in HuggingFound's terms (settingsLines). Settings lines
+// are written here, not stored, so their wording follows the code. The card's
+// two lines never carry a "Not here yet" line; the model window does.
+const SETTING_LINE = /^(In HuggingFound|Not here yet):/;
+export function cleanSummary(summary, kind = null) {
   if (!summary) return summary;
-  const long = cleanLines(summary.long ?? []);
-  return { ...summary, long, short: long.slice(0, 2) };
+  const opinions = cleanLines((summary.long ?? []).filter((l) => !SETTING_LINE.test(l)));
+  const settings = settingsLines(summary.settings, kind);
+  const long = [...opinions, ...settings];
+  return { ...summary, long, short: long.filter((l) => !/^Not here yet:/.test(l)).slice(0, 2) };
 }
 
 // The summary for one model: by the local chat model when there is one and

@@ -592,10 +592,13 @@ function saidHtml(m) {
   return `<div class="said">${lines.map(lineHtml).join("")}${rest.length || m.talked ? `<button class="ghost more" data-more="${esc(m.id)}">More</button>` : ""}<div class="expanded" hidden></div></div>`;
 }
 
+// "In HuggingFound:" lines say which preset or box carries the settings
+// people suggest; "Not here yet:" lines name the ones HuggingFound cannot set.
+const LINE_KINDS = { Users: "", Author: "author", "In HuggingFound": "setting", "Not here yet": "missing" };
 function lineHtml(line) {
-  const m = /^(Users|Author):\s*(.*)$/.exec(line);
+  const m = /^(Users|Author|In HuggingFound|Not here yet):\s*(.*)$/.exec(line);
   if (!m) return `<div class="line"><b>Users</b><span>${esc(line)}</span></div>`;
-  return `<div class="line ${m[1] === "Author" ? "author" : ""}"><b>${m[1] === "Author" ? "Author" : "Users"}</b><span>${esc(m[2])}</span></div>`;
+  return `<div class="line ${LINE_KINDS[m[1]]}"><b>${m[1]}</b><span>${esc(m[2])}</span></div>`;
 }
 
 function wireMore(root) {
@@ -813,7 +816,7 @@ function rentAskHtml(choice, plan) {
     if (r.status === "EXITED" || r.status === "ERROR") {
       return `<div class="rent-ask"><p><b>Your rented GPU (${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}) is stopped.</b> It stopped itself after sitting idle; its models are still on its disk. Starting it takes a minute or two.${fits ? "" : ` ${esc(size)} It may be tight on this card.`}${olderNote}</p><div class="actions">${older ? `${replace}<button class="ghost" id="ask-start">Start it anyway</button>` : `<button class="primary" id="ask-start">Start it</button>${replace}`}${back}</div></div>`;
     }
-    return `<div class="rent-ask"><p><b>Your rented GPU is ${esc(word)}.</b> This window switches to it as soon as it answers.${olderNote}</p><div class="actions">${replace}${back}</div></div>`;
+    return `<div class="rent-ask"><p><b>Your rented GPU is ${esc(word)}.</b> This window switches to it as soon as it answers.${olderNote}</p><div data-boot-slot>${bootHtml(r)}</div><div class="actions">${replace}${back}</div></div>`;
   }
   if (state.hosted && !state.user) {
     const hours = state.auth?.guestHours ?? 12;
@@ -867,6 +870,7 @@ function rentAskHtml(choice, plan) {
 
 function wireRentAsk(body, model, choice) {
   wireWatch(body);
+  paintBoot();
   body.querySelector("#ask-check")?.addEventListener("click", (e) => {
     e.currentTarget.disabled = true;
     e.currentTarget.textContent = "Checking";
@@ -5009,6 +5013,84 @@ function placeTag(row) {
   return row.provider === "vast" ? ", Vast.ai" : row.gpu?.cloud === "COMMUNITY" ? ", Community Cloud" : "";
 }
 
+// ---- how far a starting machine has got ---------------------------------
+// The stages a machine goes through between being asked for and answering,
+// with when each usually ends (seconds since it was asked for). The stage
+// comes from what RunPod or Vast.ai and the machine say; the fill within
+// it from the time since it was asked for, kept by the site. So the bar
+// reads the same in every window and after reopening one.
+const BOOT_STAGES = {
+  runpod: [
+    { key: "order", label: "RunPod places it on a host", until: 30 },
+    { key: "image", label: "the host fetches the machine image", until: 180 },
+    { key: "start", label: "Ollama and the agent start", until: 240 },
+  ],
+  vast: [
+    { key: "order", label: "Vast.ai sets up the host", until: 60 },
+    { key: "image", label: "the host fetches the machine image", until: 900 },
+    { key: "tunnel", label: "the machine opens its secure address", until: 990 },
+    { key: "start", label: "Ollama and the agent start", until: 1050 },
+  ],
+};
+// Whether the machine answers on both sides: Ollama, and the agent when it has one.
+function machineUp(r) {
+  return Boolean(r?.rented && r.status === "RUNNING" && r.ready && (r.imagesReady || r.images === false));
+}
+function bootStage(r) {
+  if (r.status === "PROVISIONING" || r.status === "UNKNOWN") return "order";
+  if (r.status === "STARTING") return r.provider === "vast" || !r.containerUp ? "image" : "start";
+  if (r.status === "RUNNING") {
+    if (r.containerUp === false) return "image";
+    if (r.provider === "vast" && !r.url) return "tunnel";
+    return "start";
+  }
+  return null;
+}
+// When the wait began: when the site asked for the machine, else when this page first saw it starting.
+const bootSeen = new Map();
+function bootSince(r) {
+  if (r.startAskedAt) return r.startAskedAt;
+  if (!bootSeen.has(r.id)) bootSeen.set(r.id, Date.now());
+  return bootSeen.get(r.id);
+}
+function bootHtml(r) {
+  if (!r?.rented || machineUp(r) || ["EXITED", "TERMINATED", "ERROR"].includes(r.status)) return "";
+  if (r.waitingForGpu) return `<div class="boot"><p class="small"><b>Waiting for this host's GPU to be free.</b> A stopped Vast.ai machine starts again only on the host that holds its disk; it starts by itself once the card is free.</p></div>`;
+  const stages = BOOT_STAGES[r.provider === "vast" ? "vast" : "runpod"];
+  const key = bootStage(r) ?? "order";
+  const i = Math.max(0, stages.findIndex((s) => s.key === key));
+  const total = stages.at(-1).until;
+  const elapsed = Math.max(0, (Date.now() - bootSince(r)) / 1000);
+  const lo = i ? stages[i - 1].until : 0;
+  const hi = stages[i].until;
+  const frac = Math.min(0.9, Math.max(0, (elapsed - lo) / (hi - lo)));
+  const pct = Math.min(99, Math.round(((lo + frac * (hi - lo)) / total) * 100));
+  // Ollama answering before the agent: the last few seconds, said as such.
+  const detail = key === "start" && r.ready && !r.imagesReady ? "Ollama answers; the agent is still starting" : stages[i].label[0].toUpperCase() + stages[i].label.slice(1);
+  const usual = r.provider === "vast" ? "5 to 20 minutes, most of it the image download on a host that has not had it before" : "2 to 4 minutes, longer on a host fetching the image for the first time";
+  const slow = elapsed > total * 2.5;
+  const steps = stages.map((s, j) => `<span class="boot-step ${j < i ? "done" : j === i ? "now" : ""}">${j < i ? "✓" : j === i ? "●" : "○"} ${esc(s.label)}</span>`).join("");
+  return `<div class="boot" data-boot="1">
+    <div class="progress guess" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="fill" style="width:${pct}%"></div></div>
+    <p class="small"><b>${pct}%</b> · ${esc(detail)}. ${esc(bootElapsed(elapsed))} so far; usually ${usual}.</p>
+    <p class="boot-steps small">${steps}</p>
+    ${r.podNote ? `<p class="muted small">${placeOf(r)} says: ${esc(r.podNote)}</p>` : ""}
+    ${slow ? `<p class="small warn-text">Longer than usual. The host may be slow to fetch the image or not delivering; replacing the machine puts it on another host.</p>` : ""}
+  </div>`;
+}
+function bootElapsed(seconds) {
+  const s = Math.round(seconds);
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+}
+// Redraws every progress bar on show, each second while a machine starts.
+function paintBoot() {
+  const nodes = document.querySelectorAll("[data-boot-slot]");
+  const html = bootHtml(state.rental);
+  for (const n of nodes) if (n.innerHTML !== html) n.innerHTML = html;
+  clearTimeout(state.bootTimer);
+  if (html && nodes.length) state.bootTimer = setTimeout(paintBoot, 1000);
+}
+
 // The sizes and prices RunPod offers. The server keeps them for a while;
 // `fresh` asks RunPod again, for the Refresh button and after a rent that
 // found the stock gone.
@@ -5354,6 +5436,7 @@ function wireWatch(root) {
 function renderRental() {
   const r = state.rental;
   renderRentBar(r);
+  queueMicrotask(paintBoot);
   const panel = $("#rent-panel");
   if (!panel) return;
   if (r?.rented) {
@@ -5381,6 +5464,7 @@ function renderRental() {
     panel.innerHTML = `<div class="rent-card">
       <div class="rent-head"><span>${esc(r.gpu || "GPU")}${r.gb ? `, ${r.gb} GB` : ""}${r.provider === "vast" ? " at Vast.ai" : r.cloud === "COMMUNITY" ? ", Community Cloud" : ""}</span><span class="pill ${cls}">${esc(word)}</span></div>
       <p class="muted small">${esc(cost)}${esc(time)}${esc(todaySpend)}${esc(stopped)}${r.error ? ` Last check failed: ${esc(r.error)}` : ""}</p>
+      <div data-boot-slot>${bootHtml(r)}</div>
       ${capNote}${stuck}
       ${r.waitingForGpu ? `<div class="notice warn"><span>Waiting for the GPU on this machine's host to be free again: a stopped Vast.ai machine starts only on the host that holds its disk, and someone else has its card for now. It starts by itself once the card is free${r.podNote ? ` (Vast.ai: ${esc(r.podNote)})` : ""}.</span> <button class="ghost" id="rent-replace-wait">Replace the machine</button></div>` : ""}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
@@ -6837,7 +6921,7 @@ function pollRental() {
     return;
   }
   const stopped = ["EXITED", "TERMINATED", "ERROR"].includes(state.rental.status);
-  state.rentPoll = setTimeout(rentalTick, stopped ? 300000 : state.rental.ready ? 60000 : 12000);
+  state.rentPoll = setTimeout(rentalTick, stopped ? 300000 : machineUp(state.rental) ? 60000 : 12000);
 }
 
 state.lastTouch = Date.now();
@@ -6940,6 +7024,7 @@ async function rentalTick() {
   state.rentPoll = null;
   if (!state.rental?.rented) return;
   const wasReady = state.rental.ready;
+  const wasUp = machineUp(state.rental);
   try {
     state.rental = await api.get("/api/rent");
   } catch {
@@ -6947,10 +7032,11 @@ async function rentalTick() {
   }
   // Redrawing schedules the next poll; nothing else does.
   renderRental();
-  if (!wasReady && state.rental?.ready) {
-    notice("The rented GPU is ready. Chat models are downloaded to it and run there.", "ok");
-    if (state.open && !state.agentBusy) openModel(state.open);
-  }
+  if (!wasReady && state.rental?.ready) notice("The rented GPU is ready. Chat models are downloaded to it and run there.", "ok");
+  // The window follows once Ollama answers, and again once the agent does
+  // (a picture or video model waits for the agent, which can come a little
+  // later): a window on "starting" never outlives the machine's start.
+  if (((!wasReady && state.rental?.ready) || (!wasUp && machineUp(state.rental))) && state.open && !state.agentBusy) openModel(state.open);
 }
 
 async function renderImageServerStatus() {

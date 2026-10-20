@@ -20,7 +20,7 @@ export const MODELS = [
   { id: "black-forest-labs/FLUX.1-dev", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "text-to-image"], gated: "auto", downloads: 900000, likes: 9000, createdAt: "2024-08-01T00:00:00.000Z" },
   { id: "ggerganov/whisper.cpp", pipeline_tag: "automatic-speech-recognition", library_name: null, tags: ["automatic-speech-recognition"], downloads: 400000, likes: 900, createdAt: "2023-03-01T00:00:00.000Z" },
   { id: "openai/whisper-large-v3", pipeline_tag: "automatic-speech-recognition", library_name: "transformers", tags: ["transformers", "safetensors"], downloads: 3000000, likes: 3000, createdAt: "2023-11-07T00:00:00.000Z" },
-  { id: "TheDrummer/Cydonia-24B-v2-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "not-for-all-audiences", "conversational"], downloads: 40000, likes: 350, createdAt: "2026-09-20T00:00:00.000Z" },
+  { id: "TheDrummer/Cydonia-24B-v2-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "not-for-all-audiences", "conversational"], downloads: 40000, likes: 350, createdAt: new Date(Date.now() - 20 * 864e5).toISOString() },
   { id: "polite/Polite-Chat-7B-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "conversational"], downloads: 5000, likes: 900, createdAt: "2025-05-01T00:00:00.000Z" },
   { id: "John6666/pony-realism-v23-sdxl", pipeline_tag: "text-to-image", library_name: "diffusers", tags: ["diffusers", "stable-diffusion-xl", "not-for-all-audiences", "diffusers:StableDiffusionXLPipeline"], downloads: 25000, likes: 90, createdAt: "2026-08-01T00:00:00.000Z" },
 ];
