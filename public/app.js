@@ -2107,7 +2107,7 @@ function renderChat(box, modelName) {
         } catch {
           explained = "";
         }
-        throw new Error(res.status === 403 && chatDirect() ? refusedByMachine(why, messages.flatMap((m) => m.files ?? [])) : explained || `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
+        throw new Error(res.status === 403 && (chatDirect() || chatViaAgent()) ? refusedByMachine(why, messages.flatMap((m) => m.files ?? [])) : explained || `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
       }
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -2508,10 +2508,20 @@ function chatDirect() {
 // attack code to a web firewall, as a binary file's strings do.
 const CHAT_VIA_AGENT = 28;
 function chatViaAgent() {
-  // The agent's version is known once the machine has been asked; until
-  // then the agent is tried, and an image without the route says 404.
+  // The rental's agent even when the site holds no chat address for the
+  // machine. The agent's version is known once the machine has been
+  // asked; until then the agent is tried, and an older image says 404.
+  if (!state.hosted) return "";
+  const agent = state.chatServer?.agent || (state.rental?.rented ? state.rental.agent : "") || "";
   const v = state.rental?.agentVersion;
-  return chatDirect() && state.chatServer?.agent && (v == null || Number(v) >= CHAT_VIA_AGENT) ? state.chatServer.agent : "";
+  return agent && (v == null || Number(v) >= CHAT_VIA_AGENT) ? agent : "";
+}
+// On the hosted site a chat has to reach the machine itself; without an
+// address for it the site's own route would only say so in a bare line.
+function noChatRoute() {
+  const r = state.rental;
+  if (!r?.rented) return "No machine is rented, and the hosted site runs no models itself. Rent a GPU from the model's window, or run HuggingFound on your own computer.";
+  return `The site has no address for the chat server on your machine (${r.id ?? "?"}, ${r.status ?? "status unknown"}${r.ready === false ? ", Ollama not answering the site's check" : ""}). Reload the page; if this stays, stop and start the machine from the bar, which saves its addresses again, or replace it.`;
 }
 function base64Utf8(text) {
   const bytes = new TextEncoder().encode(text);
@@ -2537,6 +2547,7 @@ function chatRequest(body, signal = null) {
   if (direct) api.post("/api/rent/touch", {}).catch(() => {});
   const plain = () => fetch(direct ? `${state.chatServer.url}/api/chat` : "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), ...(signal ? { signal } : {}) });
   const agent = chatViaAgent();
+  if (!agent && state.hosted && !direct) return Promise.reject(new Error(noChatRoute()));
   if (!agent) return plain();
   // An agent from before image 28 has no chat route: the plain way then.
   return fetch(`${agent}/chat`, { method: "POST", headers: { "Content-Type": "application/json", ...agentHeaders() }, body: JSON.stringify({ b64: base64Utf8(JSON.stringify({ ...body, stream: true })) }), ...(signal ? { signal } : {}) }).then((res) => (res.status === 404 || res.status === 405 ? plain() : res));
@@ -4796,7 +4807,7 @@ async function machineReport(r) {
   } catch {
     earlier = [];
   }
-  const head = [`HuggingFound machine report, ${new Date().toLocaleString()}`, `Machine ${r.id ?? "?"}: ${r.gpu ?? "?"}${r.gpuCount > 1 ? ` x${r.gpuCount}` : ""}, ${r.gb ?? "?"} GB of card memory, disk ${r.diskGb ?? "?"} GB, data centre ${r.dataCenter ?? "?"}, status ${r.status ?? "?"}${r.containerUp === false ? " (no container yet)" : ""}, image ${r.agentVersion ?? "?"} of ${r.agentCurrent ?? "?"}`];
+  const head = [`HuggingFound machine report, ${new Date().toLocaleString()}`, `Machine ${r.id ?? "?"}: ${r.gpu ?? "?"}${r.gpuCount > 1 ? ` x${r.gpuCount}` : ""}, ${r.gb ?? "?"} GB of card memory, disk ${r.diskGb ?? "?"} GB, data centre ${r.dataCenter ?? "?"}, status ${r.status ?? "?"}${r.containerUp === false ? " (no container yet)" : ""}, image ${r.agentVersion ?? "?"} of ${r.agentCurrent ?? "?"}`, `Chat: ${state.chatServer?.url ? `Ollama's address ${state.chatServer.url} saved on the site` : "no chat address saved on the site"}${chatViaAgent() ? ", chats carried by the agent" : state.chatServer?.direct ? ", chats straight to Ollama" : ""}; Ollama ${r.ready === true ? "answering" : r.ready === false ? "not answering the site's check" : "unprobed"}, ${r.chatModels ?? "?"} chat model(s).`];
   let d = null;
   try {
     d = r.agent ? await fetch(`${r.agent}/diagnostics`, { headers: agentHeaders(), cache: "no-store", signal: AbortSignal.timeout(15e3) }).then((x) => (x.ok ? x.json() : null)) : null;

@@ -1406,11 +1406,20 @@ const server = http.createServer(async (req, res) => {
       res.on("close", () => {
         if (!res.writableEnded) gone.abort();
       });
+      // Ollama not answering next door is started again, once, before giving up.
+      const ask = () => fetch(`${OLLAMA_URL}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), signal: gone.signal });
       let upstream;
       try {
-        upstream = await fetch(`${OLLAMA_URL}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), signal: gone.signal });
+        upstream = await ask();
       } catch (err) {
-        return send(res, 502, { error: `Ollama on this machine did not answer: ${err.message}` });
+        if (gone.signal.aborted) return;
+        journal(`chat: Ollama did not answer (${err.message}); starting it again`);
+        const again = await restartOllama();
+        try {
+          upstream = await ask();
+        } catch (err2) {
+          return send(res, 502, { error: `Ollama on this machine is not running${again.ok ? "" : " and could not be started"}: ${err2.message}. Stop and start the machine from the bar.` });
+        }
       }
       res.writeHead(upstream.status, { "Content-Type": upstream.headers.get("content-type") || "application/x-ndjson", "Cache-Control": "no-store" });
       const reader = upstream.body.getReader();

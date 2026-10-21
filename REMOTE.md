@@ -579,6 +579,20 @@ current image, or a new chat without the file); anything else means
 Ollama refusing the page's address, which the message names with the
 site's own address and "replace the machine".
 
+Seen next on hardware (2026-10-21, 13:51): with the new page the error
+read "Not on the hosted site", the hosted server refusing its own
+`/api/chat`, which the page uses only when the site holds no chat address
+for the machine (`state.chatServer` empty) even though the rental and
+its agent were known. The old page had hidden that body behind "Ollama
+replied HTTP 403", so every 403 that day was this, not the firewall. Why
+the address was missing is not known: the site saves it at the rent and
+at every start. Now the page needs no address on the hosted site: a chat
+goes to the rental's agent whenever the machine has one; with no route
+at all the message names the machine's state and the way out; the agent
+starts Ollama again once when it is not answering; and the Machine
+report prints a "Chat:" line (address saved or not, route in use,
+whether Ollama answers the site's check, chat model count).
+
 The app on a computer has the same path: its server's `/api/chat` proxy
 carries the chat to the rented machine's agent (image 28, falling back to
 the plain route when the agent says 404) and, when a request is still
