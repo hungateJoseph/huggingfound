@@ -6,6 +6,7 @@ import http from "node:http";
 export const MODELS = [
   { id: "bartowski/Llama-3.2-3B-Instruct-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "text-generation", "conversational"], downloads: 250000, likes: 400, createdAt: "2024-09-25T00:00:00.000Z" },
   { id: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "code", "conversational"], downloads: 90000, likes: 120, createdAt: "2024-11-12T00:00:00.000Z" },
+  { id: "LLM4Binary/llm4decompile-6.7b-v2-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "decompile", "binary", "conversational"], downloads: 3000, likes: 40, createdAt: "2024-10-01T00:00:00.000Z" },
   { id: "bartowski/Qwen2.5-Math-7B-Instruct-GGUF", pipeline_tag: "text-generation", library_name: "gguf", tags: ["gguf", "math"], downloads: 12000, likes: 30, createdAt: "2024-10-01T00:00:00.000Z" },
   { id: "meta-llama/Llama-3.1-8B-Instruct", pipeline_tag: "text-generation", library_name: "transformers", tags: ["transformers", "safetensors", "conversational"], gated: "manual", downloads: 5000000, likes: 4000, createdAt: "2024-07-23T00:00:00.000Z" },
   { id: "unsloth/gemma-3-4b-it-GGUF", pipeline_tag: "image-text-to-text", library_name: "transformers", tags: ["gguf", "image-text-to-text"], downloads: 80000, likes: 200, createdAt: "2025-03-12T00:00:00.000Z" },
@@ -38,6 +39,7 @@ export const FILES = {
     { rfilename: "Llama-3.2-3B-Instruct-f16.gguf", size: 6.4 * 1024 ** 3 },
   ],
   "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF": [{ rfilename: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf", size: 4.7 * 1024 ** 3 }],
+  "LLM4Binary/llm4decompile-6.7b-v2-GGUF": [{ rfilename: "llm4decompile-6.7b-v2-Q4_K_M.gguf", size: 4.1 * 1024 ** 3 }],
   "bartowski/Qwen2.5-Math-7B-Instruct-GGUF": [{ rfilename: "Qwen2.5-Math-7B-Instruct-Q4_K_M.gguf", size: 4.7 * 1024 ** 3 }],
   "unsloth/gemma-3-4b-it-GGUF": [
     { rfilename: "gemma-3-4b-it-Q4_K_M.gguf", size: 2.5 * 1024 ** 3 },

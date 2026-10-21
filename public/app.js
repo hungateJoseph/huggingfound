@@ -524,7 +524,7 @@ function pickCard(p) {
     <div class="name" title="${esc(p.id.split("/").pop())}">${esc(p.id.split("/").pop())}</div>
     <div class="summary">${esc(p.why)}</div>
     ${p.speed ? `<div class="speed">${esc(p.speed)}</div>` : ""}
-    <div class="meta"><span class="pill makes">${esc(makes.text)}</span><span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}${state.hidden.has(p.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}</div>
+    <div class="meta"><span class="pill makes">${esc(makes.text)}</span>${readsTag(p)}<span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}${state.hidden.has(p.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}</div>
   </div>`;
 }
 
@@ -550,6 +550,28 @@ function makesOf(m) {
   return { kind, text, fits: (want) => (want === "images" ? kind === "images" : want === "video" ? kind === "video" : true) };
 }
 
+// What a model reads when files go with a message: every chat model reads
+// code; one trained on code says so; one trained on disassembly or
+// decompilation reads an executable's header and strings (and any
+// disassembly pasted in) for what can be learned without running it.
+const CODE_NAME_RE = /\b(code|coder|codellama|starcoder|starcoder2|deepseek-coder|codegemma|codestral|devstral|codeqwen|granite-code|wizardcoder|magicoder|opencoder|yi-coder|phind|codeshell|codefuse|aixcoder|codet5|santacoder|replit-code|stable-code|qwen2\.5-coder|qwen3-coder|seed-coder)\b/i;
+const BINARY_RE = /decompil|disassembl|reverse[- ]?engineer|binary (analysis|code|lifting|similarity|function)|\b(asm|assembly|x86|x86-64|arm64|aarch64) (code|instructions?|to)\b|\bghidra\b|\bida ?pro\b|malware (analysis|detection)|\bbinar(y|ies)\b.*\b(llm|model)\b|llm4decompile|llm4binary|\bnova\b.*\bbinar|\bbint5\b|\bslade\b|\bbinllm/i;
+function readsOf(m) {
+  const kind = makesOf(m).kind;
+  if (!["text", "vision"].includes(kind)) return null;
+  const name = String(m.id ?? "").split("/").pop() ?? "";
+  const tags = (m.tags ?? []).map(String);
+  const cats = m.categories ?? [];
+  const words = [m.id, ...tags, typeof m.summary === "string" ? m.summary : `${m.summary?.short ?? ""} ${m.summary?.long ?? ""}`, m.why].filter(Boolean).join(" ");
+  if (BINARY_RE.test(words) || tags.some((t) => /decompil|disassembl|reverse-engineering|binary-analysis|malware/i.test(t))) return { level: "binaries", text: "Reads code and binaries", title: "Trained on disassembly or decompilation. Attach an executable to a message and it reads the file's header and the readable strings inside it, and any disassembly you paste; nothing is run." };
+  if (cats.includes("coding") || CODE_NAME_RE.test(name) || tags.some((t) => /^(code|coding|code-generation|programming)$/i.test(t))) return { level: "code", text: "Trained on code", title: "Trained on code: attach code files to a message and it reads them, and it writes code. An executable attached is read as its header and strings." };
+  return { level: "any", text: "Reads code", title: "Any chat model reads code files attached to a message; this one was not trained for code in particular." };
+}
+function readsTag(m) {
+  const r = readsOf(m);
+  return r ? `<span class="pill reads ${r.level}" title="${esc(r.title)}">${esc(r.text)}</span>` : "";
+}
+
 // What a search is after, when its words say so.
 function wantsFrom(q) {
   if (/\b(videos?|animations?|animate|clips?|film|movie|img2vid|text-to-video|t2v)\b/i.test(q)) return "video";
@@ -569,6 +591,7 @@ function modelCard(m, wants = null) {
     ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
     <div class="meta">
       ${makesTag}
+      ${readsTag(m)}
       ${state.hidden.has(m.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}
       ${m.isNew ? '<span class="pill new">New</span>' : ""}
       ${m.adult ? '<span class="pill adult">18+</span>' : ""}
@@ -1642,7 +1665,57 @@ const MAX_FILES = 60;
 const MAX_FILE_BYTES = 400 * 1024;
 const MAX_FILES_CHARS = 600 * 1000;
 const SKIP_DIRS = /(^|\/)(node_modules|\.git|\.hg|\.svn|dist|build|out|target|coverage|\.next|\.nuxt|\.cache|\.venv|venv|env|__pycache__|\.idea|\.vscode|vendor|Pods|DerivedData)\//;
-const BINARY_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|icns|svgz|mp[34]|m4[av]|wav|flac|ogg|webm|mov|avi|mkv|zip|gz|bz2|xz|7z|rar|tar|jar|war|pdf|docx?|xlsx?|pptx?|exe|dll|so|dylib|bin|dat|class|pyc|pyo|o|a|wasm|ttf|otf|woff2?|eot|safetensors|gguf|ckpt|pt|pth|onnx|sqlite|db|lock|DS_Store)$/i;
+// Pictures, sound, archives, documents, fonts and model weights are left
+// out; executables and other binaries are read, not run: their header and
+// the readable strings inside them go to the model.
+const MEDIA_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|icns|svgz?|mp[34]|m4[av]|wav|flac|ogg|webm|mov|avi|mkv|zip|gz|bz2|xz|7z|rar|tar|tgz|pdf|docx?|xlsx?|pptx?|ttf|otf|woff2?|eot|safetensors|gguf|ckpt|pt|pth|onnx|sqlite|db|lock|DS_Store)$/i;
+const EXEC_EXT = /\.(exe|dll|sys|so(\.\d+)*|dylib|bin|elf|o|a|lib|class|pyc|pyo|wasm|dex|apk|ipa|efi|com|msi|out|dat)$/i;
+const MAX_BINARY_BYTES = 64 * 1024 * 1024;
+const ELF_MACHINES = { 3: "x86", 62: "x86-64", 40: "ARM", 183: "ARM64", 243: "RISC-V", 8: "MIPS", 20: "PowerPC", 21: "PowerPC64", 22: "s390" };
+const PE_MACHINES = { 0x14c: "x86", 0x8664: "x86-64", 0x1c0: "ARM", 0xaa64: "ARM64", 0x200: "Itanium" };
+function binaryDigest(bytes) {
+  const b = bytes;
+  const u16 = (i) => (b[i] ?? 0) | ((b[i + 1] ?? 0) << 8);
+  const u32 = (i) => ((b[i] ?? 0) | ((b[i + 1] ?? 0) << 8) | ((b[i + 2] ?? 0) << 16) | ((b[i + 3] ?? 0) << 24)) >>> 0;
+  const starts = (...xs) => xs.every((x, i) => b[i] === x);
+  let format = "not a known executable format";
+  if (starts(0x7f, 0x45, 0x4c, 0x46)) {
+    const type = { 1: "relocatable object", 2: "executable", 3: "shared library", 4: "core dump" }[u16(16)] ?? `type ${u16(16)}`;
+    format = `ELF ${b[4] === 2 ? 64 : 32}-bit ${type}, ${ELF_MACHINES[u16(18)] ?? `machine ${u16(18)}`}, ${b[5] === 2 ? "big" : "little"}-endian`;
+  } else if (starts(0x4d, 0x5a)) {
+    const pe = u32(60);
+    if (pe + 26 < b.length && b[pe] === 0x50 && b[pe + 1] === 0x45) format = `Windows PE${u16(pe + 24) === 0x20b ? "32+" : ""} ${u16(pe + 22) & 0x2000 ? "DLL" : "executable"}, ${PE_MACHINES[u16(pe + 4)] ?? `machine 0x${u16(pe + 4).toString(16)}`}, ${u16(pe + 6)} sections`;
+    else format = "DOS MZ executable";
+  } else if (starts(0xcf, 0xfa, 0xed, 0xfe) || starts(0xce, 0xfa, 0xed, 0xfe)) format = `Mach-O ${b[0] === 0xcf ? 64 : 32}-bit`;
+  else if (starts(0xca, 0xfe, 0xba, 0xbe)) format = u32(4) < 0x100000 && b[7] <= 0x20 ? "Mach-O universal binary" : "Java class file";
+  else if (starts(0x00, 0x61, 0x73, 0x6d)) format = "WebAssembly module";
+  else if (starts(0x64, 0x65, 0x78, 0x0a)) format = "Android DEX";
+  else if (starts(0x50, 0x4b)) format = "ZIP archive (a JAR, APK or wheel, say)";
+  const dump = [];
+  for (let i = 0; i < Math.min(b.length, 128); i += 16) dump.push(`${i.toString(16).padStart(8, "0")}  ${Array.from(b.slice(i, i + 16), (x) => x.toString(16).padStart(2, "0")).join(" ")}  ${Array.from(b.slice(i, i + 16), (x) => (x >= 32 && x < 127 ? String.fromCharCode(x) : ".")).join("")}`);
+  const strings = [];
+  let run = "";
+  let total = 0;
+  let cut = false;
+  for (let i = 0; i < b.length; i++) {
+    const c = b[i];
+    if (c >= 32 && c < 127) {
+      run += String.fromCharCode(c);
+      continue;
+    }
+    if (run.length >= 6) {
+      if (total + run.length > 200000) {
+        cut = true;
+        break;
+      }
+      strings.push(run);
+      total += run.length + 1;
+    }
+    run = "";
+  }
+  if (!cut && run.length >= 6) strings.push(run);
+  return `Executable or binary file, not run: read as its header and the readable strings inside it.\nFormat: ${format}\nSize: ${b.length} bytes\nFirst bytes:\n${dump.join("\n")}\nStrings (${strings.length}${cut ? ", the first of more" : ""}):\n${strings.join("\n")}`;
+}
 function tokensOf(text) {
   return Math.ceil(String(text ?? "").length / 3.2);
 }
@@ -1657,21 +1730,28 @@ async function readAttachments(list, folder) {
     const name = file.webkitRelativePath || file.name;
     if (folder && SKIP_DIRS.test(name)) continue;
     if (folder && /(^|\/)\./.test(name) && !/\.(env\.example|gitignore|editorconfig|prettierrc|eslintrc)/.test(name)) continue;
-    if (BINARY_EXT.test(name)) {
+    if (MEDIA_EXT.test(name)) {
       if (!folder) skipped.push(`${name} is not a text file`);
-      continue;
-    }
-    if (file.size > MAX_FILE_BYTES) {
-      skipped.push(`${name} is ${sizeText(file.size)}, more than ${sizeText(MAX_FILE_BYTES)}`);
       continue;
     }
     if (files.length >= MAX_FILES) {
       skipped.push(`${name}: at most ${MAX_FILES} files at once`);
       continue;
     }
-    const text = await file.text();
-    if (/\u0000/.test(text.slice(0, 8192))) {
-      if (!folder) skipped.push(`${name} is not a text file`);
+    // An executable (by its name, or by the bytes a text file never has)
+    // is read as a digest: header and strings, nothing run.
+    let text;
+    let binary = false;
+    if (EXEC_EXT.test(name) || (file.size <= MAX_FILE_BYTES && /\u0000/.test((text = await file.text()).slice(0, 8192)))) {
+      if (folder && !EXEC_EXT.test(name)) continue;
+      if (file.size > MAX_BINARY_BYTES) {
+        skipped.push(`${name} is ${sizeText(file.size)}, more than ${sizeText(MAX_BINARY_BYTES)}`);
+        continue;
+      }
+      text = binaryDigest(new Uint8Array(await file.arrayBuffer()));
+      binary = true;
+    } else if (file.size > MAX_FILE_BYTES) {
+      skipped.push(`${name} is ${sizeText(file.size)}, more than ${sizeText(MAX_FILE_BYTES)}`);
       continue;
     }
     if (chars + text.length > MAX_FILES_CHARS) {
@@ -1679,7 +1759,7 @@ async function readAttachments(list, folder) {
       continue;
     }
     chars += text.length;
-    files.push({ name, size: file.size, text });
+    files.push({ name, size: file.size, text, ...(binary ? { binary: true } : {}) });
   }
   return { files, skipped };
 }
@@ -1687,7 +1767,7 @@ function withFiles(text, files) {
   const blocks = files.map((f) => {
     const body = typeof f.text === "string" ? f.text : "(the contents were not kept)";
     const fence = "`".repeat(Math.max(3, (body.match(/`+/g) ?? []).reduce((n, run) => Math.max(n, run.length + 1), 0)));
-    return `### ${f.name}\n${fence}${(f.name.match(/\.(\w+)$/) ?? [])[1] ?? ""}\n${body}\n${fence}`;
+    return `### ${f.name}${f.binary ? " (an executable, read as its header and strings; not run)" : ""}\n${fence}${f.binary ? "text" : ((f.name.match(/\.(\w+)$/) ?? [])[1] ?? "")}\n${body}\n${fence}`;
   });
   return `Files attached (${files.length}):\n\n${blocks.join("\n\n")}\n\n${text}`;
 }
@@ -1707,7 +1787,7 @@ function showFiles(el, files) {
     const d = document.createElement("details");
     d.className = "msg-file";
     const sm = document.createElement("summary");
-    sm.textContent = `${f.name} · ${sizeText(f.size)}`;
+    sm.textContent = `${f.name} · ${sizeText(f.size)}${f.binary ? " · read as header and strings" : ""}`;
     d.append(sm);
     const pre = document.createElement("pre");
     pre.textContent = typeof f.text === "string" ? f.text : "(the contents were not kept in this browser)";
@@ -2183,7 +2263,7 @@ function renderChat(box, modelName) {
     const out = $("#chat-chips");
     if (!out) return;
     const files = chat.pending ?? [];
-    out.innerHTML = files.map((f, i) => `<span class="chip" title="${esc(f.name)}">${esc(f.name.split("/").pop())} <small>${esc(sizeText(f.size))}</small><button type="button" class="chip-off" data-i="${i}" aria-label="Remove ${esc(f.name)}">×</button></span>`).join("");
+    out.innerHTML = files.map((f, i) => `<span class="chip" title="${esc(f.name)}${f.binary ? ", an executable read as its header and strings, not run" : ""}">${esc(f.name.split("/").pop())} <small>${esc(sizeText(f.size))}${f.binary ? ", binary" : ""}</small><button type="button" class="chip-off" data-i="${i}" aria-label="Remove ${esc(f.name)}">×</button></span>`).join("");
     if (files.length) {
       const tokens = files.reduce((n, f) => n + tokensOf(f.text), 0);
       const note = document.createElement("span");

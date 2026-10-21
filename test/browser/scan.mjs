@@ -598,6 +598,13 @@ await step("a conversation survives re-renders, an outside click and closing the
   });
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
+  // What each reads when files go with a message: every chat model reads
+  // code, one trained on code says so, one trained on decompilation reads binaries too.
+  const readsPill = async (name) => page.locator("#models .model", { hasText: name }).first().locator(".pill.reads").innerText();
+  assert.equal(await readsPill("Qwen2.5-Coder-7B-Instruct-GGUF"), "Trained on code");
+  assert.equal(await readsPill("Llama-3.2-3B-Instruct-GGUF"), "Reads code");
+  assert.equal(await readsPill("llm4decompile-6.7b-v2-GGUF"), "Reads code and binaries");
+  assert.match(await page.locator("#models .model", { hasText: "llm4decompile" }).first().locator(".pill.reads").getAttribute("title"), /reads the file's header and the readable strings inside it[\s\S]*nothing is run/);
   await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#chat-send");
   assert.equal(await page.locator("#messages .msg").count(), 24, "the earlier conversation is back");
@@ -811,33 +818,42 @@ await step("files go with a chat message: chosen as chips, sent under their name
   await page.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 1);
   await page.setInputFiles("#chat-files", [{ name: "main.py", mimeType: "text/x-python", buffer: Buffer.from("def add(a, b):\n    return a + b\n") }]);
   await page.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 2);
+  // An executable is read, not run: its header and the strings inside it go as a digest.
+  const elf = Buffer.alloc(64 + 48);
+  Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]).copy(elf, 0);
+  elf.writeUInt16LE(2, 16);
+  elf.writeUInt16LE(62, 18);
+  elf.write("secret_handshake_v3\0/usr/lib/libcrypto.so\0", 64);
+  await page.setInputFiles("#chat-files", [{ name: "tool", mimeType: "application/octet-stream", buffer: elf }]);
+  await page.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 3);
+  assert.match(await page.locator("#chat-chips .chip").last().innerText(), /^tool\s+112 B, binary/);
   await page.fill("#chat-text", "what does add do?");
   await page.click("#chat-send");
   await page.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 0, null, { timeout: 5000 });
   await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
   const body = chatBodies.at(-1);
   const toModel = body.messages.at(-1).content;
-  assert.match(toModel, /^Files attached \(2\):\n\n### rows\.js\n```js\nexport const row0 = 0; \/\/ one line of the module\n/, "each file under its name, fenced");
-  assert.match(toModel, /### main\.py\n```py\ndef add\(a, b\):\n    return a \+ b\n\n```\n\nwhat does add do\?$/, "the words after the files");
+  assert.match(toModel, /^Files attached \(3\):\n\n### rows\.js\n```js\nexport const row0 = 0; \/\/ one line of the module\n/, "each file under its name, fenced");
+  assert.match(toModel, /### main\.py\n```py\ndef add\(a, b\):\n    return a \+ b\n\n```\n\n### tool \(an executable, read as its header and strings; not run\)\n```text\nExecutable or binary file, not run: read as its header and the readable strings inside it\.\nFormat: ELF 64-bit executable, x86-64, little-endian\nSize: 112 bytes\nFirst bytes:\n00000000  7f 45 4c 46 02 01 01 00[\s\S]*Strings \(2\):\nsecret_handshake_v3\n\/usr\/lib\/libcrypto\.so\n```\n\nwhat does add do\?$/, "the executable's digest, then the words");
   assert.ok(body.options.num_ctx >= 24576 && body.options.num_ctx % 4096 === 0, `the window holds the files and the answer (${body.options.num_ctx})`);
   const bubble = page.locator("#messages .msg.user").last();
   assert.match(await bubble.innerText(), /^what does add do\?/, "the bubble shows the words");
-  assert.deepEqual(await bubble.locator(".msg-file summary").allInnerTexts(), ["rows.js · 62 KB", "main.py · 32 B"]);
-  await bubble.locator(".msg-file summary").last().click();
-  assert.match(await bubble.locator(".msg-file pre").last().innerText(), /^def add\(a, b\):/);
+  assert.deepEqual(await bubble.locator(".msg-file summary").allInnerTexts(), ["rows.js · 62 KB", "main.py · 32 B", "tool · 112 B · read as header and strings"]);
+  await bubble.locator(".msg-file summary").nth(1).click();
+  assert.match(await bubble.locator(".msg-file pre").nth(1).innerText(), /^def add\(a, b\):/);
   // The window drawn again, as leaving and coming back does, shows the same, and the files' text is kept with the conversation.
   await page.evaluate(() => renderTry(state.model, state.plan));
   await page.waitForSelector("#chat-send");
-  assert.equal(await page.locator("#messages .msg.user").last().locator(".msg-file").count(), 2);
+  assert.equal(await page.locator("#messages .msg.user").last().locator(".msg-file").count(), 3);
   const kept = await page.evaluate(() => JSON.parse(localStorage.getItem("chat:qwen-test") ?? "[]").findLast((m) => m.role === "user"));
-  assert.deepEqual([kept.content, kept.files.map((f) => f.name), typeof kept.files[1].text], ["what does add do?", ["rows.js", "main.py"], "string"]);
+  assert.deepEqual([kept.content, kept.files.map((f) => f.name), typeof kept.files[1].text, kept.files[2].binary], ["what does add do?", ["rows.js", "main.py", "tool"], "string", true]);
   // A later message carries the earlier files along, so a follow-up question still has them.
   await page.fill("#chat-text", "and in one word?");
   await page.click("#chat-send");
   await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
   const follow = chatBodies.at(-1).messages;
   assert.equal(follow.at(-1).content, "and in one word?");
-  assert.match(follow.at(-3).content, /^Files attached \(2\):/);
+  assert.match(follow.at(-3).content, /^Files attached \(3\):/);
   assert.ok(chatBodies.at(-1).options.num_ctx >= 24576);
   await page.click("#chat-clear");
   await page.waitForFunction(() => document.querySelectorAll("#messages .msg").length === 0);
@@ -1168,6 +1184,7 @@ await step("every card says what the model makes, and a search for pictures mark
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
   assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.makes").innerText(), /Text only, no pictures/);
+  assert.equal(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.reads").innerText(), "Reads code");
   await page.click(".tab[data-tab=images]");
   assert.match(await page.locator("#models .model", { hasText: "pony-realism-v23-sdxl" }).locator(".pill.makes").innerText(), /Makes images/);
   await page.click(".tab[data-tab=speech]");
