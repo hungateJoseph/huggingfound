@@ -827,14 +827,16 @@ function rentAskHtml(choice, plan) {
   if (state.hosted && !state.user) {
     const hours = state.auth?.guestHours ?? 12;
     return `<div class="rent-ask">
-      <p><b>Renting a GPU takes a RunPod API key.</b> ${esc(size)} RunPod rents GPUs by the hour; with your key this site starts a machine for you, runs the model on it and stops it when you are done. You can enter the key as a guest: it and the machine are kept for ${hours} hours after your last use, then the machine is stopped and the key forgotten.${state.auth?.google ? " Sign in with Google to keep them for good." : ""}</p>
+      <p><b>Renting a GPU takes a RunPod or Vast.ai API key.</b> ${esc(size)} RunPod and Vast.ai rent GPUs by the hour; with your key this site starts a machine for you, runs the model on it and stops it when you are done. You can enter a key as a guest: it and the machine are kept for ${hours} hours after your last use, then the machine is stopped and the key forgotten.${state.auth?.google ? " Sign in with Google to keep them for good." : ""}</p>
       <div class="actions"><button class="primary" id="ask-yes">Enter a key as a guest</button>${state.auth?.google ? `<button class="ghost" id="ask-signin">Sign in with Google</button>` : ""}<button class="ghost" id="ask-no">I have no key yet</button>${back}</div>
       <div id="ask-yes-box" hidden>
-        <label class="field"><span>RunPod API key</span><input type="password" id="ask-key" autocomplete="off" placeholder="rpa_..."><small class="muted">Kept encrypted on this site for ${hours} hours after your last use and sent only to RunPod. Nothing you say to the model passes through this site.</small></label>
+        <label class="field"><span>RunPod API key</span><input type="password" id="ask-key" autocomplete="off" placeholder="rpa_..."><small class="muted">Sent only to RunPod.</small></label>
+        <label class="field"><span>Vast.ai API key</span><input type="password" id="ask-vast-key" autocomplete="off" placeholder="Vast.ai key"><small class="muted">Sent only to Vast.ai. One key is enough; with both, every free card from both is listed.</small></label>
+        <small class="muted">Kept encrypted on this site for ${hours} hours after your last use. Nothing you say to the model passes through this site.</small>
         <div class="actions"><button class="primary" id="ask-save">Save the key</button></div>
       </div>
       <div id="ask-no-box" hidden>
-        <p class="muted small">It takes about two minutes: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. Come back and click "Enter a key as a guest". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
+        <p class="muted small">It takes about two minutes. RunPod: make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, add some credit (ten dollars goes a long way), then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. Vast.ai: make an account at <a href="https://cloud.vast.ai" target="_blank" rel="noopener">cloud.vast.ai</a>, add credit, then under Account, API Keys, create a key. Come back and click "Enter a key as a guest". A 24 GB card costs about half a dollar an hour and a 48 GB one under a dollar.</p>
       </div>
     </div>`;
   }
@@ -953,10 +955,14 @@ function wireRentAsk(body, model, choice) {
   });
   body.querySelector("#ask-save")?.addEventListener("click", async () => {
     const value = body.querySelector("#ask-key").value.trim();
-    if (!value) return;
+    const vast = body.querySelector("#ask-vast-key")?.value.trim() ?? "";
+    if (!value && !vast) {
+      body.querySelector("#ask-key").focus();
+      return;
+    }
     const asGuest = state.hosted && !state.user;
     try {
-      await api.post(asGuest ? "/api/guest" : "/api/settings", { RUNPOD_API_KEY: value });
+      await api.post(asGuest ? "/api/guest" : "/api/settings", { ...(value ? { RUNPOD_API_KEY: value } : {}), ...(vast ? { VAST_API_KEY: vast } : {}) });
     } catch (err) {
       alert(err.message);
       return;
@@ -969,7 +975,7 @@ function wireRentAsk(body, model, choice) {
     await load();
     if (state.open) openModel(state.open);
     loadRentOptions();
-    notice(asGuest ? `The key is saved for ${state.auth?.guestHours ?? 12} hours after your last use.` : "The RunPod key is saved.", "ok");
+    notice(asGuest ? `The key is saved for ${state.auth?.guestHours ?? 12} hours after your last use.` : `The ${value && vast ? "RunPod and Vast.ai keys are" : vast ? "Vast.ai key is" : "RunPod key is"} saved.`, "ok");
   });
 }
 
@@ -5406,7 +5412,7 @@ document.addEventListener("keydown", (e) => {
 $("#save-token").addEventListener("click", async () => {
   const token = $("#token").value.trim();
   if (!token) return;
-  await api.post("/api/settings", { HF_TOKEN: token });
+  await api.post(state.hosted && !state.user ? "/api/guest" : "/api/settings", { HF_TOKEN: token });
   $("#token").value = "";
   await load();
   $("#settings").hidden = true;
@@ -5463,7 +5469,8 @@ function renderAccount() {
   // The Sign in button shows whenever Google is set up and nobody is signed
   // in for good; a guest sees it too, to keep their keys.
   $("#sign-in").hidden = (user && !user.guest) || !state.auth?.ready;
-  $("#open-settings").hidden = !user;
+  // Settings are open to everyone: a visitor who saves a key there becomes a guest.
+  $("#open-settings").hidden = false;
   // The paste-in checker is for visitors with nothing running here; with a
   // machine, every answer has its own Improve or check.
   $("#open-checker").hidden = Boolean(user);
@@ -7650,8 +7657,11 @@ async function renderImageServerStatus() {
 for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#save-github", "#clear-github"], ["#youtube-key", "YOUTUBE_API_KEY", "#save-youtube", "#clear-youtube"], ["#claude-key", "ANTHROPIC_API_KEY", "#save-claude", "#clear-claude"], ["#runpod-key", "RUNPOD_API_KEY", "#save-runpod", "#clear-runpod"], ["#vast-key", "VAST_API_KEY", "#save-vast", "#clear-vast"], ["#civitai-key", "CIVITAI_TOKEN", "#save-civitai", "#clear-civitai"]]) {
   $(save).addEventListener("click", async () => {
     const value = $(field).value.trim();
+    // A visitor's key makes them a guest on the hosted site.
+    const asGuest = state.hosted && !state.user;
+    if (asGuest && !value) return;
     try {
-      await api.post("/api/settings", { [key]: value });
+      await api.post(asGuest ? "/api/guest" : "/api/settings", { [key]: value });
     } catch (err) {
       alert(err.message);
       return;
@@ -7673,7 +7683,7 @@ for (const [field, key, save, clear] of [["#github-token", "GITHUB_TOKEN", "#sav
         return;
       }
     }
-    await api.post("/api/settings", { [key]: "" });
+    if (!(state.hosted && !state.user)) await api.post("/api/settings", { [key]: "" });
     if (key === "RUNPOD_API_KEY" || key === "VAST_API_KEY") state.rentOptions = null;
     await load();
   });

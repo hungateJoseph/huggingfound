@@ -271,6 +271,13 @@ test("deleting the account deletes the machine and every key", async () => {
 test("a guest enters a key without signing in and gets a session that expires after a quiet while", async () => {
   assert.equal((await post("/api/guest", { RUNPOD_API_KEY: "short" })).status, 400);
   assert.equal((await post("/api/guest", {})).status, 400);
+  assert.equal((await post("/api/guest", { CIVITAI_TOKEN: "short" })).status, 400);
+  // Settings are for guests and accounts; a visitor's save makes a guest instead.
+  assert.equal((await post("/api/settings", { CIVITAI_TOKEN: "0123456789abcdef0123456789abcdef" })).status, 401);
+  const viaCivitai = await post("/api/guest", { CIVITAI_TOKEN: "0123456789abcdef0123456789abcdef", HF_TOKEN: "hf_0123456789abcdef0123456789" });
+  assert.equal(viaCivitai.status, 200, "a Civitai key or a Hugging Face token makes a guest too");
+  assert.equal((await viaCivitai.json()).guest, true);
+  await post("/api/account/delete", {}, cookieOf(viaCivitai));
   const res = await post("/api/guest", { RUNPOD_API_KEY: KEY });
   assert.equal(res.status, 200);
   const made = await res.json();

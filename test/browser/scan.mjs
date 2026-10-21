@@ -1188,10 +1188,26 @@ visitor.on("pageerror", (e) => errors.push(`hosted: ${e.message}`));
 visitor.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(`hosted: ${m.text()}`));
 visitor.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));
 
-await step("hosted: a visitor who is not signed in is offered sign-in before a GPU, and Settings stay hidden", async () => {
+await step("hosted: a visitor who is not signed in reaches Settings, where a key makes them a guest, and is offered a RunPod or Vast.ai key before a GPU", async () => {
   await visitor.goto(hostedBase);
   await visitor.waitForSelector("#trait");
-  assert.equal(await visitor.locator("#open-settings").isVisible(), false);
+  assert.equal(await visitor.locator("#open-settings").isVisible(), true, "Settings are open to visitors");
+  // A key saved in Settings makes the visitor a guest; forgetting it ends the guest.
+  await visitor.click("#open-settings");
+  await visitor.waitForSelector("#settings:not([hidden])");
+  await visitor.click("#sec-hf summary");
+  await visitor.fill("#civitai-key", "0123456789abcdef0123456789abcdef");
+  await visitor.click("#save-civitai");
+  await visitor.waitForFunction(() => /You are a guest/.test(document.querySelector("#account-line")?.textContent ?? ""));
+  assert.match(await visitor.locator("#civitai-status").innerText(), /saved/i);
+  assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 1);
+  await visitor.keyboard.press("Escape");
+  await visitor.waitForSelector("#settings", { state: "hidden" });
+  acceptDialogs = true;
+  await visitor.click("#account #sign-out");
+  await visitor.waitForFunction(() => document.querySelector("#account").hidden);
+  acceptDialogs = false;
+  assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 0);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false, "no Sign in button until Google is set up; guests need none");
   assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
   await visitor.click("#nav-browse");
@@ -1200,7 +1216,9 @@ await step("hosted: a visitor who is not signed in is offered sign-in before a G
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector(".rent-ask");
-  assert.match(await visitor.locator(".rent-ask").innerText(), /takes a RunPod API key[\s\S]*kept for 12 hours after your last use/);
+  assert.match(await visitor.locator(".rent-ask").innerText(), /takes a RunPod or Vast.ai API key[\s\S]*kept for 12 hours after your last use/);
+  await visitor.click("#ask-yes");
+  assert.equal(await visitor.locator("#ask-vast-key").isVisible(), true, "a Vast.ai key can be entered too");
   assert.equal(await visitor.locator("#ask-signin").count(), 0, "no Google button when Google is not set up");
   assert.equal(await visitor.locator("#steps .step .go").count(), 0, "no Run buttons for steps on a visitor's own computer");
   await visitor.keyboard.press("Escape");
@@ -1230,7 +1248,7 @@ await step("hosted: a guest enters a key in the model window, rents, and sees wh
   await visitor.waitForFunction(() => document.querySelector("#account").hidden);
   acceptDialogs = false;
   assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 0);
-  assert.equal(await visitor.locator("#open-settings").isVisible(), false);
+  assert.equal(await visitor.locator("#open-settings").isVisible(), true);
 });
 
 await step("hosted: signed in, Settings hold only the account's keys, and the privacy page answers", async () => {
@@ -2137,7 +2155,7 @@ await step("hosted: deleting the account deletes the machine and signs out", asy
   acceptDialogs = false;
   assert.equal(runpod.state.pods[podId].status, "TERMINATED");
   assert.equal(await visitor.locator("#rent-bar").isVisible(), false);
-  assert.equal(await visitor.locator("#open-settings").isVisible(), false);
+  assert.equal(await visitor.locator("#open-settings").isVisible(), true, "Settings stay open to the visitor");
 });
 
 await step("no errors reached the console", () => {

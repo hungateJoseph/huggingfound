@@ -446,7 +446,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (!hosted) return send(res, 404, { error: "Not found" });
       const body = await json(req);
       const updates = {};
-      for (const [key, pattern, what] of [["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"], ["VAST_API_KEY", /^[\w-]{20,200}$/, "a Vast.ai API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"]]) {
+      for (const [key, pattern, what] of [["RUNPOD_API_KEY", /^[\w-]{20,200}$/, "a RunPod API key"], ["VAST_API_KEY", /^[\w-]{20,200}$/, "a Vast.ai API key"], ["ANTHROPIC_API_KEY", /^sk-ant-[\w-]{20,300}$/, "an Anthropic API key (they start with sk-ant-)"], ["HF_TOKEN", /^[\w-]{20,200}$/, "a Hugging Face token"], ["CIVITAI_TOKEN", /^[\w-]{20,200}$/, "a Civitai API key"]]) {
         if (key in body) {
           const value = String(body[key] ?? "").trim();
           if (!pattern.test(value)) return send(res, 400, { error: `That does not look like ${what}` });
@@ -475,6 +475,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       return send(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/api/settings") {
+      if (hosted && !ctx.user) return send(res, 401, { error: "Enter a key as a guest, or sign in, before saving settings here." });
       const body = await json(req);
       const updates = {};
       if (hosted) {

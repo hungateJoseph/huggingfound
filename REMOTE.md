@@ -509,6 +509,17 @@ Not yet verified on Vast.ai itself: the search filters as Vast.ai takes
 them, a rent, the image pull time, the tunnels coming up and carrying
 chat streams and picture jobs, the self-stop with the container key.
 
+## Settings for visitors, and a Vast.ai key at the rent prompt (2026-10-20)
+
+On the hosted site the Settings button shows for everyone, signed in or
+not. A visitor who saves a key there (RunPod, Vast.ai, Anthropic, Hugging
+Face or Civitai) becomes a guest through `/api/guest`, which now takes all
+five; the page routes a visitor's saves there and skips their clears,
+and `/api/settings` answers 401 to a visitor so nothing is dropped on the
+floor. The guest's keys and machine last twelve hours after the last use,
+as before. The model window's "Renting a GPU takes a RunPod or Vast.ai
+API key" prompt takes either key or both; one is enough to rent.
+
 ## LoRAs and fine-tunes for video models (2026-10-20, image 25)
 
 Every video model on the GPU has an optional "LoRAs and fine-tunes" fold
