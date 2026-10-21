@@ -2100,7 +2100,15 @@ function renderChat(box, modelName) {
         res = await chatRequest(body, ctl.signal);
         why = res.ok ? "" : await res.text().catch(() => "");
       }
-      if (!res.ok) throw new Error(res.status === 403 && chatDirect() ? refusedByMachine(why, messages.flatMap((m) => m.files ?? [])) : `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
+      if (!res.ok) {
+        let explained = "";
+        try {
+          explained = String(JSON.parse(why)?.error ?? "");
+        } catch {
+          explained = "";
+        }
+        throw new Error(res.status === 403 && chatDirect() ? refusedByMachine(why, messages.flatMap((m) => m.files ?? [])) : explained || `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
+      }
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";

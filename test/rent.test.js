@@ -42,6 +42,7 @@ before(async () => {
   runpod = await startStubRunpod();
   ollama = await startStubOllama();
   agent = await startStubAgent();
+  agent.state.ollamaUrl = ollama.url;
   // Each rented machine's agent takes only the secret it was started with:
   // every call from the site has to carry the one for the machine in force.
   agent.state.token = () => Object.values(runpod.state.pods).map((p) => p.env?.HF_AGENT_TOKEN).filter(Boolean);
@@ -238,6 +239,20 @@ test("a download waits for Ollama on a machine that is still starting, then runs
   assert.deepEqual(ollama.state.loaded, [PULLED], "warmed so the first message is quick");
   const chat = await post("/api/chat", { model: PULLED, messages: [{ role: "user", content: "hi" }] });
   assert.match(await chat.text(), /from the server/);
+  // Carried by the machine's agent (image 28), base64-wrapped, and on to Ollama there.
+  assert.equal(agent.state.chats.at(-1).messages.at(-1).content, "hi", "the chat went through the agent");
+  assert.equal(ollama.state.chats.at(-1).messages.at(-1).content, "hi", "and reached Ollama");
+  // The proxy's firewall blocking a request is told apart, with the attached file named from the message.
+  agent.state.block = true;
+  const blocked = await post("/api/chat", { model: PULLED, messages: [{ role: "user", content: "Files attached (1):\n\n### crack.exe (an executable, read as its header and strings; not run)\n```text\nMZ\n```\n\nwhat hwid" }] });
+  agent.state.block = false;
+  assert.equal(blocked.status, 403);
+  assert.match((await blocked.json()).error, /^The proxy in front of the machine \(a web firewall, Cloudflare's\) blocked this request before it reached the machine: HTTP 403, most likely over crack\.exe: .*Even carried by the machine's agent it was blocked; start a new chat without that file\.$/);
+  // Ollama refusing (a bare 403) reads differently.
+  agent.state.refuse = true;
+  const refused = await post("/api/chat", { model: PULLED, messages: [{ role: "user", content: "hi" }] });
+  agent.state.refuse = false;
+  assert.deepEqual([refused.status, (await refused.json()).error], [403, "Ollama on the machine refused this request (HTTP 403), which it does to a page from an address the machine was not rented for; replace the machine from the bar."]);
 });
 
 test("an image model's plan on the rented GPU is one download, done by the machine, with pictures made there", async () => {

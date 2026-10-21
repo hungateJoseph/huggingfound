@@ -579,6 +579,15 @@ current image, or a new chat without the file); anything else means
 Ollama refusing the page's address, which the message names with the
 site's own address and "replace the machine".
 
+The app on a computer has the same path: its server's `/api/chat` proxy
+carries the chat to the rented machine's agent (image 28, falling back to
+the plain route when the agent says 404) and, when a request is still
+refused, answers with a plain error the page shows as it is: a firewall
+block names the attached file from the message's fenced headings, a bare
+403 means Ollama refusing the address, anything else carries Ollama's
+own words. Before this the proxy passed the 403 through and the page
+blamed the model download, whatever the page's version.
+
 Origins. A machine used to be rented for one address, `SITE_ORIGIN` or
 the host the rent request came through, so a visitor at the site's other
 spelling (with or without "www") was refused. `pageOrigins()` in

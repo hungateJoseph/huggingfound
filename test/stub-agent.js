@@ -174,6 +174,12 @@ export function startStubAgent() {
         state.chats = state.chats ?? [];
         state.chats.push(inner);
         res.setHeader("Content-Type", "application/x-ndjson");
+        // Told where the stand-in Ollama is, it hands the chat on as the agent does.
+        if (state.ollamaUrl) {
+          const up = await fetch(`${state.ollamaUrl}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(inner) });
+          res.statusCode = up.status;
+          return res.end(Buffer.from(await up.arrayBuffer()));
+        }
         res.write(`${JSON.stringify({ message: { role: "assistant", content: "from the machine's agent" } })}\n`);
         return res.end(`${JSON.stringify({ done: true, eval_count: 10, eval_duration: 1e9 })}\n`);
       }

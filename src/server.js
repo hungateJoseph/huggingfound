@@ -1053,13 +1053,31 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       res.on("close", () => {
         if (!res.writableEnded) gone.abort();
       });
-      const upstream = await fetchImpl(`${ollamaUrl(chatServer(ctx))}/api/chat`, {
-        method: "POST",
-        signal: gone.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: String(body.model ?? ""), messages: Array.isArray(body.messages) ? body.messages.slice(-40) : [], stream: true, ...(typeof body.think === "boolean" ? { think: body.think } : {}), ...(Object.keys(options).length ? { options } : {}) }),
-      });
-      res.writeHead(upstream.ok ? 200 : upstream.status, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      const messages = Array.isArray(body.messages) ? body.messages.slice(-40) : [];
+      const toOllama = JSON.stringify({ model: String(body.model ?? ""), messages, stream: true, ...(typeof body.think === "boolean" ? { think: body.think } : {}), ...(Object.keys(options).length ? { options } : {}) });
+      const plain = () => fetchImpl(`${ollamaUrl(chatServer(ctx))}/api/chat`, { method: "POST", signal: gone.signal, headers: { "Content-Type": "application/json" }, body: toOllama });
+      // On a rented machine the agent carries the chat from image 28, the
+      // request base64-wrapped: the proxy in front of the machine's
+      // addresses (Cloudflare, for RunPod's) blocks a plain one whose words
+      // read like attack payloads to a web firewall, as a binary file's
+      // strings do. An older agent has no such route and says 404.
+      const rental = ctx.rental?.cached?.() ?? null;
+      const viaAgent = Boolean(rental?.rented && rental.agent && ctx.rental.owns(chatServer(ctx)) && (rental.agentVersion == null || Number(rental.agentVersion) >= 28));
+      let upstream = viaAgent ? await agentFetch(fetchImpl)(`${rental.agent}/chat`, { method: "POST", signal: gone.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ b64: Buffer.from(toOllama).toString("base64") }) }) : null;
+      if (!upstream || upstream.status === 404 || upstream.status === 405) upstream = await plain();
+      if (!upstream.ok) {
+        // What a refusal means, said plainly: a web firewall's page is the
+        // proxy blocking the request, most likely over an attached file,
+        // which the message names from the fenced headings; a bare 403 is
+        // Ollama refusing; anything else comes with Ollama's own words.
+        const why = await upstream.text().catch(() => "");
+        const files = [...new Set(messages.flatMap((m) => [...String(m.content ?? "").matchAll(/^### (.+?)(?: \(an executable[^)]*\))?$/gm)].map((x) => x[1])))];
+        const blocked = upstream.status === 403 && /cloudflare|ray id|attention required|<html/i.test(why);
+        const named = files.length ? `most likely over ${files.slice(0, 3).join(", ")}${files.length > 3 ? " and the others" : ""}: a binary file's strings, or code, read like attack payloads to it, and the files go with every later message of the conversation` : "most likely over something in the conversation that read like an attack payload to it";
+        const error = blocked ? `The proxy in front of the machine (a web firewall, Cloudflare's) blocked this request before it reached the machine: HTTP 403, ${named}.${viaAgent ? " Even carried by the machine's agent it was blocked; start a new chat without that file." : " A machine on the current image carries chats past that filter: replace the machine from the bar. Until then, start a new chat without that file."}` : upstream.status === 403 ? "Ollama on the machine refused this request (HTTP 403), which it does to a page from an address the machine was not rented for; replace the machine from the bar." : `Ollama replied HTTP ${upstream.status}${why.trim() ? `: ${why.trim().slice(0, 300)}` : ""}. Is it running and is the model downloaded?`;
+        return send(res, upstream.status === 403 ? 403 : 502, { error, status: upstream.status });
+      }
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
       const reader = upstream.body.getReader();
       let tail = "";
       for (;;) {
