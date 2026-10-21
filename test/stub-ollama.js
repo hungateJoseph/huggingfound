@@ -45,6 +45,11 @@ export function startStubOllama() {
         return res.end(JSON.stringify({ model: data.model, done: true }));
       }
       if (req.url === "/api/chat") {
+        // Like Ollama with a page from an address outside OLLAMA_ORIGINS.
+        if (state.refuse) {
+          res.statusCode = 403;
+          return res.end("Forbidden");
+        }
         state.chats.push(data);
         res.write(`${JSON.stringify({ message: { role: "assistant", content: "from the server" } })}\n`);
         return res.end(`${JSON.stringify({ done: true, eval_count: 10, eval_duration: 1e9 })}\n`);

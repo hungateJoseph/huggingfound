@@ -1399,6 +1399,15 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   await visitor.waitForFunction(() => /from the server/.test(document.querySelector("#messages")?.textContent ?? ""));
   assert.equal(rentedOllama.state.chats.length, before + 1, "the message reached the machine");
   assert.equal(rentedOllama.state.chats.at(-1).messages.at(-1).content, "hello machine");
+  // A machine rented for another address refuses the page: the message says which address, and the way out.
+  await visitor.waitForFunction(() => !document.querySelector("#chat-send").disabled);
+  rentedOllama.state.refuse = true;
+  await visitor.fill("#chat-text", "hello again");
+  await visitor.click("#chat-send");
+  await visitor.waitForFunction(() => /HTTP 403/.test(document.querySelector("#messages")?.textContent ?? ""));
+  assert.match(await visitor.locator("#messages .msg.assistant").last().innerText(), new RegExp(`The machine refused this page's address, ${hostedBase.replace(/[.]/g, "\\.")} \\(HTTP 403 from Ollama there\\)\\. A machine answers only the addresses it was rented for\\. It was rented before this address was allowed: replace the machine from the bar`));
+  rentedOllama.state.refuse = false;
+  await visitor.waitForFunction(() => !document.querySelector("#chat-send").disabled);
   assert.ok(rentedOllama.state.origins.includes(hostedBase), "sent by the page itself, from the site's origin");
   // Improve goes to Claude with the account's saved key; the site relays that one request.
   await visitor.locator("#messages .improve-go").last().click();

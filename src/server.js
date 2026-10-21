@@ -138,6 +138,25 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // machine, or an address typed into Settings on a computer. Fit and
   // speed for them follow whichever machine that is.
   const chatServer = (ctx) => ctx.settings().OLLAMA_SERVER || "";
+  // The browser addresses a rented machine must accept, since the page
+  // talks to it directly: on the hosted site, the site's configured address
+  // and the one this request came through, each with and without "www" (a
+  // visitor arrives by either, and Ollama answers 403 to any other); in the
+  // app, its own address by name and by number.
+  function pageOrigins(req) {
+    const here = `${String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers.host}`;
+    if (!hosted) return [...new Set([here, here.replace("127.0.0.1", "localhost"), here.replace("localhost", "127.0.0.1")])];
+    const out = new Set();
+    for (const o of [siteOrigin, here].filter(Boolean)) {
+      out.add(o);
+      const m = /^(https?:\/\/)(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)$/i.exec(o);
+      if (m && !/^\d+\.\d+\.\d+\.\d+$/.test(m[2])) {
+        out.add(`${m[1]}${m[2]}`);
+        out.add(`${m[1]}www.${m[2]}`);
+      }
+    }
+    return [...out];
+  }
   // Image models go to the rented machine's agent, set and cleared with the chat server.
   const imageAgent = (ctx) => ctx.settings().GPU_AGENT || "";
   const rentedChat = (ctx) => Boolean(ctx.rental?.owns(chatServer(ctx)));
@@ -390,6 +409,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         // `direct` tells the page to talk to the machine itself, so what is
         // said to a model never passes through this server.
         chatServer: remote ? { url: remote, agent: imageAgent(ctx) || null, gpuGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).gpuGb, comfortableGb: chatServerMachine(remote, saved.OLLAMA_SERVER_GB).comfortableGb, rented: rentedChat(ctx), direct: hosted } : null,
+        // The site's own address, for the page to name when a machine rented for it refuses another.
+        siteOrigin: hosted ? siteOrigin || "" : "",
         runpodKey: saved.RUNPOD_API_KEY ? mask(saved.RUNPOD_API_KEY) : "",
         vastKey: saved.VAST_API_KEY ? mask(saved.VAST_API_KEY) : "",
         civitaiToken: saved.CIVITAI_TOKEN ? mask(saved.CIVITAI_TOKEN) : "",
@@ -836,8 +857,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           // The browser talks to the machine itself (chat on the site, pictures
           // everywhere), so Ollama and the agent there must accept requests
           // from this page's address: the site's, or the app's own.
-          const here = `${String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers.host}`;
-          const origins = hosted ? [siteOrigin || here] : [...new Set([here, here.replace("127.0.0.1", "localhost"), here.replace("localhost", "127.0.0.1")])];
+          const origins = pageOrigins(req);
           return send(res, 200, await mine.rent({ gb: body.gb, diskGb: body.diskGb ?? 50, origins, provider: body.provider === "vast" ? "vast" : "runpod" }));
         }
         // A message sent straight from the browser to the machine tells the
@@ -894,8 +914,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         // even with this page closed, and rents it at no more than the price set.
         if (req.method === "POST" && action === "watch") {
           const body = await json(req);
-          const here = `${String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers.host}`;
-          const origins = hosted ? [siteOrigin || here] : [...new Set([here, here.replace("127.0.0.1", "localhost"), here.replace("localhost", "127.0.0.1")])];
+          const origins = pageOrigins(req);
           const out = mine.watchFor({ gb: body.gb, diskGb: body.diskGb, maxPricePerHour: body.maxPricePerHour, hours: body.hours, holdMinutes: body.holdMinutes, origins });
           // Checked straight away, not a minute from now.
           await mine.checkWatch().catch(() => null);

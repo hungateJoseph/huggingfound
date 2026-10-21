@@ -60,6 +60,7 @@ async function load() {
   $("#image-server").value = s.imageServer;
   renderImageServerStatus();
   state.chatServer = s.chatServer;
+  state.siteOrigin = s.siteOrigin || "";
   $("#chat-server").value = s.chatServer?.url ?? "";
   $("#chat-server-gb").value = s.chatServer?.gpuGb ?? "";
   renderChatServerStatus();
@@ -2100,7 +2101,7 @@ function renderChat(box, modelName) {
           res = await chatRequest(body, ctl.signal);
         }
       }
-      if (!res.ok) throw new Error(`Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
+      if (!res.ok) throw new Error(res.status === 403 && chatDirect() ? refusedByMachine() : `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -2491,8 +2492,17 @@ function chatHeld(held) {
 // On the hosted site the browser talks to the rented GPU itself, so what is
 // said to the model never passes through the site; on a computer the app's
 // own server relays to Ollama.
+function chatDirect() {
+  return Boolean(state.hosted && state.chatServer?.direct && state.chatServer.url);
+}
+// Ollama on the machine answers 403 to a page from an address it was not
+// rented for: the site with or without "www", say, or an older address.
+function refusedByMachine() {
+  const site = state.siteOrigin && state.siteOrigin !== location.origin ? state.siteOrigin : "";
+  return `The machine refused this page's address, ${location.origin} (HTTP 403 from Ollama there). A machine answers only the addresses it was rented for.${site ? ` This site's own address is ${site}: open it there and try again, or` : " It was rented before this address was allowed:"} replace the machine from the bar, and the new one accepts this address too.`;
+}
 function chatRequest(body, signal = null) {
-  const direct = state.hosted && state.chatServer?.direct && state.chatServer.url;
+  const direct = chatDirect();
   // The site is told only that the machine is in use, so it is not stopped as idle mid-conversation.
   if (direct) api.post("/api/rent/touch", {}).catch(() => {});
   return fetch(direct ? `${state.chatServer.url}/api/chat` : "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), ...(signal ? { signal } : {}) });

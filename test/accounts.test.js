@@ -171,10 +171,11 @@ test("renting from the site makes a machine the browser may talk to directly, an
   const r = await res.json();
   assert.equal(r.status, "PROVISIONING");
   const made = runpod.state.created.at(-1);
-  assert.equal(made.env.OLLAMA_ORIGINS, "https://huggingfound.test", "Ollama on the machine accepts this site's pages");
+  assert.deepEqual(made.env.OLLAMA_ORIGINS.split(",").slice(0, 2), ["https://huggingfound.test", "https://www.huggingfound.test"], "Ollama on the machine accepts this site's pages, with and without www");
+  assert.ok(made.env.OLLAMA_ORIGINS.split(",").some((o) => /^http:\/\/127\.0\.0\.1:\d+$/.test(o)), "and the address this request came through");
   const s = await json("/api/state", ana);
   assert.deepEqual(s.chatServer, { url: ollama.url, agent: agent.url, gpuGb: 24, comfortableGb: 21, rented: true, direct: true });
-  assert.equal(made.env.HF_ORIGINS, "https://huggingfound.test", "the agent accepts this site's pages too");
+  assert.equal(made.env.HF_ORIGINS, made.env.OLLAMA_ORIGINS, "the agent accepts the same pages");
   assert.deepEqual(made.ports, ["11434/http", "7860/http"]);
   assert.equal(made.gpu.minCudaVersion, "12.4");
   assert.equal(s.rental.id, r.id);
