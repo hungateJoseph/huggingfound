@@ -1422,14 +1422,27 @@ const server = http.createServer(async (req, res) => {
         clearInterval(heartbeat);
         if (!res.writableEnded) res.end(`${JSON.stringify({ error })}\n`);
       };
-      // Ollama not answering next door is started again, once, before giving up.
-      const ask = () => fetch(`${OLLAMA_URL}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), signal: gone.signal });
+      // Ollama is asked over a plain request with no clock on it: fetch
+      // gives up when no headers come for five minutes, and a big model
+      // loading and then reading a long request takes longer than that
+      // before its first word. Only a port nobody listens on means Ollama
+      // is down; then it is started again, once, before giving up.
+      const ask = () => new Promise((resolve, reject) => {
+        const data = JSON.stringify({ ...body, stream: true });
+        const u = new URL(`${OLLAMA_URL}/api/chat`);
+        const up = http.request({ host: u.hostname, port: u.port, path: u.pathname, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) }, timeout: 0 }, resolve);
+        up.on("error", reject);
+        gone.signal.addEventListener("abort", () => up.destroy(new Error("the page went away")), { once: true });
+        up.end(data);
+      });
+      const down = (err) => ["ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EHOSTUNREACH"].includes(err?.code);
       let upstream;
       try {
         upstream = await ask();
       } catch (err) {
         if (gone.signal.aborted) return fail("the page went away");
-        journal(`chat: Ollama did not answer (${err.message}); starting it again`);
+        if (!down(err)) return fail(`Ollama on this machine failed on the way: ${err.message}`);
+        journal(`chat: nothing answered at Ollama's port (${err.code}); starting it again`);
         const again = await restartOllama();
         try {
           upstream = await ask();
@@ -1437,28 +1450,26 @@ const server = http.createServer(async (req, res) => {
           return fail(`Ollama on this machine is not running${again.ok ? "" : " and could not be started"}: ${err2.message}. Stop and start the machine from the bar.`);
         }
       }
-      if (!upstream.ok) {
-        const why = await upstream.text().catch(() => "");
+      if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+        let why = "";
+        for await (const chunk of upstream) why += chunk;
         let said = "";
         try {
           said = JSON.parse(why).error || "";
         } catch {
           said = why.slice(0, 300);
         }
-        return fail(said || `Ollama replied HTTP ${upstream.status}`);
+        return fail(said || `Ollama replied HTTP ${upstream.statusCode}`);
       }
-      const reader = upstream.body.getReader();
-      for (;;) {
-        let chunk;
-        try {
-          chunk = await reader.read();
-        } catch {
-          break;
-        }
-        if (chunk.done) break;
-        res.write(chunk.value);
+      upstream.on("data", (chunk) => {
+        res.write(chunk);
         touchActivity();
-      }
+      });
+      await new Promise((resolve) => {
+        upstream.on("end", resolve);
+        upstream.on("error", resolve);
+        upstream.on("close", resolve);
+      });
       clearInterval(heartbeat);
       res.end();
       return;

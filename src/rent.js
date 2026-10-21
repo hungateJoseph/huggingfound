@@ -5,6 +5,7 @@
 // through HuggingFound.
 
 import crypto from "node:crypto";
+import { execSync } from "node:child_process";
 import { AGENT_VERSION } from "./plans.js";
 import { gpuSpeed } from "./speed.js";
 import { createVast, instanceToPod, hostPort, VAST_BASE, VAST_LABEL } from "./vast.js";
@@ -21,6 +22,23 @@ export const RUNPOD_BASE = "https://api.runpod.io/v2";
 // the agent for image models (gpu/ in this repository). HUGGINGFOUND_GPU_IMAGE
 // points at another build, such as a fork's.
 export const GPU_IMAGE = process.env.HUGGINGFOUND_GPU_IMAGE || "ghcr.io/hungatejoseph/huggingfound-gpu:latest";
+// The commit this site runs from (Render sets RENDER_GIT_COMMIT; the app
+// asks git), and the image built from it: every build is tagged with its
+// commit as well as "latest", and a host that has an older "latest"
+// cached would otherwise hand that one out. Rented when published; until
+// the build is through, "latest" as before.
+export function siteCommit() {
+  if (process.env.RENDER_GIT_COMMIT || process.env.HUGGINGFOUND_COMMIT) return process.env.RENDER_GIT_COMMIT || process.env.HUGGINGFOUND_COMMIT;
+  try {
+    return execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"], timeout: 3000 }).toString().trim();
+  } catch {
+    return "";
+  }
+}
+export function pinnedImage(latest = GPU_IMAGE, commit = siteCommit()) {
+  const m = /^(.+):latest$/.exec(latest);
+  return m && /^[0-9a-f]{7,40}$/.test(commit) ? `${m[1]}:${commit}` : "";
+}
 // The plain Ollama image, used when the full one cannot be pulled (not
 // published yet, or the package not public): chat models only.
 export const OLLAMA_IMAGE = "ollama/ollama";
@@ -998,10 +1016,18 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
   // (within the price, for a watch), the next one when that is taken
   // between the listing and the rent. The machine opens its tunnels
   // itself; its addresses come once it runs.
+  // The image a machine is rented with: the one built from this site's
+  // commit when the registry has it, otherwise the latest published.
+  async function chooseImage() {
+    const pinned = pinnedImage(image);
+    return pinned && (await imageCheck(pinned)) ? pinned : image;
+  }
+
   async function rentVast({ tier, disk, origins, maxPricePerHour }) {
     if (!vastKey()) throw new RentError("Add a Vast.ai API key in Settings to rent there.", 400);
+    const chosen = await chooseImage();
     // Vast.ai has no plain-Ollama fallback: the tunnels are in the full image.
-    if (!(await imageCheck(image))) throw new RentError("A Vast.ai machine needs HuggingFound's full machine image, which cannot be fetched right now. Rent at RunPod instead, or try again later.", 503);
+    if (chosen === image && !(await imageCheck(image))) throw new RentError("A Vast.ai machine needs HuggingFound's full machine image, which cannot be fetched right now. Rent at RunPod instead, or try again later.", 503);
     const count = tier.count ?? 1;
     // The listing assumes a 50 GB disk; a host is asked for room for the
     // disk wanted, since Vast.ai gives a host's free disk at most and says
@@ -1023,7 +1049,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       if (!pick) break;
       tried.push(pick.id);
       try {
-        id = await vast.create(pick.id, { image, env: podEnv, diskGb: disk, ports: [OLLAMA_PORT, AGENT_PORT] });
+        id = await vast.create(pick.id, { image: chosen, env: podEnv, diskGb: disk, ports: [OLLAMA_PORT, AGENT_PORT] });
         // The disk it was given: less than asked for, and the model would not
         // fit; that machine goes at once (nothing is on it yet) and the next host is tried.
         const got = Number((await vast.instance(id).catch(() => null))?.disk_space);
@@ -1078,7 +1104,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       // registry credential the image is private and RunPod pulls it with
       // that, so the public check is skipped.
       const auth = registryAuth();
-      const full = auth ? true : await imageCheck(image);
+      const chosen = await chooseImage();
+      const full = auth || chosen !== image ? true : await imageCheck(image);
       const count = tier.count ?? 1;
       // Stock moves between the listing and the request. A card RunPod has
       // just run out of is answered with a 400; the catalogue is asked
@@ -1102,7 +1129,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         try {
           pod = await request("POST", "/pods", {
             name: "huggingfound",
-            image: full ? image : OLLAMA_IMAGE,
+            image: full ? chosen : OLLAMA_IMAGE,
             ...(full && auth ? { registry: auth } : {}),
             ...(preferred ? { dataCenterIds: preferred } : {}),
             gpu: { id: pick.id, count, minCudaVersion: BLACKWELL.test(`${pick.id} ${pick.name}`) ? MIN_CUDA_BLACKWELL : MIN_CUDA },

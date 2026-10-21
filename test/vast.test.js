@@ -12,7 +12,7 @@ import { instanceStatus } from "../src/vast.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-vast-"));
 const { createServer } = await import("../src/server.js");
-const { GPU_IMAGE } = await import("../src/rent.js");
+const { GPU_IMAGE, pinnedImage } = await import("../src/rent.js");
 const { readEnv } = await import("../src/envfile.js");
 
 // Renting at Vast.ai, the second place: its cards listed with RunPod's,
@@ -110,7 +110,7 @@ test("a size rented at Vast.ai runs the image with its tunnels, and its HTTPS ad
   assert.ok(Math.abs(r.startAskedAt - Date.now()) < 5000, "the status says when the machine was asked for, for the page's progress");
   const made = vast.state.created.at(-1);
   assert.equal(made.offerId, 1011);
-  assert.deepEqual([made.image, made.disk, made.label, made.runtype, made.cancel_unavail], [GPU_IMAGE, 60, "huggingfound", "args", true]);
+  assert.deepEqual([made.image, made.disk, made.label, made.runtype, made.cancel_unavail], [pinnedImage(GPU_IMAGE) || GPU_IMAGE, 60, "huggingfound", "args", true], "the build of this commit, so a host's cached older image is not the one");
   assert.equal(made.env["-p 7860:7860"], "1");
   assert.equal(made.env["-p 11434:11434"], "1");
   assert.equal(made.env.HF_TUNNEL, "1");

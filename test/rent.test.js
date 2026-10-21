@@ -13,7 +13,7 @@ import { machineWait } from "../src/runners.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-rent-"));
 const { createServer } = await import("../src/server.js");
-const { createRental, GPU_IMAGE, TIERS, tierFor } = await import("../src/rent.js");
+const { createRental, GPU_IMAGE, TIERS, tierFor, pinnedImage, siteCommit } = await import("../src/rent.js");
 const { readEnv, writeEnv } = await import("../src/envfile.js");
 // A call straight to the machine's agent, as the page or another tab makes
 // it, carries the secret of the machine in force.
@@ -175,7 +175,12 @@ test("renting makes a machine with Ollama on it and points the chat server at it
   assert.equal(r.url, ollama.url);
   assert.equal(r.idleMinutes, 30);
   const made = runpod.state.created[0];
-  assert.equal(made.image, GPU_IMAGE, "Ollama plus the image agent");
+  // The image built from this very commit, tagged with it, so no host hands out a cached older "latest".
+  assert.equal(made.image, pinnedImage(GPU_IMAGE), "Ollama plus the image agent, the build of this commit");
+  assert.match(made.image, new RegExp(`:${siteCommit()}$`));
+  assert.equal(pinnedImage("ghcr.io/x/y:latest", "abc123def"), "ghcr.io/x/y:abc123def");
+  assert.equal(pinnedImage("ghcr.io/x/y:latest", ""), "", "no commit known: latest as before");
+  assert.equal(pinnedImage("ghcr.io/x/y:v2", "abc123def"), "", "a pinned setting is left alone");
   assert.equal(made.name, "huggingfound");
   assert.deepEqual(made.gpu, { id: "NVIDIA A40", count: 1, minCudaVersion: "12.4" }, "a host whose driver the compiled CUDA runtime accepts");
   assert.equal(made.cloud, "SECURE");

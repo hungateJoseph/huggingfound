@@ -621,6 +621,20 @@ page skips blank lines. A reply the browser still cannot read falls back
 to the plain route when there is one, else is said for what it is, with
 the Machine report as the next step.
 
+Then, on a Vast.ai machine (2026-10-21, 15:42, image 28 although 29 was
+published): the agent's journal read "chat: Ollama did not answer (fetch
+failed); starting it again" while the site saw Ollama answering. Node's
+fetch gives up when no headers come for five minutes, which a big model
+loading and then reading a 16,000-token digest on a Quadro RTX 6000 can
+take, and the agent took that for Ollama being down and killed it
+mid-request. Image 29 asks Ollama over a plain request with no clock on
+it and starts Ollama again only when nothing listens on its port. The
+older image on a fresh machine was the host's cached "latest": every
+build is also tagged with its commit, so a rent now asks for the image
+of the site's own commit (`pinnedImage()`, from RENDER_GIT_COMMIT or
+git) when the registry has it, and "latest" only until the build is
+through.
+
 The app on a computer has the same path: its server's `/api/chat` proxy
 carries the chat to the rented machine's agent (image 28, falling back to
 the plain route when the agent says 404) and, when a request is still
