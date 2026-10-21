@@ -593,6 +593,20 @@ starts Ollama again once when it is not answering; and the Machine
 report prints a "Chat:" line (address saved or not, route in use,
 whether Ollama answers the site's check, chat model count).
 
+Then, with the chat reaching Ollama: "request (149233 tokens) exceeds
+the available context size (131072 tokens)". The window is set as large
+as the model allows, so that limit is the model's own; the 9.2 MB
+executable's strings (up to 200,000 characters, mostly hashes and
+compressed data, near a token a character) were the weight. The digest
+now keeps only the strings worth reading (`stringScore` in app.js:
+paths, addresses, registry keys, file and API names, format strings,
+messages with words, anything about hardware, serials, licences, keys
+and identity; letter salad, symbol soup and mixed letter-digit runs
+score nothing) within 40,000 characters, about 16,000 tokens at worst;
+the token estimate counts symbol runs as tokens so the chip's warning
+is honest; and Ollama's context error is said in plain words with both
+counts.
+
 The app on a computer has the same path: its server's `/api/chat` proxy
 carries the chat to the rented machine's agent (image 28, falling back to
 the plain route when the agent says 404) and, when a request is still

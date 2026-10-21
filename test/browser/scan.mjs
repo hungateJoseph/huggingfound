@@ -834,7 +834,7 @@ await step("files go with a chat message: chosen as chips, sent under their name
   const body = chatBodies.at(-1);
   const toModel = body.messages.at(-1).content;
   assert.match(toModel, /^Files attached \(3\):\n\n### rows\.js\n```js\nexport const row0 = 0; \/\/ one line of the module\n/, "each file under its name, fenced");
-  assert.match(toModel, /### main\.py\n```py\ndef add\(a, b\):\n    return a \+ b\n\n```\n\n### tool \(an executable, read as its header and strings; not run\)\n```text\nExecutable or binary file, not run: read as its header and the readable strings inside it\.\nFormat: ELF 64-bit executable, x86-64, little-endian\nSize: 112 bytes\nFirst bytes:\n00000000  7f 45 4c 46 02 01 01 00[\s\S]*Strings \(2\):\nsecret_handshake_v3\n\/usr\/lib\/libcrypto\.so\n```\n\nwhat does add do\?$/, "the executable's digest, then the words");
+  assert.match(toModel, /### main\.py\n```py\ndef add\(a, b\):\n    return a \+ b\n\n```\n\n### tool \(an executable, read as its header and strings; not run\)\n```text\nExecutable or binary file, not run: read as its header and the readable strings inside it\.\nFormat: ELF 64-bit executable, x86-64, little-endian\nSize: 112 bytes\nFirst bytes:\n00000000  7f 45 4c 46 02 01 01 00[\s\S]*Strings \(2 kept of 2 distinct\):\nsecret_handshake_v3\n\/usr\/lib\/libcrypto\.so\n```\n\nwhat does add do\?$/, "the executable's digest, then the words");
   assert.ok(body.options.num_ctx >= 24576 && body.options.num_ctx % 4096 === 0, `the window holds the files and the answer (${body.options.num_ctx})`);
   const bubble = page.locator("#messages .msg.user").last();
   assert.match(await bubble.innerText(), /^what does add do\?/, "the bubble shows the words");

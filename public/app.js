@@ -1509,7 +1509,7 @@ function addCheck(anchor, { label, sent, payload, saved = "", onDone = null, aft
         for (const line of lines) {
           if (!line.trim()) continue;
           const j = JSON.parse(line);
-          if (j.error) throw new Error(j.error);
+          if (j.error) throw new Error(plainOllamaError(j.error));
           if (j.text) {
             const stick = scroller ? nearBottom(scroller) : false;
             text += j.text;
@@ -1694,31 +1694,65 @@ function binaryDigest(bytes) {
   else if (starts(0x50, 0x4b)) format = "ZIP archive (a JAR, APK or wheel, say)";
   const dump = [];
   for (let i = 0; i < Math.min(b.length, 128); i += 16) dump.push(`${i.toString(16).padStart(8, "0")}  ${Array.from(b.slice(i, i + 16), (x) => x.toString(16).padStart(2, "0")).join(" ")}  ${Array.from(b.slice(i, i + 16), (x) => (x >= 32 && x < 127 ? String.fromCharCode(x) : ".")).join("")}`);
-  const strings = [];
+  // Every readable run, once each; then the ones worth a model's reading
+  // (paths, names, messages, keys) within a budget a model's window holds,
+  // in the order they appear.
+  const seen = new Set();
+  const all = [];
   let run = "";
-  let total = 0;
-  let cut = false;
-  for (let i = 0; i < b.length; i++) {
+  for (let i = 0; i <= b.length; i++) {
     const c = b[i];
-    if (c >= 32 && c < 127) {
+    if (i < b.length && c >= 32 && c < 127) {
       run += String.fromCharCode(c);
       continue;
     }
-    if (run.length >= 6) {
-      if (total + run.length > 200000) {
-        cut = true;
-        break;
-      }
-      strings.push(run);
-      total += run.length + 1;
+    if (run.length >= 6 && !seen.has(run)) {
+      seen.add(run);
+      all.push(run);
     }
     run = "";
   }
-  if (!cut && run.length >= 6) strings.push(run);
-  return `Executable or binary file, not run: read as its header and the readable strings inside it.\nFormat: ${format}\nSize: ${b.length} bytes\nFirst bytes:\n${dump.join("\n")}\nStrings (${strings.length}${cut ? ", the first of more" : ""}):\n${strings.join("\n")}`;
+  const scored = all.map((text, at) => ({ text, at, score: stringScore(text) })).filter((x) => x.score > 0);
+  scored.sort((x, y) => y.score - x.score || x.at - y.at);
+  const kept = [];
+  let chars = 0;
+  for (const x of scored) {
+    if (chars + x.text.length > MAX_STRINGS_CHARS) continue;
+    chars += x.text.length + 1;
+    kept.push(x);
+  }
+  kept.sort((x, y) => x.at - y.at);
+  return `Executable or binary file, not run: read as its header and the readable strings inside it.\nFormat: ${format}\nSize: ${b.length} bytes\nFirst bytes:\n${dump.join("\n")}\nStrings (${kept.length} kept of ${all.length} distinct${kept.length < all.length ? ": the ones that read as words, names, paths, addresses, keys and messages; the rest look like data" : ""}):\n${kept.map((x) => x.text).join("\n")}`;
 }
+// How much a string from a binary is worth reading: nothing for letter
+// salad and symbol soup; more for paths, addresses, registry keys, file
+// names, API names, format strings, messages with words in them, and
+// anything about hardware, licences, keys and identity.
+const MAX_STRINGS_CHARS = 40000;
+function stringScore(s) {
+  const alnum = (s.match(/[A-Za-z0-9]/g) ?? []).length;
+  if (alnum / s.length < 0.55) return 0;
+  const letters = (s.match(/[A-Za-z]/g) ?? []).length;
+  const vowels = (s.match(/[aeiouAEIOU]/g) ?? []).length;
+  if (letters >= 10 && vowels / letters < 0.24) return 0;
+  if (/^[A-Za-z0-9+/=_-]{32,}$/.test(s) && !/\s/.test(s) && !/[\\/.]/.test(s)) return 0;
+  // Letters and digits mixed in one run, no separators: a hash, a key, a code.
+  if (/^[A-Za-z0-9]{12,}$/.test(s) && /\d/.test(s) && /[A-Za-z]/.test(s)) return 0;
+  let score = 1;
+  if (/[\\/]|https?:|www\.|\.(dll|exe|sys|so|dylib|ini|cfg|conf|json|xml|txt|log|dat|db|pdb|key|pem|lic)\b|HKEY_|SOFTWARE\\|CurrentVersion/i.test(s)) score += 3;
+  if (/^_?[A-Za-z][a-z0-9]*(?:[A-Z][a-z0-9]+){1,}[AWEx]{0,2}$/.test(s) || /^[a-z_]+(?:_[a-z0-9]+)+$/.test(s)) score += 2;
+  if (/hwid|hardware|serial|machine|guid|uuid|licen[cs]e|activation|expire|trial|register|token|auth|login|password|volume|bios|motherboard|wmi|Win32_|cpuid|mac ?address|fingerprint|identif/i.test(s)) score += 4;
+  if (/\s/.test(s) && vowels >= 3) score += 2;
+  if (/%[sdxulc]|\{\d\}|\{\}/.test(s)) score += 1;
+  if (s.length > 240) score -= 1;
+  return score;
+}
+// A token count near enough to plan a window by: words and runs of
+// symbols each cost about a token, so a binary's strings, which are
+// mostly symbols and letter salad, count far more than prose would.
 function tokensOf(text) {
-  return Math.ceil(String(text ?? "").length / 3.2);
+  const t = String(text ?? "");
+  return Math.ceil(0.85 * (t.match(/[A-Za-z]{1,6}|\d{1,3}|[^\sA-Za-z\d]/g) ?? []).length + t.length / 50);
 }
 function sizeText(bytes) {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
@@ -2121,7 +2155,7 @@ function renderChat(box, modelName) {
         for (const line of lines) {
           if (!line.trim()) continue;
           const j = JSON.parse(line);
-          if (j.error) throw new Error(j.error);
+          if (j.error) throw new Error(plainOllamaError(j.error));
           // The model's thinking comes apart from its answer: shown as it
           // comes, folded, so a long think is seen to be going on.
           const th = j.message?.thinking ?? "";
@@ -2499,6 +2533,12 @@ function chatHeld(held) {
 // On the hosted site the browser talks to the rented GPU itself, so what is
 // said to the model never passes through the site; on a computer the app's
 // own server relays to Ollama.
+// Ollama's own errors, in the words of what to do about them.
+function plainOllamaError(text) {
+  const m = /request \((\d+) tokens\) exceeds the available context size \((\d+) tokens\)/i.exec(String(text));
+  if (m) return `This conversation comes to about ${Number(m[1]).toLocaleString()} tokens and the model holds ${Number(m[2]).toLocaleString()} at most. That is the model's own limit, and the window is already set as large as it goes, so the conversation has to get smaller: start a new chat with fewer or smaller files, or ask a model with a longer context (the model's card says how long).`;
+  return String(text);
+}
 function chatDirect() {
   return Boolean(state.hosted && state.chatServer?.direct && state.chatServer.url);
 }
