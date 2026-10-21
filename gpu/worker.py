@@ -927,6 +927,79 @@ def fit_ltx_request(kwargs, params, fps, image=None):
     return steps
 
 
+class _Skipping:
+    """What the pass skipping did on the last forward: computed in full, or
+    skipped the blocks after the first and reused the last full pass."""
+
+    def __init__(self, denoiser, head):
+        self.denoiser = denoiser
+        self.head = head
+
+    def computed_last(self):
+        try:
+            with self.denoiser.cache_context("cond"):
+                return bool(self.head.state_manager.get_state().should_compute)
+        except Exception:  # noqa: BLE001
+            return True
+
+
+@contextlib.contextmanager
+def pass_skipping(pipe, threshold):
+    """Skips the denoiser's passes that would barely change anything, the
+    way TeaCache does and diffusers' first-block cache after it: each
+    pass runs the first block, compares its change with the pass before,
+    and when the two are within the threshold reuses the rest of the last
+    full pass instead of running the other blocks. Nothing is kept in the
+    model afterwards. Yields a record of what it did, or None when the
+    model has no denoiser this works on, which is said as a note."""
+    denoiser = next((getattr(pipe, n, None) for n in ("transformer", "transformer_ref") if getattr(pipe, n, None) is not None), None)
+    if not threshold or denoiser is None or not hasattr(denoiser, "enable_cache"):
+        yield None
+        return
+    try:
+        from diffusers.hooks import FirstBlockCacheConfig, HookRegistry
+        from diffusers.hooks._helpers import TransformerBlockMetadata, TransformerBlockRegistry
+
+        blocks = getattr(denoiser, "transformer_blocks", None)
+        if blocks is None or len(blocks) < 3:
+            raise ValueError("the model's denoiser has no run of blocks to skip")
+        # Blocks the library does not list yet (MiniMax-H3's) are described
+        # to it: one tensor in, the same tensor back.
+        for block in blocks:
+            try:
+                TransformerBlockRegistry.get(type(block))
+            except Exception:  # noqa: BLE001
+                TransformerBlockRegistry.register(type(block), TransformerBlockMetadata(return_hidden_states_index=0, return_encoder_hidden_states_index=None))
+            break
+        denoiser.enable_cache(FirstBlockCacheConfig(threshold=float(threshold)))
+        head = HookRegistry.check_if_exists_or_initialize(blocks[0]).get_hook("fbc_leader_block_hook")
+        if head is None:
+            raise ValueError("the cache put no hook on the first block")
+        # The hooks keep their state under a named context the denoising
+        # loop is meant to open; this model's loop opens none, so every
+        # forward is wrapped in one here. One pass a step, so one name.
+        original_forward = denoiser.forward
+
+        def forward_in_context(*args, **kwargs):
+            with denoiser.cache_context("cond"):
+                return original_forward(*args, **kwargs)
+
+        denoiser.forward = forward_in_context
+    except Exception as err:  # noqa: BLE001
+        say({"progress": 0, "note": f"passes are not skipped for this model ({type(err).__name__}: {err})"})
+        with contextlib.suppress(Exception):
+            denoiser.disable_cache()
+        yield None
+        return
+    try:
+        yield _Skipping(denoiser, head)
+    finally:
+        with contextlib.suppress(Exception):
+            del denoiser.forward
+        with contextlib.suppress(Exception):
+            denoiser.disable_cache()
+
+
 def step_counter(pipe, steps):
     """Progress for a pipeline without a step callback: a hook on the
     denoiser that reports each forward pass as a step. Returns the hook to
@@ -1058,7 +1131,9 @@ def generate(req):
             # passes count the steps instead.
             hook = step_counter(pipe, steps)
             try:
-                frames_out, images_out, audio, rate = run_modular(pipe, kwargs, kind)
+                # Passes that would barely change anything are skipped when asked.
+                with pass_skipping(pipe, req.get("cache")) as skipping:
+                    frames_out, images_out, audio, rate = run_modular(pipe, kwargs, kind)
             finally:
                 if hook:
                     hook.remove()

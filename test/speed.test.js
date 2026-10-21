@@ -57,3 +57,16 @@ test("durations and measured lines read naturally", () => {
   assert.equal(measuredText({ kind: "image", seconds: 139 }), "Measured here: 2.3 minutes per image");
   assert.equal(measuredText(null), "");
 });
+
+test("a bigger card is named when it is meaningfully faster, with what it does to a clip's cost", async () => {
+  const { fasterCards, gpuSpeed } = await import("../src/speed.js");
+  assert.equal(gpuSpeed("NVIDIA H100 80GB HBM3"), 2.8);
+  assert.equal(gpuSpeed("L40S"), 1);
+  assert.equal(gpuSpeed("Unknown Card"), null);
+  const l40s = { gpu: { name: "L40S" }, pricePerHour: 0.86, provider: "runpod" };
+  const offers = [l40s, { gpu: { name: "A40" }, pricePerHour: 0.4, provider: "runpod" }, { gpu: { name: "H100 80GB HBM3" }, pricePerHour: 2.69, provider: "runpod" }, { gpu: { name: "H100 80GB HBM3" }, pricePerHour: 2.4, provider: "vast" }, { gpu: { name: "RTX 4090" }, pricePerHour: 0.44, provider: "runpod" }, { gpu: { name: "B200" }, pricePerHour: 5.98, provider: "runpod" }];
+  const faster = fasterCards(l40s, offers);
+  assert.deepEqual(faster.map((f) => [f.gpu.name, f.provider, f.times, f.costRatio]), [["B200", "runpod", 4.2, 1.66], ["H100 80GB HBM3", "runpod", 2.8, 1.12], ["H100 80GB HBM3", "vast", 2.8, 1]], "fastest first; the A40 is slower and the 4090 not enough faster to mention");
+  assert.deepEqual(fasterCards({ gpu: { name: "B200" }, pricePerHour: 6 }, offers), [], "nothing beats the fastest");
+  assert.deepEqual(fasterCards({ gpu: { name: "Mystery" }, pricePerHour: 1 }, offers), [], "unknown speeds say nothing");
+});

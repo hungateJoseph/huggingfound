@@ -115,7 +115,7 @@ function tunnels() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "25";
+const VERSION = "26";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -496,7 +496,7 @@ function startJob(input) {
           if (!fs.existsSync(path)) throw new Error(`the LoRA ${l.file} is not on this machine yet`);
           adapters.push({ kind: "lora", path, scale: l.scale });
         }
-        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, lastInit: input.lastInit ?? undefined, references: input.references?.length ? input.references : undefined, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined, seed: input.seed ?? undefined };
+        const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, lastInit: input.lastInit ?? undefined, references: input.references?.length ? input.references : undefined, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined, seed: input.seed ?? undefined, cache: input.cache ?? undefined };
         let answer;
         for (let attempt = 0; ; attempt++) {
           await ensureWorkerLoaded(file, adapters, input.references?.length ? "ref2va" : null);
@@ -1452,7 +1452,10 @@ const server = http.createServer(async (req, res) => {
       }
       // The same seed with revised words keeps a scene close to the one before.
       const seed = Number.isInteger(body.seed) && body.seed >= 0 && body.seed < 2 ** 31 ? body.seed : null;
-      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed, lastInit, references, loras: loraList, finetune });
+      // Skip the denoiser's passes that would barely change anything: the
+      // threshold for "barely", as a fraction; nothing means every pass runs.
+      const cache = Number.isFinite(body.cache) && body.cache > 0 && body.cache <= 1 ? body.cache : null;
+      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed, lastInit, references, loras: loraList, finetune, cache });
       return send(res, 202, { id: job.id, status: job.status });
     }
     const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})(\/result|\/last)?$/);

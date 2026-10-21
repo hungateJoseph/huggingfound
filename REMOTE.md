@@ -509,6 +509,42 @@ Not yet verified on Vast.ai itself: the search filters as Vast.ai takes
 them, a rent, the image pull time, the tunnels coming up and carrying
 chat streams and picture jobs, the self-stop with the container key.
 
+## Skipped passes, faster cards, and LoRAs per shot (2026-10-20, image 26)
+
+Skipped passes. MiniMax-H3 is guidance-distilled: one forward pass a
+step, no unconditional pass, so `cfg` does nothing there and the only
+levers are steps, canvas and frames. "Skip passes that barely change"
+under the quality levels (per model, kept in this browser as
+`fastPasses:<repo>`) sends `cache: 0.1` with the job; the agent passes it
+to the worker, whose `pass_skipping(pipe, threshold)` turns on diffusers'
+first-block cache (TeaCache's idea: run the first block, compare its
+change with the pass before, and when within the threshold reuse the
+rest of the last full pass) on the denoiser for that one generation and
+takes it off afterwards. MiniMax-H3's blocks are not in the library's
+block registry, so the worker registers them (one tensor in, the same
+back), and its denoising loop opens no cache context, so the worker
+wraps the denoiser's forward in one. The page guesses 0.65 of the time;
+the real ratio is untested on hardware (expect 1.3 to 2 times on clips,
+less on short ones). Checked on the tiny transformer in
+test/minimax_cache_check.py: threshold 0 changes nothing, 0.1 skips some
+passes and stays within cosine 0.98, the hooks are gone afterwards.
+Machines before image 26 ignore `cache` (the page says so).
+
+Faster cards. Every card in the rent options carries `speed` (src/speed.js
+`gpuSpeed`, an L40S as 1: H100 2.8, H200 3.2, B200 4.2, RTX 5090 2.1,
+A100 1.6, RTX 4090 1.5, A40 0.7). The model window's rent offer names
+up to three cards at least as big as the pick and a third or more faster,
+with the cost per clip next to the pick's (price up over time down).
+
+LoRAs per shot. A scene's shot rows each list the LoRAs on the machine
+with a tick and a strength, starting from the model's ticks; a shot's
+choice goes with its piece (`shot.loras` → `item.shotLoras` →
+`loraJobPart(t, own)`), is kept on the entry (`loras`) so a fix remakes
+the shot with the same, and "Fit the words to the LoRAs" sends that
+shot's words with its ticked LoRAs through the suggest mode, takes the
+Description and the Strength lines, and notes why. Every shot still
+starts from the last frame of the one before.
+
 ## Settings for visitors, and a Vast.ai key at the rent prompt (2026-10-20)
 
 On the hosted site the Settings button shows for everyone, signed in or

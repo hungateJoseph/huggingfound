@@ -6,6 +6,7 @@
 
 import crypto from "node:crypto";
 import { AGENT_VERSION } from "./plans.js";
+import { gpuSpeed } from "./speed.js";
 import { createVast, instanceToPod, hostPort, VAST_BASE, VAST_LABEL } from "./vast.js";
 //
 // RunPod first: its API (api.runpod.io/v2) creates a pod from a container
@@ -449,7 +450,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         return true;
       })
       .slice(0, 6)
-      .map((o) => ({ id: o.offerId, name: o.name, memory: cardGb(o.memoryMb), availability: "HIGH", pricePerHour: Math.round(o.pricePerHour * 1000) / 1000, cloud: "VAST", dataCenters: [], location: o.location, reliability: o.reliability, storagePerGbMonth: o.storagePerGbMonth, downloadPerTb: o.downloadPerTb }));
+      .map((o) => ({ id: o.offerId, name: o.name, memory: cardGb(o.memoryMb), availability: "HIGH", pricePerHour: Math.round(o.pricePerHour * 1000) / 1000, cloud: "VAST", dataCenters: [], location: o.location, reliability: o.reliability, storagePerGbMonth: o.storagePerGbMonth, downloadPerTb: o.downloadPerTb, speed: gpuSpeed(o.name) }));
     return { gpu: cards[0] ?? null, pricePerHour: cards[0]?.pricePerHour ?? null, available: cards.length > 0, cards, ...(found.error ? { error: found.error } : {}) };
   }
 
@@ -478,7 +479,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         const gpus = (list ?? []).filter((g) => g[key] !== false && Number(g.memory) > 0 && gpuSupported(g));
         // A host holds at most so many of a card; a size asking for more than that is not on offer.
         const inTier = gpus.filter((g) => g.memory >= tier.min && g.memory <= tier.max && typeof g.price?.[key] === "number" && !(Number(g.maxCount?.[key]) >= 1 && g.maxCount[key] < count));
-        const card = (g) => ({ id: g.id, name: g.name || g.id, memory: g.memory, availability: g.availability ?? "UNKNOWN", pricePerHour: g.price[key] * count, cloud, dataCenters: cloud === "SECURE" ? dataCentersOf(g) : [] });
+        // `speed`: how fast the card is next to an L40S, for the page to say when a bigger one is worth it.
+        const card = (g) => ({ id: g.id, name: g.name || g.id, memory: g.memory, availability: g.availability ?? "UNKNOWN", pricePerHour: g.price[key] * count, cloud, dataCenters: cloud === "SECURE" ? dataCentersOf(g) : [], speed: gpuSpeed(`${g.name || ""} ${g.id || ""}`) });
         const byPrice = (a, b) => a.price[key] - b.price[key];
         return { free: inTier.filter((g) => g.availability && g.availability !== "NONE").sort(byPrice).map(card), all: inTier.sort(byPrice).map(card) };
       };

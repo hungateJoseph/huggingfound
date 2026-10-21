@@ -116,7 +116,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
   delete h.diskFreeGb;
   delete h.diskTotalGb;
   delete h.diskUsedGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "25", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "26", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
   // On Vast.ai the Cloudflare tunnels' addresses are read from their logs
   // and said on /health: the latest each, since a dropped tunnel comes back
   // with a new one.
@@ -260,13 +260,13 @@ test("a diffusers-family model is fetched as a folder, loaded by the Python work
   const again = (await (await post("/download-repo", { repo: QWEN, files })).text()).trim().split("\n").map((l) => JSON.parse(l));
   assert.equal(again[0].status, "already here");
   // A picture through the worker, with the diffusers-style settings.
-  const job = await (await post("/jobs", { repo: QWEN, file: "model_index.json", prompt: "a lighthouse", negative: "blurry", steps: 28, width: 1024, height: 768, cfg: 4 })).json();
+  const job = await (await post("/jobs", { repo: QWEN, file: "model_index.json", prompt: "a lighthouse", negative: "blurry", steps: 28, width: 1024, height: 768, cfg: 4, cache: 0.1 })).json();
   const done = await finish(job.id);
   assert.equal(done.status, "completed", done.error);
   assert.equal(done.kind, "image");
   assert.match(done.image, /^iVBOR/);
   const asked = fs.readFileSync(workerLog, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
-  assert.deepEqual([asked.op, asked.prompt, asked.negative, asked.steps, asked.width, asked.height, asked.cfg], ["generate", "a lighthouse", "blurry", 28, 1024, 768, 4]);
+  assert.deepEqual([asked.op, asked.prompt, asked.negative, asked.steps, asked.width, asked.height, asked.cfg, asked.cache], ["generate", "a lighthouse", "blurry", 28, 1024, 768, 4, 0.1], "the pass-skipping threshold goes to the worker");
   const h = await (await get("/health")).json();
   assert.equal(h.loaded, `${QWEN}/model_index.json`);
   assert.equal(h.ready, true);
@@ -574,16 +574,16 @@ test("removing a model unloads it and frees the disk", async () => {
 
 test("the machine reports on itself: what it runs, holds, has loaded and how its failures went, with a journal on its disk", async () => {
   const d = await (await get("/diagnostics")).json();
-  assert.equal(d.version, "25");
+  assert.equal(d.version, "26");
   assert.ok(d.agentUptimeSeconds >= 0);
   assert.deepEqual([d.env.HF_DISK_GB, typeof d.disk.totalGb, Array.isArray(d.models), Array.isArray(d.failures), typeof d.journal], ["50", "number", true, true, "string"]);
-  assert.match(d.journal, /agent 25 started: disk 50 GB/);
+  assert.match(d.journal, /agent 26 started: disk 50 GB/);
   assert.match(d.journal, /job .* done|failed/, "jobs from the tests before are in it");
   assert.ok(d.failures.length > 0, "the failed jobs of the tests before are remembered");
   for (const k of ["at", "error", "jobId", "kind", "trace", "what"]) assert.ok(k in d.failures[0], `a failure carries ${k}`);
   assert.equal(typeof d.ollamaLog, "string", "Ollama's log is in the report");
   const text = await (await get("/journal?lines=50")).text();
-  assert.match(text, /agent 25 started/);
+  assert.match(text, /agent 26 started/);
   assert.ok(fs.existsSync(path.join(modelsDir, "..", "journal.log")), "the journal lives on the disk beside the models");
 });
 

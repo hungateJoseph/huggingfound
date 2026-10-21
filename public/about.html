@@ -77,61 +77,6 @@
 
     <h2>Who</h2>
     <p>Joseph Hungate, a software engineer in Seattle. Three and a half years at Amazon Web Services on S3 (August 2022 to January 2026), four years before that as a Cyber Software Engineering Officer in the U.S. Army, and a B.S. in Computer Science from Rice University.</p>
-    <ul>
-      <li><b>At AWS</b> I was the tech lead for S3 Express One Zone's billing architecture (15 pricing models, automated canaries and regional rollouts), led the GDPR deletion platform for S3 Tables used across internal services, and led a three-engineer team taking S3 Tables into ten new regions.</li>
-      <li><b>In the Army</b> I was the lead engineer moving seven brigade-level planning systems onto AWS with identity-first access control, and built the CI/CD pipeline that patched hosts for more than a thousand soldiers in the field.</li>
-      <li><b>Now</b> I build tools that make AI models easier to use and easier to trust: this site, and the projects below.</li>
-    </ul>
-
-    <h2>How HuggingFound is built</h2>
-    <p>The whole thing is a small Node server and a hand-written page, with no framework and a single third-party library (Anthropic's SDK, for the optional Claude check). Everything else, from the Hugging Face client to the GPU rental to the Google sign-in, is written in this repository so that it can be read end to end.</p>
-    <div class="facts">
-      <div class="fact"><b>1</b><span>runtime dependency</span></div>
-      <div class="fact"><b>237</b><span>tests, and a real-browser run</span></div>
-      <div class="fact"><b>0</b><span>conversations kept on the server</span></div>
-      <div class="fact"><b>~$8</b><span>a month to host</span></div>
-    </div>
-    <ul class="stack">
-      <li><b>Search</b> ranks models by name, by category and by what people say about them in model cards, Hub discussions, Civitai, GitHub issues, Hacker News, Lemmy, YouTube and Reddit, with refusal-prone models filtered out.</li>
-      <li><b>Fit and speed</b> are estimated from the file size and the machine's memory and GPU before anything is downloaded; measured times replace the guesses after a real run.</li>
-      <li><b>Local runs</b> drive Ollama, whisper.cpp and stable-diffusion.cpp from a fixed set of checked commands, including merging a diffusers repository into one checkpoint.</li>
-      <li><b>GPU rental</b> starts a RunPod machine from a custom image built in GitHub Actions, stops it when idle or at a daily spend cap, survives server restarts, and moves the rental to another data centre when one runs out of stock.</li>
-      <li><b>Privacy by construction</b>: the browser talks to the rented GPU directly, so what a visitor says to a model never passes through the site. Account keys are encrypted at rest. <a href="/privacy.html">The privacy page</a> is kept true by the tests.</li>
-      <li><b>Claude as a second opinion</b>: every answer and every picture can be checked or revised by Claude with the visitor's own key, which is never stored.</li>
-      <li><b>Hosting</b>: one Docker image on Render, defined in the repository, with Google OAuth sign-in and guest sessions that expire on their own.</li>
-      <li><b>Testing</b>: unit and API suites against stand-ins for the Hub, RunPod, Ollama and the GPU agent, and a Playwright test that drives the real page in Chrome through a rental.</li>
-    </ul>
-
-    <h2>Other projects</h2>
-    <div class="project">
-      <h3><a href="https://oopsiblinked.com" target="_blank" rel="noopener">Blinked</a></h3>
-      <p>An agent builder for photographers. Describe a job in plain words and get a plan with who does each step, what it costs and how long, then hand it to an agent that runs across Amazon, Instacart, AWS, Fiverr, TaskRabbit and SMS. Schedules by part of day, publishes open times to a shareable page, takes enquiries without a sign-up, imports from Google Drive, and scans a photo library for blur, closed eyes and framing problems.</p>
-      <p><a href="https://github.com/hungateJoseph/blinked" target="_blank" rel="noopener">Code on GitHub</a></p>
-      <div class="tags"><span class="tag">TypeScript</span><span class="tag">Next.js</span><span class="tag">LLM agents</span><span class="tag">Vision</span><span class="tag">Live at oopsiblinked.com</span></div>
-    </div>
-    <div class="project">
-      <h3><a href="https://github.com/hungateJoseph/agentforge" target="_blank" rel="noopener">AgentForge</a></h3>
-      <p>A local app that takes the accounts you already have (Anthropic, OpenAI, Twilio, Stripe, Slack, GitHub, Gmail and a dozen more), keeps the keys in a .env on your machine, and tells you what they can do together as an agent, what no key can do, and which orchestrator (n8n, MCP servers, Composio, plain code) covers the most of your set.</p>
-      <div class="tags"><span class="tag">JavaScript</span><span class="tag">MCP</span><span class="tag">n8n</span><span class="tag">Runs locally</span></div>
-    </div>
-
-    <h2>Open-source contributions</h2>
-    <p>Fixes to the tools I use, each one a reproducible bug with a test. Merged ones are in a release or on their way to one.</p>
-    <table>
-      <tr><th>Project</th><th>Change</th><th>Status</th></tr>
-      <tr><td><a href="https://github.com/vitejs/vite/pull/23636" target="_blank" rel="noopener">Vite</a></td><td>Skip caching CSS of chunks in an import cycle</td><td class="merged">Merged</td></tr>
-      <tr><td><a href="https://github.com/nitrojs/nitro/pull/4683" target="_blank" rel="noopener">Nitro</a></td><td>Externalize a package's own entry as its bare name</td><td class="merged">Merged</td></tr>
-      <tr><td><a href="https://github.com/vuejs/language-tools/pull/6231" target="_blank" rel="noopener">Vue language tools</a></td><td>Stop checking JS Vue files as TypeScript in component-meta</td><td class="merged">Merged</td></tr>
-      <tr><td><a href="https://github.com/medusajs/medusa/pull/17072" target="_blank" rel="noopener">Medusa</a></td><td>Resume a multi-key lock acquisition from the key it waited on</td><td class="open">Open</td></tr>
-      <tr><td><a href="https://github.com/TanStack/router/pull/8541" target="_blank" rel="noopener">TanStack Router</a></td><td>Preserve route exports under code splitting</td><td class="open">Open</td></tr>
-      <tr><td><a href="https://github.com/storybookjs/storybook/pull/36472" target="_blank" rel="noopener">Storybook</a></td><td>Keep negated tags when a story is extended; register the toolbar landmark only while shown</td><td class="open">Open</td></tr>
-      <tr><td><a href="https://github.com/nrwl/nx/pull/37207" target="_blank" rel="noopener">Nx</a></td><td>Prune npm lockfile workspace packages that have no name field</td><td class="open">Open</td></tr>
-      <tr><td><a href="https://github.com/volarjs/volar.js/pull/320" target="_blank" rel="noopener">Volar</a></td><td>Keep overlapping completion requests from sharing one result list</td><td class="open">Open</td></tr>
-      <tr><td><a href="https://github.com/iamkun/dayjs/pull/3240" target="_blank" rel="noopener">Day.js</a></td><td>Apply the week token when parsing in UTC mode</td><td class="open">Open</td></tr>
-    </table>
-
-    <h2>Get in touch</h2>
-    <p>I am open to software engineering roles, especially ones that put AI models in front of people who are not engineers. The fastest way to reach me is <a href="mailto:hungatejoseph@gmail.com">email</a>; the code for everything above is on <a href="https://github.com/hungateJoseph" target="_blank" rel="noopener">GitHub</a>, and a bug report or a pull request on <a href="https://github.com/hungateJoseph/huggingfound/issues" target="_blank" rel="noopener">this site's repository</a> is always welcome.</p>
   </main>
   <footer class="site-foot">
     <span class="muted small">HuggingFound</span>

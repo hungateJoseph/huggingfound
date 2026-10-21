@@ -1234,6 +1234,7 @@ await step("hosted: a guest enters a key in the model window, rents, and sees wh
   await visitor.click("#ask-save");
   await visitor.waitForSelector(".rent-offer #ask-size");
   assert.equal(await visitor.locator(".rent-offer #ask-size").inputValue(), "48");
+  assert.match(await visitor.locator(".rent-faster").innerText(), /^Faster cards\. A100 PCIe \(80 GB\) makes clips about 2\.3 times faster for \$1\.64 an hour, about 1\.79 times the cost per clip\. Pick that size above if time matters more than price\.$/, "the bigger size whose card is meaningfully faster, with the cost per clip next to the A40 picked; the 24 GB card is faster but too small");
   assert.equal(await visitor.locator("#settings").isHidden(), true, "no Settings panel over the window");
   assert.match(await visitor.locator("#account").innerText(), /Guest, keys kept until/);
   assert.match(await visitor.locator("#account-line").innerText(), /You are a guest[\s\S]*12 hours after your last use/);
@@ -1997,7 +1998,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.waitForSelector("#gpu-runs li");
   // The machine's own report, to read or copy: what it runs, holds and how its failures went.
   await visitor.click("#gpu-report");
-  await visitor.waitForFunction(() => /Agent 25, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  await visitor.waitForFunction(() => /Agent 26, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
   assert.match(await visitor.locator("#gpu-report-out").innerText(), /Python 3\.12\.3, torch 2\.6\.0 \(CUDA 12\.4\), diffusers 0\.41\.0, transformers 5\.5\.3, peft 0\.18\.0, av 15\.0\.0[\s\S]*Cards: Fake A40 48 GB[\s\S]*Disk: 41\.5 GB free of 50, 8\.5 GB in the machine's folders \(a quota; the size as the site said it\)[\s\S]*No failures on this machine\.[\s\S]*Journal \(tail\):/);
   assert.equal(await visitor.locator("#gpu-report-copy").isHidden(), false);
   assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");
@@ -2116,6 +2117,10 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.match(await visitor.inputValue("#image-prompt"), /^mvmt, the man as in the picture eating an apple/);
   await visitor.waitForFunction(() => document.querySelector(".lora-row .lora-strength")?.value === "0.7");
   assert.match(await visitor.locator(".lora-row .lora-settings-pill").innerText(), /30 steps, guidance 1/);
+  // Passes that barely change can be skipped: a switch under the levels, kept per model.
+  assert.equal(await visitor.isChecked("#fast-passes"), false);
+  await visitor.check("#fast-passes");
+  assert.match(await visitor.locator("#estimate").innerText(), /Passes that barely change are skipped\./);
   // The next clip carries it, at the creator's steps and guidance.
   await visitor.fill("#image-prompt", "a kite over a field");
   await visitor.click("#image-go");
@@ -2126,6 +2131,7 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.equal(sent.finetune, undefined);
   assert.equal(sent.steps, 30, "the creator's steps");
   assert.equal(sent.cfg, 1, "the creator's guidance");
+  assert.equal(sent.cache, 0.1, "the pass-skipping threshold");
   await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 30000 });
   // The window opened again shows the same: ticked, at 0.7.
   await visitor.evaluate(() => openModel("Wan-AI/Wan2.2-TI2V-5B-Diffusers"));
@@ -2140,6 +2146,35 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   // Unticked, the next clip goes without it.
   await again.locator(".lora-on").uncheck();
   assert.match(await visitor.locator("#loras-count").innerText(), /^optional$/);
+  assert.equal(await visitor.isChecked("#fast-passes"), true, "the switch is kept per model");
+  await visitor.uncheck("#fast-passes");
+  // A scene: each shot ticks its own LoRAs at its own strength, starting
+  // from the model's ticks (none now); Claude fits one shot's words to its
+  // LoRA; only that shot's job carries it.
+  await pickKind(visitor, "scene");
+  await visitor.fill("#video-seconds", "8");
+  await visitor.fill("#image-prompt", "a man skips rope, then drinks water, then eats an apple");
+  await visitor.click("#scene-preview");
+  await visitor.waitForSelector("#shots li");
+  assert.match(await visitor.locator("#suggest").innerText(), /Each shot ticks its own LoRAs at its own strength/);
+  assert.equal(await visitor.locator("#shots li .shot-lora").count(), 3, "one LoRA row per shot");
+  assert.deepEqual(await visitor.$$eval("#shots .shot-lora-on", (els) => els.map((e) => e.checked)), [false, false, false], "from the model's ticks: none");
+  const shot1 = visitor.locator("#shots li").nth(0);
+  await shot1.locator(".shot-lora-on").check();
+  await shot1.locator(".shot-lora-strength").fill("0.6");
+  await shot1.locator(".shot-fit-lora").click();
+  await visitor.waitForFunction(() => /Fitted by Claude/.test(document.querySelector("#shots li .shot-lora-note")?.textContent ?? ""));
+  assert.match(await shot1.locator(".shot-text").inputValue(), /^mvmt, /, "the shot's words in the LoRA's shape, trigger word first");
+  assert.equal(await shot1.locator(".shot-lora-strength").inputValue(), "0.7", "the strength the creator recommends");
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).loras.length, reviewed.at(-1).loras[0].strength, reviewed.at(-1).seconds], ["suggest", 1, 0.6, 4]);
+  const sceneJobs = rentedAgent.state.jobs.length;
+  await visitor.click("#scene-go");
+  for (let i = 0; i < 300 && rentedAgent.state.jobs.length < sceneJobs + 3; i++) await new Promise((r) => setTimeout(r, 100));
+  const shotJobs = rentedAgent.state.jobs.slice(sceneJobs, sceneJobs + 3);
+  assert.deepEqual(shotJobs.map((j) => j.loras ?? null), [[{ repo: "motionlab/Wan-TI2V-Motion-LoRA", file: "wan_motion_v1.safetensors", scale: 0.7 }], null, null], "only the first shot carries the LoRA");
+  assert.match(shotJobs[0].prompt, /^mvmt, /);
+  await visitor.waitForFunction(() => !document.querySelector("#image-go")?.disabled && !document.querySelector("#scene-preview")?.disabled, null, { timeout: 60000 });
+  await pickKind(visitor, "short");
   await visitor.click("#close-modal");
   rentedAgent.state.files = rentedAgent.state.files.filter((f) => f !== WAN_HERE);
 });

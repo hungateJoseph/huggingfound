@@ -627,3 +627,11 @@ details.levels-note summary { cursor: pointer; }
 /* Settings advice in a summary: what to set here, and what cannot be set yet. */
 .said .line.setting b { color: var(--ok); }
 .said .line.missing b { color: var(--warn); }
+.shots .shot-loras { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 2px 0 2px 2px; }
+.shots .shot-lora { display: inline-flex; align-items: center; gap: 8px; }
+.shots .shot-lora .check { margin: 0; }
+.shots .shot-lora-strength { width: 64px; font: inherit; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.shots .shot-fit-lora { font-size: 13px; padding: 3px 10px; }
+.shots .shot-lora-note { flex-basis: 100%; }
+.rent-faster { margin: 6px 0; }
+.fast-passes { margin: 6px 0 2px; }

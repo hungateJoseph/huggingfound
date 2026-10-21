@@ -80,3 +80,52 @@ export function measuredText(measured) {
   if (measured.kind === "transcribe") return `Measured here: ${duration(measured.seconds)} for the last recording`;
   return "";
 }
+
+// How fast one data-centre card makes pictures and clips next to another,
+// for the models HuggingFound runs on them (bf16 transformers; the cost is
+// mostly matrix multiplies and attention). An L40S is 1. Rough figures
+// from published throughput and people's timings; the point is to say
+// when a bigger card is worth it for speed and not only for memory.
+const GPU_SPEEDS = [
+  [/\bB200\b/i, 4.2],
+  [/\bB300\b/i, 4.6],
+  [/\bH200\b/i, 3.2],
+  [/\bH100\b/i, 2.8],
+  [/RTX PRO 6000/i, 2.6],
+  [/\bRTX 5090\b/i, 2.1],
+  [/\bA100\b/i, 1.6],
+  [/\bRTX 4090\b/i, 1.5],
+  [/\bL40S\b/i, 1],
+  [/\bL40\b/i, 0.85],
+  [/\bA6000\b|RTX 6000 Ada/i, 0.9],
+  [/\bA40\b/i, 0.7],
+  [/\bRTX 3090\b/i, 0.65],
+  [/\bA5000\b/i, 0.55],
+  [/\bL4\b/i, 0.4],
+  [/\bRTX A4500\b|\bA4000\b/i, 0.4],
+];
+export function gpuSpeed(name) {
+  const hit = GPU_SPEEDS.find(([re]) => re.test(String(name ?? "")));
+  return hit ? hit[1] : null;
+}
+
+// Among the cards on offer, the ones worth a word next to the one picked:
+// meaningfully faster (a third or more), with how much faster and what
+// that does to the price of a clip. Nothing when the picked card is the
+// fastest known, or speeds are unknown.
+export function fasterCards(picked, offers) {
+  const base = gpuSpeed(picked?.gpu?.name);
+  if (!base || !(picked?.pricePerHour > 0)) return [];
+  const out = [];
+  for (const o of offers) {
+    if (o === picked || !(o.pricePerHour > 0)) continue;
+    const s = gpuSpeed(o.gpu?.name);
+    if (!s || s / base < 1.3) continue;
+    const times = s / base;
+    // What the same clip costs there, relative: price up, time down.
+    const costRatio = (o.pricePerHour / picked.pricePerHour) / times;
+    if (out.some((x) => x.gpu?.name === o.gpu?.name && x.provider === o.provider)) continue;
+    out.push({ ...o, times: Math.round(times * 10) / 10, costRatio: Math.round(costRatio * 100) / 100 });
+  }
+  return out.sort((a, b) => b.times - a.times).slice(0, 3);
+}

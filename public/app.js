@@ -855,10 +855,15 @@ function rentAskHtml(choice, plan) {
     // The size the model wants is sold out everywhere: how long, and a watch for it.
     const wantedOut = options.find((t) => t.gb === choice.tier && !(state.runpodKey && t.available) && (t.gpu || t.vast) && !t.vast?.available);
     const outHtml = wantedOut ? `<div class="notice warn sold-out"><p>The ${wantedOut.count > 1 ? `${wantedOut.count} × ${wantedOut.gb / wantedOut.count} GB` : `${wantedOut.gb} GB`} size this model wants is sold out at ${placesText()} right now. ${state.runpodKey ? esc(stockText(wantedOut)) : ""}</p><p class="tools-row">${rentWhenFreeHtml(wantedOut)}${state.rental?.watch?.gb === wantedOut.gb ? "" : watchHtml(wantedOut)}<button class="ghost" id="ask-check">Check again</button></p></div>` : "";
+    // A bigger card than the model needs can be worth it for speed: the
+    // ones meaningfully faster than the pick, with what a clip costs there.
+    const faster = pick ? fasterRows(pick, free) : [];
+    const fasterHtml = faster.length ? `<p class="muted small rent-faster"><b>Faster cards.</b> ${faster.map((f) => `${esc(f.gpu.name)} (${f.count > 1 ? `${f.count} × ${f.gb / f.count} GB` : `${f.gb} GB`}${f.provider === "vast" ? ", Vast.ai" : ""}) makes clips about ${f.times} times faster for ${money(f.pricePerHour)} an hour${f.costRatio <= 1.05 ? ", about the same per clip" : f.costRatio < 1.3 ? ", a little more per clip" : `, about ${f.costRatio} times the cost per clip`}`).join("; ")}. Pick that size above if time matters more than price.</p>` : "";
     return `<div class="rent-ask rent-offer">
       <p><b>Rent a GPU for this.</b> ${esc(size)} ${placesText().replace(" and ", " or ")} bills your account by the hour while it runs; it stops itself after sitting idle, and the bar at the top can stop or delete it any time.</p>
       ${outHtml}
       ${sizes}
+      ${fasterHtml}
       <div class="actions"><button class="primary" id="ask-rent" ${pick ? "" : "disabled"}>${pick ? `Rent it, ${money(pick.pricePerHour)} an hour` : "Rent it"}</button><button class="ghost" id="ask-sizes">Disk size and other settings</button>${back}</div>
       <p class="muted small" id="ask-rent-note"></p>
     </div>`;
@@ -2768,6 +2773,7 @@ function renderImage(box, t) {
       <div class="effort-title">Quality</div>
       <div class="quality" id="video-level">${["low", "medium", "high"].map((l) => `<label><input type="radio" name="level" value="${l}" ${l === level ? "checked" : ""}> <b>${l[0].toUpperCase() + l.slice(1)}</b> <span class="muted">${esc(spec.levels[l].text)}</span></label>`).join("")}</div>
       <details class="levels-note muted small"><summary>What the levels change</summary>Low draws smaller with fewer passes. Medium and High draw at the model's full size; High adds passes${claudeAvailable() ? " and has Claude expand your words first" : ""}.</details>
+      ${video && t.engine === "diffusers" && t.agent ? `<label class="check small fast-passes"><input type="checkbox" id="fast-passes" ${fastPasses(t.repo) ? "checked" : ""}> Skip passes that barely change <span class="muted">about a third quicker at any level; fine detail softens a little. ${cacheMachineTooOld() ? "Needs a machine on the current image." : "Off for the keeper if it shows."}</span></label>` : ""}
       <p class="muted small estimate" id="estimate"></p>
     </div>` : `<div class="effort-title">Effort</div>
     <div class="quality" id="quality">${options}</div>`;
@@ -2936,7 +2942,9 @@ function renderImage(box, t) {
     const follow = t.engine === "diffusers" && t.agent ? loraSettings(t) : null;
     if (follow?.steps) q.steps = follow.steps;
     if (follow?.cfg != null) q.cfg = follow.cfg;
-    const stepScale = q.steps / each.level.steps;
+    // Passes skipped when they would barely change anything: quicker, a little softer.
+    if (video && fastPasses(t.repo) && !cacheMachineTooOld()) q.cache = CACHE_THRESHOLD;
+    const stepScale = (q.steps / each.level.steps) * (q.cache ? CACHE_TIME : 1);
     const eachText = `${(each.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${q.steps} steps`;
     const estimate = pieces > 1 || stepScale !== 1 ? { ...each, seconds: each.seconds * pieces * stepScale } : each;
     const text = scene ? `about ${asked} s as a scene of shots laid out by Claude, at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${q.steps} steps` : pieces > 1 ? `${((each.frames * pieces) / spec.fps).toFixed(1)} s as ${pieces} pieces of ${eachText}` : eachText;
@@ -2950,7 +2958,7 @@ function renderImage(box, t) {
     const load = loadSeconds(t.repo);
     const each = c.each ?? est;
     const shape = c.kind === "scene" ? `a scene of about ${c.asked} seconds, made as shots Claude lays out (guessed here as ${c.pieces} of about ${(each.frames / spec.fps).toFixed(1)} s) at ${each.level.width} by ${each.level.height}, ${c.q.steps} steps, each starting where the last ended, then joined (a soft seam at each cut)` : c.pieces > 1 ? `a ${((each.frames * c.pieces) / spec.fps).toFixed(1)}-second clip made as ${c.pieces} pieces of ${(each.frames / spec.fps).toFixed(1)} s at ${each.level.width} by ${each.level.height}, ${each.frames} frames each, ${c.q.steps} steps, each starting where the last ended, then joined (a soft seam at each join)` : `a ${(each.frames / spec.fps).toFixed(1)}-second clip at ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${c.q.steps} steps`;
-    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""}${c.pieces > 1 ? " in all" : ""} for ${shape}${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}${c.follow ? ` Steps and guidance follow what ${c.follow.name}'s creator used (${settingsLabel(c.follow)}), as chosen under LoRAs.` : ""}`;
+    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""}${c.pieces > 1 ? " in all" : ""} for ${shape}${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}${c.follow ? ` Steps and guidance follow what ${c.follow.name}'s creator used (${settingsLabel(c.follow)}), as chosen under LoRAs.` : ""}${c.q.cache ? " Passes that barely change are skipped." : ""}`;
     // Above what this machine has run out of memory at: said before asking.
     const limit = memoryLimit(t.repo);
     const over = limit && each.frames * each.level.width * each.level.height >= limit.load;
@@ -3209,6 +3217,10 @@ function renderImage(box, t) {
     await load();
     openModel(t.repo);
   });
+  box.querySelector("#fast-passes")?.addEventListener("change", (e) => {
+    setFastPasses(t.repo, e.target.checked);
+    refreshEstimate();
+  });
   if (box.querySelector("#loras")) wireLoras(box, t, () => {
     refreshEstimate();
     const sb = box.querySelector("#suggest-go");
@@ -3456,16 +3468,30 @@ function renderImage(box, t) {
         el.innerHTML = `<p class="muted small"><b>No shots from Claude</b> (${esc(got.why)}). Your words can go as ${item.pieces > 1 ? `one long clip of ${item.pieces} equal pieces` : "one clip"} instead.</p>${said}<p class="tools-row">${finals}</p>`;
         return wire(() => notes);
       }
-      el.innerHTML = `<p class="muted small"><b>The scene as shots.</b> Each is made on its own, starting from the last frame of the one before, from the words in its row as they stand here, unreviewed. Change, add or remove shots; each runs ${spec.minSeconds} to ${spec.maxSeconds} seconds, and the one after a cut should repeat who and where, since the model sees only its own words and one frame.</p>${remark}
+      // The LoRAs on the machine for this model: each shot ticks its own,
+      // at its own strength, starting from what is ticked for the model.
+      const shotLoraItems = () => {
+        const b = loraBook(t.repo);
+        return Object.entries(b.items).filter(([key, i]) => i.kind !== "finetune" && loraHere(t, key)).map(([key, i]) => ({ key, item: i }));
+      };
+      const shotLorasOf = (li) => {
+        const out = {};
+        li.querySelectorAll(".shot-lora").forEach((row) => {
+          if (row.querySelector(".shot-lora-on").checked) out[row.dataset.key] = Number(row.querySelector(".shot-lora-strength").value) || 1;
+        });
+        return out;
+      };
+      const loraLine = shotLoraItems().length ? " Each shot ticks its own LoRAs at its own strength, starting from what is ticked for the model; a LoRA for one action can be on for that shot alone, and Claude can fit a shot's words to the LoRAs ticked for it." : "";
+      el.innerHTML = `<p class="muted small"><b>The scene as shots.</b> Each is made on its own, starting from the last frame of the one before, from the words in its row as they stand here, unreviewed. Change, add or remove shots; each runs ${spec.minSeconds} to ${spec.maxSeconds} seconds, and the one after a cut should repeat who and where, since the model sees only its own words and one frame.${loraLine}</p>${remark}
         <ol class="shots" id="shots"></ol>
         <p class="tools-row"><button class="ghost" id="shot-add">Add a shot</button></p>
         <p class="muted small" id="shots-total"></p>
         <p class="tools-row">${finals}</p>`;
       const list = el.querySelector("#shots");
-      const read = () => [...list.querySelectorAll("li")].map((li) => ({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds)), text: li.querySelector(".shot-text").value.trim() })).filter((s) => s.text);
+      const read = () => [...list.querySelectorAll("li")].map((li) => ({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds)), text: li.querySelector(".shot-text").value.trim(), ...(shotLoraItems().length ? { loras: shotLorasOf(li) } : {}) })).filter((s) => s.text);
       const total = () => {
         const shots = read();
-        if (pending) pending.got = { ...pending.got, shots: [...list.querySelectorAll("li")].map((li) => ({ seconds: Number(li.querySelector(".shot-seconds").value) || spec.minSeconds, text: li.querySelector(".shot-text").value, written: Number(li.dataset.written) || 0 })) };
+        if (pending) pending.got = { ...pending.got, shots: [...list.querySelectorAll("li")].map((li) => ({ seconds: Number(li.querySelector(".shot-seconds").value) || spec.minSeconds, text: li.querySelector(".shot-text").value, written: Number(li.dataset.written) || 0, ...(shotLoraItems().length ? { loras: shotLorasOf(li) } : {}) })) };
         const secs = shots.reduce((a, s) => a + framesFor(s.seconds, spec) / spec.fps, 0);
         const est = shots.reduce((a, s) => a + clipEstimate(spec, level, s.seconds, t.repo).seconds, 0);
         const lv = spec.levels[level] ?? spec.levels.medium;
@@ -3513,7 +3539,10 @@ function renderImage(box, t) {
       const addRow = (shot) => {
         const li = document.createElement("li");
         if (shot.written || shot.text) li.dataset.written = String(shot.written || Math.min(spec.maxSeconds, Math.max(spec.minSeconds, shot.seconds)));
-        li.innerHTML = `<label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><textarea class="shot-text" rows="2">${esc(shot.text)}</textarea><button class="ghost shot-remove" title="Remove this shot">Remove</button>`;
+        const items = shotLoraItems();
+        const chosen = shot.loras ?? loraBook(t.repo).on;
+        const loraRows = items.length ? `<div class="shot-loras small">${items.map(({ key, item }) => `<span class="shot-lora" data-key="${esc(key)}"><label class="check"><input type="checkbox" class="shot-lora-on" ${key in chosen ? "checked" : ""}> ${esc(item.name)}</label> <label class="lora-scale">at <input type="number" class="shot-lora-strength" min="0" max="1.5" step="0.05" value="${Number(chosen[key] ?? item.scale ?? 1)}"></label></span>`).join("")}${claudeAvailable() ? `<button class="ghost shot-fit-lora" title="Claude rewrites this shot's words in the shape its ticked LoRAs' creators prompt for, with their trigger words, and sets the strengths they recommend">Fit the words to the LoRAs</button>` : ""}<span class="shot-lora-note muted"></span></div>` : "";
+        li.innerHTML = `<label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><textarea class="shot-text" rows="2">${esc(shot.text)}</textarea><button class="ghost shot-remove" title="Remove this shot">Remove</button>${loraRows}`;
         li.querySelector(".shot-remove").addEventListener("click", () => {
           li.remove();
           total();
@@ -3523,6 +3552,43 @@ function renderImage(box, t) {
           fitHint(li);
         });
         li.querySelector(".shot-text").addEventListener("input", total);
+        li.querySelectorAll(".shot-lora-on, .shot-lora-strength").forEach((inp) => inp.addEventListener("input", total));
+        // Claude fits this shot's words to the LoRAs ticked for it, the
+        // way the suggest button does for a clip, and takes the strengths.
+        li.querySelector(".shot-fit-lora")?.addEventListener("click", async (ev) => {
+          const b = ev.currentTarget;
+          const note = li.querySelector(".shot-lora-note");
+          const own = shotLorasOf(li);
+          if (!Object.keys(own).length) {
+            note.textContent = "Tick a LoRA for this shot first.";
+            return;
+          }
+          b.disabled = true;
+          note.textContent = "Claude is reading how the LoRAs are prompted for";
+          const all = await loraContext(t);
+          const loras = Object.entries(own).map(([key, scale]) => {
+            const l = all.find((x) => x.key === key);
+            const item = loraBook(t.repo).items[key];
+            return l ? { ...l, strength: scale } : { key, name: item?.name ?? key, strength: scale, trigger: item?.trigger ?? [], tips: [], samples: [] };
+          });
+          const secs = Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds));
+          const got = await claudeText({ kind: "prompt", mode: "suggest", clip: true, model: t.repo, prompt: li.querySelector(".shot-text").value.trim(), negative: $("#image-negative")?.value.trim() ?? "", seconds: secs, loras });
+          b.disabled = false;
+          const description = (/^Description:\s*(.+)$/m.exec(got.text ?? "")?.[1] ?? "").trim();
+          if (!description) {
+            note.textContent = `No fit: ${got.why || "Claude wrote no Description line"}.`;
+            return;
+          }
+          li.querySelector(".shot-text").value = description;
+          const changes = suggestedLoraChanges(got.text, loras);
+          for (const x of changes.strengths) {
+            const inp = li.querySelector(`.shot-lora[data-key="${CSS.escape(x.key)}"] .shot-lora-strength`);
+            if (inp) inp.value = String(x.to);
+          }
+          const why = (/^Why:\s*([\s\S]+)$/m.exec(got.text)?.[1] ?? "").trim();
+          note.textContent = `Fitted by Claude${changes.strengths.length ? `, strength ${changes.strengths.map((x) => `${x.name} ${x.to.toFixed(2)}`).join(", ")}` : ""}${why ? `: ${why}` : "."}`;
+          total();
+        });
         list.append(li);
       };
       for (const s of got.shots) addRow(s);
@@ -3536,7 +3602,7 @@ function renderImage(box, t) {
         const shots = read();
         if (!shots.length) return null;
         if (unseen) item.notes = [...(item.notes ?? []), "The shots were laid out with the starting picture described to Claude, not shown: with it in front of Claude, no shots came."];
-        item.shots = shots.map((s) => ({ seconds: framesFor(s.seconds, spec) / spec.fps, frames: framesFor(s.seconds, spec), text: s.text }));
+        item.shots = shots.map((s) => ({ seconds: framesFor(s.seconds, spec) / spec.fps, frames: framesFor(s.seconds, spec), text: s.text, ...(s.loras ? { loras: s.loras } : {}) }));
         item.shotsEdited = shots.length !== got.shots.length || shots.some((s, i) => s.text !== got.shots[i].text || s.seconds !== Math.min(spec.maxSeconds, Math.max(spec.minSeconds, got.shots[i].seconds)));
         item.pieces = item.shots.length;
         const lv = spec.levels[level] ?? spec.levels.medium;
@@ -3695,7 +3761,7 @@ function renderImage(box, t) {
     const level = entry.level ?? old[0].level ?? "medium";
     const lv = spec.levels[level] ?? spec.levels.medium;
     const word = entry.shots ? "shot" : "piece";
-    const shots = old.map((e, i) => ({ index: i + 1, seconds: (e.q?.frames ?? 0) / spec.fps, frames: e.q?.frames ?? framesFor(spec.minSeconds, spec), text: e.prompt, seed: e.seed, keep: e.id }));
+    const shots = old.map((e, i) => ({ index: i + 1, seconds: (e.q?.frames ?? 0) / spec.fps, frames: e.q?.frames ?? framesFor(spec.minSeconds, spec), text: e.prompt, seed: e.seed, keep: e.id, loras: e.loras ?? null }));
     foot.textContent = claudeAvailable() ? "Claude is working out which shots to make again" : "Reading which shot to make again";
     const plan = await fixPlan(entry, shots, text, t.repo);
     foot.textContent = "";
@@ -3895,7 +3961,7 @@ function renderImage(box, t) {
     // The LoRAs ticked for this model and a fine-tune, if one is chosen.
     let prompt = item.expanded ?? item.prompt;
     if (video && !addon && t.engine === "diffusers" && t.agent) {
-      const part = loraJobPart(t);
+      const part = loraJobPart(t, item.shotLoras ?? null);
       extra = { ...extra, ...part.job };
       // A LoRA's trigger words lead the description, where it looks for them.
       const missing = part.trigger.filter((w) => !String(prompt).toLowerCase().includes(w.toLowerCase()));
@@ -3929,7 +3995,7 @@ function renderImage(box, t) {
     const madeBy = addon ? `${t.repo.split("/").pop()} on ${repo.split("/").pop()}` : t.file;
     // The seed the machine used, so a reply can keep to it; a machine from
     // before seeds were passed along says nothing, and that is remembered.
-    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null, shots: item.shots?.length ? item.shots : null, shotsEdited: Boolean(item.shotsEdited), fix: item.fix ?? null, startPicture: (item.startFile || item.startInit) && typeof args?.init === "string" ? args.init : null, refs: item.refFiles?.length ?? 0 };
+    const entry = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, model: t.repo, kind, prompt: item.prompt, negative: item.negative, madeAt: Date.now(), bytes: blob.size, blob, took: job.took ?? null, settings: item.settings, madeBy, seed: job.seed ?? item.seed ?? null, seedKept: job.seed != null, q: item.q ?? null, quality: item.quality ?? null, level: item.level ?? null, expanded: item.expanded ?? null, expandedEdited: Boolean(item.expandedEdited), replyTo: item.replyTo ?? null, continues: item.continues ?? null, piece: item.piece ?? null, last: job.lastFrame ?? null, jobId: job.id ?? null, shots: item.shots?.length ? item.shots : null, shotsEdited: Boolean(item.shotsEdited), fix: item.fix ?? null, startPicture: (item.startFile || item.startInit) && typeof args?.init === "string" ? args.init : null, refs: item.refFiles?.length ?? 0, loras: item.shotLoras ?? null };
     await keepResult(entry);
     rec.shown.add(entry.id);
     // The pictures kept for a queued request are not needed once it is made.
@@ -4008,7 +4074,7 @@ function renderImage(box, t) {
       const first = fix && k === 1 ? (await keptResults(t.repo)).find((e) => e.id === shot.keep) : null;
       if (fix && k === 1 && !first?.startPicture && t.startPicture === "required") throw new Error("the first shot began from a photo that is not kept here; pick it again and ask for the clip as a new request");
       const piece = shot
-        ? { ...item, prompt: shot.text, q: { ...item.q, frames: shot.frames }, scene: false, shots: null, fix: null, pieces: 1, piece: { group, index: k, of: item.pieces, shot: !fix || fix.scene, ...(fix ? { fixes: shot.keep } : {}) }, seed: fix && Number.isInteger(shot.seed) ? shot.seed : (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, startInit: first?.startPicture ?? null, replyTo: null, expand: false, expanded: null, expandSaid: true, estimate: { base: clipEstimate(spec, item.level, shot.seconds, t.repo).base, seconds: clipEstimate(spec, item.level, shot.seconds, t.repo).seconds }, settings: `${word.toLowerCase()} ${k} of ${item.pieces}${fix ? ", made again" : ""}, ${shot.seconds.toFixed(1)} s at ${item.level} quality, ${lv.width} by ${lv.height}, ${shot.frames} frames, ${lv.steps} steps` }
+        ? { ...item, prompt: shot.text, q: { ...item.q, frames: shot.frames }, scene: false, shots: null, fix: null, pieces: 1, shotLoras: shot.loras ?? null, piece: { group, index: k, of: item.pieces, shot: !fix || fix.scene, ...(fix ? { fixes: shot.keep } : {}) }, seed: fix && Number.isInteger(shot.seed) ? shot.seed : (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, startInit: first?.startPicture ?? null, replyTo: null, expand: false, expanded: null, expandSaid: true, estimate: { base: clipEstimate(spec, item.level, shot.seconds, t.repo).base, seconds: clipEstimate(spec, item.level, shot.seconds, t.repo).seconds }, settings: `${word.toLowerCase()} ${k} of ${item.pieces}${fix ? ", made again" : ""}, ${shot.seconds.toFixed(1)} s at ${item.level} quality, ${lv.width} by ${lv.height}, ${shot.frames} frames, ${lv.steps} steps` }
         : { ...item, pieces: 1, piece: { group, index: k, of: item.pieces }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: k === 1 ? item.expand : false, expanded: item.expanded ?? null, expandSaid: k > 1 ? true : item.expandSaid, estimate: item.estimate ? { base: item.estimate.base, seconds: Math.round(item.estimate.seconds / item.pieces) } : null, settings: `piece ${k} of ${item.pieces}, ${item.each ?? item.settings}` };
       say(`${shot ? word : "Piece"} ${k} of ${item.pieces}${fix ? ", made again" : ""}${prev ? ", from the last frame of the one before" : piece.startInit ? ", from the photo the clip began from" : ""}`);
       const req = { item: piece, args: await requestArgs(piece, say) };
@@ -4575,11 +4641,12 @@ function loraSummary(t) {
   return { on: parts.length > 0, text: parts.length ? parts.join(", ") : "optional" };
 }
 // The part of a job the LoRAs and the fine-tune make, and their trigger words.
-function loraJobPart(t) {
+// `own` is a shot's own choice ({key: strength}) in place of the model's ticks.
+function loraJobPart(t, own = null) {
   const book = loraBook(t.repo);
   const loras = [];
   const trigger = [];
-  for (const [key, scale] of Object.entries(book.on)) {
+  for (const [key, scale] of Object.entries(own ?? book.on)) {
     const item = book.items[key];
     if (!item) continue;
     if (!loraHere(t, key)) throw new Error(`the LoRA ${item.name} is not on the machine any more (a new machine, or removed); add it again under LoRAs, or untick it`);
@@ -4595,6 +4662,31 @@ function loraJobPart(t) {
   }
   if ((loras.length || finetune) && loraMachineTooOld()) throw new Error(loraMachineTooOld());
   return { job: { ...(loras.length ? { loras } : {}), ...(finetune ? { finetune } : {}) }, trigger: [...new Set(trigger)].slice(0, 8) };
+}
+// Skipping the passes that would barely change anything (TeaCache's
+// idea, through diffusers' first-block cache on the machine): a switch
+// per model, kept in this browser, which image 26 brought.
+const CACHE_AGENT = 26;
+const CACHE_THRESHOLD = 0.1;
+const CACHE_TIME = 0.65;
+function fastPasses(repo) {
+  try {
+    return localStorage.getItem(`fastPasses:${repo}`) === "1";
+  } catch {
+    return false;
+  }
+}
+function setFastPasses(repo, on) {
+  try {
+    if (on) localStorage.setItem(`fastPasses:${repo}`, "1");
+    else localStorage.removeItem(`fastPasses:${repo}`);
+  } catch {
+    // no storage: it lasts as long as the page
+  }
+}
+function cacheMachineTooOld() {
+  const v = state.rental?.agentVersion;
+  return v != null && v < CACHE_AGENT;
 }
 // What the suggest button offers: with LoRAs ticked, a description in their creators' shape.
 function suggestLabel(t) {
@@ -5054,7 +5146,7 @@ async function submitJob(agent, { repo, file, prompt, negative, quality, init = 
   // An add-on on an SDXL base draws at SDXL's size.
   const width = addon && xl ? 1024 : (q.width ?? q.size);
   const height = addon && xl ? 1024 : (q.height ?? q.size);
-  const body = { repo, file, prompt, negative, steps: q.steps, width, height, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler };
+  const body = { repo, file, prompt, negative, steps: q.steps, width, height, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler, ...(q.cache ? { cache: q.cache } : {}) };
   if (Number.isInteger(seed)) body.seed = seed;
   if (addon) {
     body.addon = addon;
@@ -5601,6 +5693,22 @@ function rentRows(options = state.rentOptions ?? []) {
     if (t.vast && (t.vast.gpu || !state.runpodKey)) rows.push({ ...t, ...t.vast, provider: "vast", key: `${t.gb}:vast`, vast: null });
   }
   return rows;
+}
+// Among the free cards, the ones meaningfully faster than the pick (a
+// third or more, by the speed figure the site gives each card), fastest
+// first, with what the same clip costs there next to the pick.
+function fasterRows(pick, rows) {
+  const base = pick?.gpu?.speed;
+  if (!base || !(pick.pricePerHour > 0)) return [];
+  const out = [];
+  for (const r of rows) {
+    const s = r.gpu?.speed;
+    // Only cards at least as big: a faster card the model does not fit is no use.
+    if (r === pick || !s || !(r.pricePerHour > 0) || s / base < 1.3 || (r.gb ?? 0) < (pick.gb ?? 0)) continue;
+    if (out.some((x) => x.gpu.name === r.gpu.name && x.provider === r.provider)) continue;
+    out.push({ ...r, times: Math.round((s / base) * 10) / 10, costRatio: Math.round(((r.pricePerHour / pick.pricePerHour) / (s / base)) * 100) / 100 });
+  }
+  return out.sort((a, b) => b.times - a.times).slice(0, 3);
 }
 function rentRow(key) {
   return rentRows().find((r) => r.key === String(key)) ?? null;
