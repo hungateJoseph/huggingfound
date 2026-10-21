@@ -352,3 +352,16 @@ test("Claude's thinking is reported as it goes, and an effort setting the API re
   assert.equal(heard.at(-1).thought, "Let me see. ".length);
   assert.equal(buildRequest({ kind: "code", mode: "handoff-plan", question: "q" }).output_config.effort, "low");
 });
+
+test("how a LoRA's creator uses it: the notes, trigger words and showcase prompts go to Claude with the lines to write back", () => {
+  const req = buildRequest({ kind: "prompt", mode: "lora", model: "MiniMaxAI/MiniMax-H3", lora: { name: "Better Human Motion", creator: "mover", trigger: ["mvmt"], strength: "strength 0.7", tips: ["I recommend using strength 0.7."], samples: [{ prompt: "mvmt, a woman walks across a bridge", settings: "30 steps, guidance 5" }, { prompt: "" }] } });
+  assert.match(req.system, /Strength:.*\nPrompt:.*\nSettings:.*\nPairs with:.*\nAvoid:/);
+  const text = req.messages[0].content;
+  assert.match(text, /The LoRA is Better Human Motion by mover, for MiniMaxAI\/MiniMax-H3\./);
+  assert.match(text, /trigger words: mvmt/);
+  assert.match(text, /<notes>\nI recommend using strength 0\.7\.\n<\/notes>/);
+  assert.match(text, /Showcase clip 1 \(30 steps, guidance 5\) was made from:\n<prompt>\nmvmt, a woman walks across a bridge\n<\/prompt>/);
+  assert.ok(!/Showcase clip 2/.test(text), "an empty prompt is not a clip");
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "lora", lora: { name: "x" } }), /no notes or showcase prompts/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "lora", lora: {} }), /Which LoRA/);
+});

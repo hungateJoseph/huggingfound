@@ -752,6 +752,19 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         return send(res, 400, { error: err.message });
       }
     }
+    // How a LoRA's creator made their showcase clips: notes, strength,
+    // prompts and settings read off its Civitai version or its model card.
+    if (req.method === "GET" && url.pathname === "/api/loras/recipe") {
+      const base = String(url.searchParams.get("base") ?? "");
+      const id = String(url.searchParams.get("id") ?? "");
+      if (!/^[\w.-]+\/[\w.-]+$/.test(base) || !/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
+      const version = /^\d+$/.test(String(url.searchParams.get("version") ?? "")) ? url.searchParams.get("version") : null;
+      try {
+        return send(res, 200, await loraFinder.recipe(base, { id, version }, { adult: url.searchParams.get("adult") === "1" }));
+      } catch (err) {
+        return send(res, 502, { error: err.message });
+      }
+    }
     if (req.method === "GET" && url.pathname === "/api/loras/files") {
       const id = String(url.searchParams.get("id") ?? "");
       if (!/^[\w.-]+\/[\w.-]+$/.test(id) || id.startsWith("civitai/")) return send(res, 400, { error: "Bad repository" });

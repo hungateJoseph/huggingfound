@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { startStubHub } from "./stub-hub.js";
-import { civitaiFiles, createLoraFinder, CIVITAI_DOWNLOAD, parseLink } from "../src/loras.js";
+import { civitaiFiles, civitaiRecipe, createLoraFinder, CIVITAI_DOWNLOAD, creatorNotes, hubRecipe, parseLink, sampleSettings } from "../src/loras.js";
 import { pullAddonOnAgent } from "../src/runners.js";
 
 process.env.HUGGINGFOUND_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "huggingfound-loras-"));
@@ -19,7 +19,13 @@ const { createServer } = await import("../src/server.js");
 const dl = (version, file) => `https://civitai.com/api/download/models/${version}?fileId=${file}`;
 const CIVITAI = {
   LORA: [
-    { id: 11, name: "Better Human Motion", nsfw: false, type: "LORA", creator: { username: "mover" }, stats: { downloadCount: 15000, thumbsUpCount: 300 }, modelVersions: [{ id: 101, name: "v1", baseModel: "MiniMax H3", trainedWords: ["mvmt"], files: [{ id: 1001, name: "mvmt h3 lora v1.safetensors", type: "Model", sizeKB: 300 * 1024, metadata: { fp: "bf16" }, downloadUrl: dl(101, 1001) }, { id: 1002, name: "examples.zip", type: "Archive", sizeKB: 900, downloadUrl: dl(101, 1002) }] }] },
+    { id: 11, name: "Better Human Motion", nsfw: false, type: "LORA", creator: { username: "mover" }, stats: { downloadCount: 15000, thumbsUpCount: 300 }, description: "<p>Smoother motion. <strong>Prompt in H3 style</strong>: subject, then the action.</p>", modelVersions: [{ id: 101, name: "v1", baseModel: "MiniMax H3", trainedWords: ["mvmt"], description: "<p>I recommend using strength 0.7, works great with and without turbo loras.</p><p>Thanks all!</p>", files: [{ id: 1001, name: "mvmt h3 lora v1.safetensors", type: "Model", sizeKB: 300 * 1024, metadata: { fp: "bf16" }, downloadUrl: dl(101, 1001) }, { id: 1002, name: "examples.zip", type: "Archive", sizeKB: 900, downloadUrl: dl(101, 1002) }], images: [
+      // The showcase: a clip with its workflow kept (this LoRA at 0.75 beside a turbo one, on a fine-tune), an adult one, a plain one, and one with no prompt.
+      { url: "https://image.civitai.com/x/a/original=true/9001.mp4", nsfwLevel: 1, type: "video", width: 832, height: 480, metadata: { duration: 5.04 }, meta: { prompt: "mvmt, a woman walks across a bridge", steps: 30, cfgScale: 5, sampler: "Euler", comfy: JSON.stringify({ prompt: { 1: { class_type: "LoraLoaderModelOnly", inputs: { lora_name: "mvmt h3 lora v1.safetensors", strength_model: 0.75, model: ["2", 0] } }, 2: { class_type: "UNETLoader", inputs: { unet_name: "MiniMaxH3/dasiwa_hybrid_int8.safetensors" } }, 3: { class_type: "LoraLoaderModelOnly", inputs: { lora_name: "h3_turbo_4step.safetensors", strength_model: 1 } }, 4: { class_type: "KSampler", inputs: { steps: 8, cfg: 1, sampler_name: "euler", scheduler: "simple", denoise: 1 } }, 5: { class_type: "EmptyHunyuanLatentVideo", inputs: { width: 832, height: 480, length: 121 } } } }) } },
+      { url: "https://image.civitai.com/x/b/original=true/9002.mp4", nsfwLevel: 8, type: "video", width: 832, height: 480, meta: { prompt: "mvmt, explicit" } },
+      { url: "https://image.civitai.com/x/c/original=true/9003.mp4", nsfwLevel: 1, type: "video", width: 480, height: 832, meta: { prompt: "mvmt, a man runs up a hill", steps: 30, cfgScale: 5 } },
+      { url: "https://image.civitai.com/x/d/original=true/9004.mp4", nsfwLevel: 1, type: "video", meta: {} },
+    ] }] },
     // Marked for adults: listed only when adult listings are asked for.
     { id: 2925727, name: "MiniMax H3 NSFW Unlocked", nsfw: true, type: "LORA", creator: { username: "lab" }, stats: { downloadCount: 5000 }, modelVersions: [{ id: 3413468, name: "Minimax_H3_V2.1", baseModel: "MiniMax H3", files: [{ id: 3305979, name: "Minimax_H3_Unlocked_V2.1.safetensors", type: "Model", sizeKB: 0.28 * 1024 * 1024, metadata: { fp: "fp32" }, downloadUrl: dl(3413468, 3305979) }] }, { id: 3354822, name: "Minimax_H3_V2", baseModel: "MiniMax H3", files: [{ id: 3242253, name: "Minimax_H3_Unlocked_V2.safetensors", type: "Model", sizeKB: 0.28 * 1024 * 1024, metadata: { fp: "fp32" }, downloadUrl: dl(3354822, 3242253) }] }] },
     // Made for another model.
@@ -45,6 +51,17 @@ before(async () => {
   civitai = http.createServer((req, res) => {
     const url = new URL(req.url, "http://x");
     asked.push(url.search);
+    const ver = /^\/api\/v1\/model-versions\/(\d+)$/.exec(url.pathname);
+    if (ver) {
+      const v = [...CIVITAI.LORA, ...CIVITAI.Checkpoint].flatMap((m) => m.modelVersions).find((x) => String(x.id) === ver[1]);
+      res.writeHead(v ? 200 : 404, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(v ?? { error: "not found" }));
+    }
+    if (url.pathname === "/api/v1/images") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      const posts = url.searchParams.get("modelVersionId") === "101" && url.searchParams.get("username") === "mover" ? [{ id: 9003, stats: { likeCount: 10, heartCount: 5, laughCount: 0, cryCount: 0 } }, { id: 9001, stats: { likeCount: 2 } }] : [];
+      return res.end(JSON.stringify({ items: posts }));
+    }
     // One model by its number, as a pasted link reads it.
     const one = /^\/api\/v1\/models\/(\d+)$/.exec(url.pathname);
     if (one) {
@@ -142,3 +159,47 @@ test("a pasted link: a PromptHero model page reads as the Civitai model it copie
   assert.match((await bad.json()).error, /paste a PromptHero model page, a Civitai model page or a Hugging Face repository/);
 });
 
+
+test("the creator's recipe: notes and the strength in them, showcase clips with their prompts and workflow settings, the most liked first, adult ones only when asked; and a model card read the same way", async () => {
+  const notes = creatorNotes("Use it at 0.5 - 0.9 strength. Thanks all! Steps 8 and cfg 1 with the turbo LoRA.");
+  assert.deepEqual(notes.strength, { low: 0.5, high: 0.9, from: "notes", text: "0.5 - 0.9 strength" });
+  assert.deepEqual(notes.tips, ["Use it at 0.5 - 0.9 strength.", "Steps 8 and cfg 1 with the turbo LoRA."], "only the sentences with something to act on");
+  assert.equal(creatorNotes("strength 7 is wrong").strength, null, "not a LoRA strength");
+  const own = sampleSettings({ prompt: "x", civitaiResources: [{ type: "lora", modelVersionId: 101, weight: 0.6 }, { type: "lora", modelVersionId: 5, modelName: "Turbo", versionName: "4step", weight: 1 }, { type: "checkpoint", modelName: "DaSiWa", versionName: "v4" }], Size: "832x480" }, { versionId: 101 });
+  assert.deepEqual([own.strength, own.with, own.checkpoint, own.width, own.height], [0.6, [{ name: "Turbo 4step", strength: 1 }], "DaSiWa v4", 832, 480]);
+  const m = CIVITAI.LORA[0];
+  const stats = new Map([["9003", 15], ["9001", 2]]);
+  const r = civitaiRecipe(m, m.modelVersions[0], { stats });
+  assert.equal(r.id, "civitai/11");
+  assert.deepEqual(r.strength, { low: 0.7, high: 0.7, from: "notes", text: "strength 0.7" });
+  assert.deepEqual(r.trigger, ["mvmt"]);
+  assert.ok(r.tips.includes("I recommend using strength 0.7, works great with and without turbo loras.") && r.tips.includes("Prompt in H3 style : subject, then the action.") && !r.tips.includes("Thanks all!"), JSON.stringify(r.tips));
+  assert.deepEqual(r.samples.map((s) => [s.id, s.reactions, s.prompt]), [["9003", 15, "mvmt, a man runs up a hill"], ["9001", 2, "mvmt, a woman walks across a bridge"]], "the most liked first; the adult one and the one with no prompt left out");
+  assert.equal(r.hidden, 1);
+  const s1 = r.samples[1];
+  assert.deepEqual([s1.steps, s1.cfg, s1.sampler, s1.strength, s1.with, s1.checkpoint, s1.width, s1.height, s1.frames, s1.seconds], [30, 5, "Euler", 0.75, [{ name: "h3_turbo_4step.safetensors", strength: 1 }], "dasiwa_hybrid_int8.safetensors", 832, 480, 121, 5.04], "the plain fields first, the workflow for the rest");
+  assert.deepEqual(r.settings, { steps: 30, cfg: 5 });
+  const adult = civitaiRecipe(m, m.modelVersions[0], { stats, adult: true });
+  assert.deepEqual(adult.samples.map((s) => s.id), ["9003", "9001", "9002"]);
+  assert.equal(adult.hidden, 0);
+  // Through the finder and the site: the version on the machine, the creator's posts' reactions joined in.
+  const finder = createLoraFinder({ hubBase: hub.base, civitaiBase: `http://127.0.0.1:${civitai.address().port}` });
+  const viaFinder = await finder.recipe("MiniMaxAI/MiniMax-H3", { id: "civitai/11", version: "101" });
+  assert.deepEqual(viaFinder.samples.map((s) => [s.id, s.reactions]), [["9003", 15], ["9001", 2]]);
+  assert.ok(asked.some((q) => /modelVersionId=101&username=mover/.test(q)), "the creator's own posts");
+  const res = await fetch(`${base}/api/loras/recipe?base=MiniMaxAI/MiniMax-H3&id=civitai/11&version=101`);
+  assert.equal((await res.json()).name, "Better Human Motion");
+  assert.equal((await fetch(`${base}/api/loras/recipe?base=MiniMaxAI/MiniMax-H3&id=nonsense`)).status, 400);
+  assert.equal((await fetch(`${base}/api/loras/recipe?base=MiniMaxAI/MiniMax-H3&id=civitai/999`)).status, 502);
+  // A Hugging Face model card: the trigger word and example from the front
+  // matter, the settings table as advice, the clip's address on the hub.
+  const card = await finder.recipe("Wan-AI/Wan2.2-TI2V-5B-Diffusers", { id: "motionlab/Wan-TI2V-Motion-LoRA" });
+  assert.deepEqual([card.source, card.creator, card.trigger, card.settings, card.strength?.low], ["hf", "motionlab", ["mvmt"], { steps: 30, cfg: 1 }, 0.8]);
+  assert.deepEqual(card.samples.map((s) => [s.prompt, s.url, s.type]), [["mvmt, a dancer spins across a sunlit studio floor, slow dolly in", `${hub.base}/motionlab/Wan-TI2V-Motion-LoRA/resolve/main/samples/spin.mp4`, "video"]], "the install command is not a prompt");
+  assert.ok(card.tips.includes("Works best at 0.7 to 0.9 strength; above 1.0 limbs smear.") && card.tips.includes("steps: 30."), JSON.stringify(card.tips));
+  assert.ok(!card.notesText.includes("pip install"), "code blocks are not notes");
+  const bare = hubRecipe("x/y", "# Nothing here\n\nA LoRA.");
+  assert.deepEqual([bare.tips, bare.samples, bare.strength, bare.settings], [[], [], null, null]);
+  const empty = await finder.recipe("Wan-AI/Wan2.2-TI2V-5B-Diffusers", { id: "nobody/no-card" });
+  assert.deepEqual(empty.samples, [], "a repository without a card reads as an empty recipe");
+});

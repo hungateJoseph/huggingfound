@@ -567,8 +567,40 @@ repository. One made for another base model is refused with the reason.
 and are confirmed once before the download, as adult models are elsewhere
 on the site.
 
+The creator's settings (2026-10-20): every LoRA and fine-tune, added or
+just found, has a "Creator's settings" button that reads how its creator
+got the clips that show it off (`/api/loras/recipe`, `recipe()` in
+src/loras.js). For a Civitai model it is the version on the machine
+(`/api/v1/model-versions/<id>`: the notes, the trigger words, the showcase
+clips with the prompt each was made from and, where the upload kept them,
+its steps, guidance, sampler and ComfyUI workflow, walked for this LoRA's
+own strength, the other LoRAs beside it, the checkpoint under it and the
+canvas), ranked by the reactions on the creator's own posts
+(`/api/v1/images?modelVersionId=&username=`; the public images listing
+carries no prompts, the version does). For a Hugging Face repository it is
+the model card: `instance_prompt`, the widget's examples with their clips,
+a settings table read as "setting: value" lines, the prompt in a text
+block, and the sentences with advice in them. The strength the creator
+names ("I recommend using strength 0.7", "0.5 - 0.9 strength") is found
+in the notes, else the showcase's own. Adult showcase clips are shown only
+with "Include 18+ results" on.
+
+From the panel: "Set 0.7" moves the strength slider; "Use this prompt"
+puts a showcase prompt in the description box to reshape; "Make clips
+with it at these" keeps the showcase's steps and guidance on the LoRA
+(`settings` on its book entry, shown as a pill on its row), and while it
+is ticked the clip's steps and guidance follow them in place of the
+quality setting's (`loraSettings` in `chosen()`; the estimate says so and
+such a clip does not teach the time guess). A turbo LoRA needs that: its
+few steps at guidance 1. "Ask Claude how to prompt with it" sends the
+notes, trigger words and up to four showcase prompts with their settings
+through `/api/review` (`kind: "prompt", mode: "lora"`) for Strength,
+Prompt, Settings, Pairs with and Avoid lines. Nothing in the panel needs
+Claude; it is read off the page.
+
 Not yet verified on hardware: DaSiWa loading and its clips, Civitai
-downloads with a real key, any Civitai LoRA, several LoRAs at once.
+downloads with a real key, any Civitai LoRA, several LoRAs at once, a
+turbo LoRA at its borrowed steps and guidance.
 
 ## Verified on hardware, and not
 

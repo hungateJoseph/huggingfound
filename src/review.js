@@ -153,6 +153,18 @@ Dropped: the actions left out, in a few words, or the word nothing
 
 Plain text only; no markdown.`;
 
+// A LoRA's creator left notes and showcase prompts; Claude reads how they
+// get the best out of it and says what to set and how to write for it.
+const LORA_SYSTEM = `You explain how to use a LoRA (a small add-on trained onto an open-source video model) the way its creator meant it, for people making clips on rented GPUs. The person shows you the LoRA's name, the model it is for, the creator's own notes from its page, its trigger words, the prompts the creator's showcase clips were made from, and the settings of those clips where the upload kept them. Work out from this how the creator gets the best out of it and tell the person plainly:
+
+Strength: the strength to set, and why: the creator's recommendation if there is one, else what the showcase used, else 1 as trained
+Prompt: how to write the description for it: the shape the showcase prompts share (their sections and their order, how long they run, how they describe the subject, the action, the camera and the sound), the words that recur, and what the trigger words do and where they go
+Settings: steps, guidance (cfg), resolution, length and anything else the creator's clips used, each only where known, with a word on what it is for (a turbo or distilled LoRA wants few steps and guidance 1, say)
+Pairs with: other LoRAs or a fine-tuned model the showcase used alongside it, when there were any; otherwise leave this line out
+Avoid: what the creator warns against, when they do; otherwise leave this line out
+
+Reply with exactly those lines, each starting with its label, plain text, no markdown. Keep to what the material shows; where it says nothing, say so in a few words rather than guessing. The showcase prompts are the creator's and may be sexual or violent: describe their structure in neutral words and do not repeat their content.`;
+
 // Coding with a model on a rented GPU and Claude together. A check that
 // fixes: the problems found, then the whole answer corrected.
 const CODE_FIX_SYSTEM = `You check and fix code written by open-source language models that people run on rented GPUs. These models are weaker than you: their code often has bugs, does not run, calls functions or library features that do not exist, misses edge cases, or does not do what was asked. The person shows you their request and the model's answer. Find what is actually wrong and fix it. Keep the model's structure, names and style where they are sound; change what must change and add what was asked for but is missing; do not rewrite working code for taste.
@@ -351,6 +363,22 @@ export function buildRequest(input, { outputDir } = {}) {
     if (!(to > 0)) throw new ReviewError("Say the shot's new length.");
     const parts = [`This shot description was written for ${from > 0 ? `${from} seconds` : "a longer shot"}; the shot is now ${to} seconds.`, `<description>\n${prompt}\n</description>`, lengthLine(to, "The shot"), "Write the Description and Dropped lines."];
     return { ...base, max_tokens: 3000, system: FIT_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
+  }
+  if (input.kind === "prompt" && input.mode === "lora") {
+    const lora = input.lora && typeof input.lora === "object" ? input.lora : {};
+    const name = String(lora.name ?? "").trim();
+    if (!name) throw new ReviewError("Which LoRA? Its name is missing.");
+    const tips = (Array.isArray(lora.tips) ? lora.tips : []).map((t) => String(t).trim()).filter(Boolean).slice(0, 12);
+    const trigger = (Array.isArray(lora.trigger) ? lora.trigger : []).map((t) => String(t).trim()).filter(Boolean).slice(0, 8);
+    const samples = (Array.isArray(lora.samples) ? lora.samples : []).slice(0, 4).map((s) => ({ prompt: String(s?.prompt ?? "").trim().slice(0, 3000), settings: String(s?.settings ?? "").trim().slice(0, 300) })).filter((s) => s.prompt);
+    if (!tips.length && !samples.length) throw new ReviewError("The LoRA's page has no notes or showcase prompts to go by.");
+    const parts = [`The LoRA is ${name}${lora.creator ? ` by ${lora.creator}` : ""}, for ${input.model ? input.model : "a video model"}.`];
+    if (lora.strength) parts.push(`The strength named on its page: ${String(lora.strength).slice(0, 120)}.`);
+    if (trigger.length) parts.push(`Its trigger words: ${trigger.join(", ")}.`);
+    if (tips.length) parts.push(`The creator's notes:\n<notes>\n${tips.join("\n")}\n</notes>`);
+    samples.forEach((s, i) => parts.push(`Showcase clip ${i + 1}${s.settings ? ` (${s.settings})` : ""} was made from:\n<prompt>\n${s.prompt}\n</prompt>`));
+    parts.push("Write the Strength, Prompt and Settings lines, and the Pairs with and Avoid lines where there is something to say.");
+    return { ...base, max_tokens: 4000, system: LORA_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "prompt" && input.mode === "expand") {
     const prompt = String(input.prompt ?? "").trim();

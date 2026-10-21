@@ -2901,10 +2901,16 @@ function renderImage(box, t) {
     const seconds = asked / pieces;
     const each = clipEstimate(spec, lvl, seconds, t.repo);
     const q = { steps: each.level.steps, width: each.level.width, height: each.level.height, frames: each.frames, fps: spec.fps, cfg: spec.cfg, ...(each.level.expand && !scene ? { expand: true } : {}) };
-    const eachText = `${(each.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${each.level.steps} steps`;
-    const estimate = pieces > 1 ? { ...each, seconds: each.seconds * pieces } : each;
-    const text = scene ? `about ${asked} s as a scene of shots laid out by Claude, at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${each.level.steps} steps` : pieces > 1 ? `${((each.frames * pieces) / spec.fps).toFixed(1)} s as ${pieces} pieces of ${eachText}` : eachText;
-    return { kind, asked, level: lvl, seconds, pieces, q, eachText, text, estimate, each };
+    // The steps and guidance a ticked LoRA's creator used, when chosen
+    // under LoRAs: a turbo LoRA wants its few steps and no guidance.
+    const follow = t.engine === "diffusers" && t.agent ? loraSettings(t) : null;
+    if (follow?.steps) q.steps = follow.steps;
+    if (follow?.cfg != null) q.cfg = follow.cfg;
+    const stepScale = q.steps / each.level.steps;
+    const eachText = `${(each.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${q.steps} steps`;
+    const estimate = pieces > 1 || stepScale !== 1 ? { ...each, seconds: each.seconds * pieces * stepScale } : each;
+    const text = scene ? `about ${asked} s as a scene of shots laid out by Claude, at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${q.steps} steps` : pieces > 1 ? `${((each.frames * pieces) / spec.fps).toFixed(1)} s as ${pieces} pieces of ${eachText}` : eachText;
+    return { kind, asked, level: lvl, seconds, pieces, q, eachText, text, estimate, each, follow };
   };
   const refreshEstimate = () => {
     const el = box.querySelector("#estimate");
@@ -2913,8 +2919,8 @@ function renderImage(box, t) {
     const est = c.estimate;
     const load = loadSeconds(t.repo);
     const each = c.each ?? est;
-    const shape = c.kind === "scene" ? `a scene of about ${c.asked} seconds, made as shots Claude lays out (guessed here as ${c.pieces} of about ${(each.frames / spec.fps).toFixed(1)} s) at ${each.level.width} by ${each.level.height}, ${each.level.steps} steps, each starting where the last ended, then joined (a soft seam at each cut)` : c.pieces > 1 ? `a ${((each.frames * c.pieces) / spec.fps).toFixed(1)}-second clip made as ${c.pieces} pieces of ${(each.frames / spec.fps).toFixed(1)} s at ${each.level.width} by ${each.level.height}, ${each.frames} frames each, ${each.level.steps} steps, each starting where the last ended, then joined (a soft seam at each join)` : `a ${(each.frames / spec.fps).toFixed(1)}-second clip at ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${each.level.steps} steps`;
-    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""}${c.pieces > 1 ? " in all" : ""} for ${shape}${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}`;
+    const shape = c.kind === "scene" ? `a scene of about ${c.asked} seconds, made as shots Claude lays out (guessed here as ${c.pieces} of about ${(each.frames / spec.fps).toFixed(1)} s) at ${each.level.width} by ${each.level.height}, ${c.q.steps} steps, each starting where the last ended, then joined (a soft seam at each cut)` : c.pieces > 1 ? `a ${((each.frames * c.pieces) / spec.fps).toFixed(1)}-second clip made as ${c.pieces} pieces of ${(each.frames / spec.fps).toFixed(1)} s at ${each.level.width} by ${each.level.height}, ${each.frames} frames each, ${c.q.steps} steps, each starting where the last ended, then joined (a soft seam at each join)` : `a ${(each.frames / spec.fps).toFixed(1)}-second clip at ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${c.q.steps} steps`;
+    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""}${c.pieces > 1 ? " in all" : ""} for ${shape}${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}${c.follow ? ` Steps and guidance follow what ${c.follow.name}'s creator used (${settingsLabel(c.follow)}), as chosen under LoRAs.` : ""}`;
     // Above what this machine has run out of memory at: said before asking.
     const limit = memoryLimit(t.repo);
     const over = limit && each.frames * each.level.width * each.level.height >= limit.load;
@@ -3154,7 +3160,7 @@ function renderImage(box, t) {
   const makeItem = (prompt) => {
     const c = chosen();
     const typed = $("#image-negative").value.trim();
-    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, pieces: c.pieces ?? 1, each: c.eachText ?? c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, startFile: box.querySelector("#video-start")?.files[0] ?? null, refFiles: [...(box.querySelector("#video-refs")?.files ?? [])].slice(0, 9), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, ...(c.kind === "scene" ? { scene: true, sceneSeconds: c.asked, shots: null } : {}) };
+    return { prompt, negative: typed || (spec?.avoid && c.level && c.level !== "low" ? spec.avoid : ""), quality: c.quality ?? null, level: c.level ?? null, q: c.q, expand: Boolean(c.q?.expand), settings: c.text, pieces: c.pieces ?? 1, each: c.eachText ?? c.text, seed: randomSeed(), estimate: c.estimate ? { base: c.estimate.base, seconds: c.estimate.seconds } : null, follow: c.follow ?? null, startFile: box.querySelector("#video-start")?.files[0] ?? null, refFiles: [...(box.querySelector("#video-refs")?.files ?? [])].slice(0, 9), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, ...(c.kind === "scene" ? { scene: true, sceneSeconds: c.asked, shots: null } : {}) };
   };
   // Room first: the disk grows (its models stay), then the part can be added.
   box.querySelector("#grow-for-refs")?.addEventListener("click", async (e) => {
@@ -3173,7 +3179,7 @@ function renderImage(box, t) {
     await load();
     openModel(t.repo);
   });
-  if (box.querySelector("#loras")) wireLoras(box, t);
+  if (box.querySelector("#loras")) wireLoras(box, t, refreshEstimate);
   box.querySelector("#replace-for-refs")?.addEventListener("click", () => {
     state.rentFrom = t.repo;
     replaceMachine({ diskGb: t.referenceGrowTo });
@@ -3874,7 +3880,7 @@ function renderImage(box, t) {
     // A picture painted over takes a fraction of the time, which says
     // nothing about a fresh one: the guess is not adjusted from it.
     if (job.took && !(item.paintOver && kind === "image")) {
-      if (spec && item.estimate?.base) noteEstimate(t.repo, item.estimate.base, job.took);
+      if (spec && item.estimate?.base && !item.follow) noteEstimate(t.repo, item.estimate.base, job.took);
       else if (item.quality) rememberTook(repo, item.quality, job.took);
       if (job.loadSeconds > 5) rememberLoad(t.repo, job.loadSeconds);
       const guess = item.estimate?.seconds ?? (item.quality ? qualities[item.quality]?.seconds : null);
@@ -4556,14 +4562,35 @@ function loraJobPart(t) {
   if ((loras.length || finetune) && loraMachineTooOld()) throw new Error(loraMachineTooOld());
   return { job: { ...(loras.length ? { loras } : {}), ...(finetune ? { finetune } : {}) }, trigger: [...new Set(trigger)].slice(0, 8) };
 }
-function wireLoras(box, t) {
+// The steps and guidance a ticked LoRA's creator used, when the person
+// chose to follow them under LoRAs: the last ticked one with any.
+function loraSettings(t) {
+  const book = loraBook(t.repo);
+  let out = null;
+  for (const key of Object.keys(book.on)) {
+    const item = book.items[key];
+    if (item?.settings && (item.settings.steps || item.settings.cfg != null) && loraHere(t, key)) out = { ...item.settings, name: item.name };
+  }
+  return out;
+}
+const settingsLabel = (settings) => [settings.steps ? `${settings.steps} steps` : "", settings.cfg != null ? `guidance ${settings.cfg}` : ""].filter(Boolean).join(", ");
+// What a showcase clip was made with, in words.
+function sampleSettingsParts(s) {
+  return [s.steps != null ? `${s.steps} steps` : "", s.cfg != null ? `guidance ${s.cfg}` : "", s.sampler ? String(s.sampler) : "", s.width && s.height ? `${s.width} by ${s.height}` : "", s.frames ? `${s.frames} frames` : "", s.fps ? `${s.fps} fps` : "", s.shift != null ? `shift ${s.shift}` : "", s.strength != null ? `this one at ${s.strength}` : "", s.with?.length ? `with ${s.with.map((w) => `${w.name}${w.strength != null ? ` at ${w.strength}` : ""}`).join(", ")}` : "", s.checkpoint ? `on ${s.checkpoint}` : ""].filter(Boolean);
+}
+// The recipes read this visit, by model, version and adult setting.
+const loraRecipes = new Map();
+function wireLoras(box, t, onChange = () => {}) {
   const body = box.querySelector("#loras-body");
   const count = box.querySelector("#loras-count");
   const book = () => loraBook(t.repo);
   const save = (b) => {
     saveLoraBook(t.repo, b);
     count.textContent = loraSummary(t).text;
+    onChange();
   };
+  // Which added item has its creator's settings open, kept across redraws.
+  let openRecipe = null;
   const fmtGb = (gb) => (gb ? (gb < 1 ? `${Math.round(gb * 1024)} MB` : `${gb.toFixed(1)} GB`) : "");
   const sourceName = (s) => (s === "civitai" ? "Civitai" : "Hugging Face");
   const draw = () => {
@@ -4577,13 +4604,15 @@ function wireLoras(box, t) {
       return `<div class="lora-row ${here ? "" : "gone"}" data-key="${esc(key)}">
         <label class="check"><input type="checkbox" class="lora-on" ${on && here ? "checked" : ""} ${here ? "" : "disabled"}> <b>${esc(i.name)}</b>${i.adult ? ' <span class="pill adult">18+</span>' : ""} <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.trigger?.length ? ` · trigger: ${esc(i.trigger.join(", "))}` : ""}</span></label>
         ${here ? `<label class="lora-scale small">strength <input type="range" class="lora-strength" min="0" max="1.5" step="0.05" value="${Number(b.on[key] ?? i.scale ?? 1)}"> <output>${Number(b.on[key] ?? i.scale ?? 1).toFixed(2)}</output></label>` : `<span class="muted small">not on this machine</span> <button class="ghost lora-readd">Add again</button>`}
+        ${i.settings && (i.settings.steps || i.settings.cfg != null) ? `<span class="pill lora-settings-pill" title="Clips with it ticked are made at these, as its creator's showcase was">${esc(settingsLabel(i.settings))} <button class="lora-drop-settings" title="Back to the quality setting's own steps and guidance" aria-label="Drop these settings">×</button></span>` : ""}
+        <button class="ghost lora-recipe" title="How its creator made the clips that show it off: strength, prompts, settings">Creator's settings</button>
         <button class="ghost lora-forget" title="Take it off the list${here ? " and off the machine" : ""}">Remove</button>
       </div>`;
     };
     body.innerHTML = `
       ${fts.length ? `<div class="lora-group"><p class="small"><b>Model version</b> <span class="muted">a fine-tune runs in place of the model's own transformer</span></p>
         <label class="check"><input type="radio" name="lora-ft" value="" ${b.finetune ? "" : "checked"}> ${esc(t.repo.split("/").pop())} as published</label>
-        ${fts.map(([key, i]) => `<label class="check ${loraHere(t, key) ? "" : "gone"}"><input type="radio" name="lora-ft" value="${esc(key)}" ${b.finetune === key ? "checked" : ""} ${loraHere(t, key) ? "" : "disabled"}> <b>${esc(i.name)}</b>${i.adult ? ' <span class="pill adult">18+</span>' : ""} <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.fp ? ` · ${esc(i.fp)}` : ""}${loraHere(t, key) ? "" : " · not on this machine"}</span> ${loraHere(t, key) ? "" : `<button class="ghost lora-readd" data-key="${esc(key)}">Add again</button>`} <button class="ghost lora-forget" data-key="${esc(key)}">Remove</button></label>`).join("")}</div>` : ""}
+        ${fts.map(([key, i]) => `<div class="lora-row ft ${loraHere(t, key) ? "" : "gone"}" data-key="${esc(key)}"><label class="check"><input type="radio" name="lora-ft" value="${esc(key)}" ${b.finetune === key ? "checked" : ""} ${loraHere(t, key) ? "" : "disabled"}> <b>${esc(i.name)}</b>${i.adult ? ' <span class="pill adult">18+</span>' : ""} <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.fp ? ` · ${esc(i.fp)}` : ""}${loraHere(t, key) ? "" : " · not on this machine"}</span></label> ${loraHere(t, key) ? "" : `<button class="ghost lora-readd" data-key="${esc(key)}">Add again</button>`} <button class="ghost lora-recipe" title="How its creator made the clips that show it off">Creator's settings</button> <button class="ghost lora-forget" data-key="${esc(key)}">Remove</button></div>`).join("")}</div>` : ""}
       ${los.length ? `<div class="lora-group"><p class="small"><b>LoRAs</b> <span class="muted">tick to use; up to four at once</span></p>${los.map(row).join("")}</div>` : ""}
       <p class="tools-row"><button class="ghost" id="lora-look">${b.found ? "Look again" : "Look for LoRAs"}</button><span class="muted small">on Hugging Face and Civitai, made for ${esc(t.repo.split("/").pop())}. Nothing is used unless you tick it.</span></p>
       <label class="check small"><input type="checkbox" id="lora-adult" ${loraAdult() ? "checked" : ""}> Include 18+ results <span class="muted">adult LoRAs from Civitai, marked 18+; for adults only</span></label>
@@ -4643,6 +4672,24 @@ function wireLoras(box, t) {
       const item = book().items[key];
       if (item) addToMachine(item, btn);
     }));
+    body.querySelectorAll(".lora-row .lora-recipe").forEach((btn) => btn.addEventListener("click", () => {
+      const key = btn.closest(".lora-row").dataset.key;
+      const item = book().items[key];
+      if (item) showRecipe(item, btn);
+    }));
+    body.querySelectorAll(".lora-drop-settings").forEach((btn) => btn.addEventListener("click", () => {
+      const key = btn.closest(".lora-row").dataset.key;
+      const nb = book();
+      if (nb.items[key]) delete nb.items[key].settings;
+      save(nb);
+      draw();
+    }));
+    if (openRecipe) {
+      const btn = body.querySelector(`.lora-row[data-key="${CSS.escape(openRecipe)}"] .lora-recipe`);
+      const item = book().items[openRecipe];
+      if (btn && item) showRecipe(item, btn);
+      else openRecipe = null;
+    }
     body.querySelector("#lora-look").addEventListener("click", look);
     body.querySelector("#lora-adult").addEventListener("change", (e) => {
       setLoraAdult(e.target.checked);
@@ -4672,6 +4719,7 @@ function wireLoras(box, t) {
     }
     out.innerHTML = `${hitCard(item, item.via === "prompthero" ? "From PromptHero, a copy of this Civitai model." : "")}${item.source === "civitai" ? civitaiNote() : ""}`;
     out.querySelector(".lora-pick").addEventListener("click", (e) => pickFile(item, e.currentTarget));
+    out.querySelector(".lora-recipe").addEventListener("click", (e) => showRecipe(item, e.currentTarget));
   }
   async function look() {
     const out = body.querySelector("#lora-found");
@@ -4707,15 +4755,140 @@ function wireLoras(box, t) {
       ${los.length ? `<details class="lora-list" open><summary class="small"><b>${los.length} LoRA${los.length === 1 ? "" : "s"}</b> <span class="muted">small add-ons for style, motion or speed, most downloaded first</span></summary>${los.map(card).join("")}</details>` : ""}
       ${civitaiNote()}`;
     out.querySelectorAll(".lora-pick").forEach((btn) => btn.addEventListener("click", () => pickFile(items.find((i) => i.id === btn.closest(".lora-hit").dataset.id), btn)));
+    out.querySelectorAll(".lora-recipe").forEach((btn) => btn.addEventListener("click", () => showRecipe(items.find((i) => i.id === btn.closest(".lora-hit").dataset.id), btn)));
   }
   function hitCard(i, note = "") {
     const have = new Set(Object.values(book().items).map((x) => x.repo));
-    return `<div class="lora-hit" data-id="${esc(i.id)}"><div><b>${esc(i.name)}</b> <span class="pill">${sourceName(i.source)}</span> <span class="pill">${i.kind === "finetune" ? "Fine-tune" : "LoRA"}</span>${i.adult ? ' <span class="pill adult">18+</span>' : ""}${have.has(i.id) ? ` <span class="pill ok">added</span>` : ""}<br><span class="muted small">${note ? `${esc(note)} ` : ""}${i.creator ? `by ${esc(i.creator)} · ` : ""}${Number(i.downloads || 0).toLocaleString()} downloads · <a href="${esc(i.url)}" target="_blank" rel="noopener">page</a></span></div><button class="ghost lora-pick">Add to the machine</button><div class="lora-files"></div></div>`;
+    return `<div class="lora-hit" data-id="${esc(i.id)}"><div><b>${esc(i.name)}</b> <span class="pill">${sourceName(i.source)}</span> <span class="pill">${i.kind === "finetune" ? "Fine-tune" : "LoRA"}</span>${i.adult ? ' <span class="pill adult">18+</span>' : ""}${have.has(i.id) ? ` <span class="pill ok">added</span>` : ""}<br><span class="muted small">${note ? `${esc(note)} ` : ""}${i.creator ? `by ${esc(i.creator)} · ` : ""}${Number(i.downloads || 0).toLocaleString()} downloads · <a href="${esc(i.url)}" target="_blank" rel="noopener">page</a></span></div><span class="tools-row"><button class="ghost lora-recipe" title="How its creator made the clips that show it off">Creator's settings</button><button class="ghost lora-pick">Add to the machine</button></span><div class="lora-files"></div></div>`;
+  }
+  // How the creator made the clips that show it off, under the row or the
+  // card: read once a visit, then shown and hidden on the button.
+  async function showRecipe(item, btn) {
+    const holder = btn.closest(".lora-row, .lora-hit");
+    let out = holder.querySelector(":scope > .lora-recipe-box");
+    if (out && !out.hidden) {
+      out.hidden = true;
+      btn.textContent = "Creator's settings";
+      if (openRecipe === holder.dataset.key) openRecipe = null;
+      return;
+    }
+    if (!out) {
+      out = document.createElement("div");
+      out.className = "lora-recipe-box";
+      holder.appendChild(out);
+    }
+    out.hidden = false;
+    btn.textContent = "Hide the creator's settings";
+    if (holder.dataset.key) openRecipe = holder.dataset.key;
+    const id = item.repo ?? item.id;
+    // The version on the machine, from the file's name; a card's newest file otherwise.
+    const version = /^v(\d+)_f\d+\.safetensors$/.exec(item.file ?? item.files?.[0]?.file ?? "")?.[1] ?? null;
+    const adult = Boolean(item.adult) || loraAdult();
+    const cacheKey = `${id}|${version ?? ""}|${adult ? 1 : 0}`;
+    if (!loraRecipes.has(cacheKey)) {
+      out.innerHTML = `<p class="muted small">Reading the creator's page</p>`;
+      try {
+        loraRecipes.set(cacheKey, await api.get(`/api/loras/recipe?base=${encodeURIComponent(t.repo)}&id=${encodeURIComponent(id)}${version ? `&version=${version}` : ""}${adult ? "&adult=1" : ""}`));
+      } catch (err) {
+        out.innerHTML = `<p class="notice bad small">Could not read the creator's page: ${esc(err.message)}</p>`;
+        return;
+      }
+    }
+    drawRecipe(out, loraRecipes.get(cacheKey), item, holder.dataset.key ?? null);
+  }
+  function drawRecipe(out, r, item, key) {
+    const here = key ? loraHere(t, key) : false;
+    const isLora = (item.kind ?? "lora") !== "finetune";
+    const fmt = (x) => String(Math.round(Number(x) * 100) / 100);
+    const pick = r.strength ? Math.round(((r.strength.low + r.strength.high) / 2) * 20) / 20 : null;
+    const strengthLine = r.strength
+      ? `<b>${r.strength.low === r.strength.high ? fmt(r.strength.low) : `${fmt(r.strength.low)} to ${fmt(r.strength.high)}`}</b> <span class="muted">${r.strength.from === "notes" ? `the creator's own word${r.strength.text ? ` ("${esc(r.strength.text)}")` : ""}` : "what the showcase clips used"}</span>${key && here && isLora ? ` <button class="ghost lora-use-strength" data-value="${pick}">Set ${fmt(pick)}</button>` : ""}`
+      : `<span class="muted">nothing said on the page; 1 is as trained</span>`;
+    const sample = (s, n) => `<div class="lora-sample" data-n="${n}">
+        ${s.url && s.type === "video" ? `<video controls muted playsinline preload="metadata" src="${esc(s.url)}"></video>` : s.url ? `<img src="${esc(s.url)}" alt="" loading="lazy">` : ""}
+        <div class="lora-sample-body">
+          <p class="muted small">${esc([s.reactions != null ? `${s.reactions} reaction${s.reactions === 1 ? "" : "s"}` : "", s.seconds ? `${Math.round(s.seconds)} s` : "", ...sampleSettingsParts(s)].filter(Boolean).join(" · ") || "the prompt it was made from")}</p>
+          <textarea class="lora-sample-prompt" rows="4" readonly>${esc(s.prompt)}</textarea>
+          <p class="tools-row"><button class="ghost lora-use-prompt">Use this prompt</button><button class="ghost lora-copy-prompt">Copy</button>${key && here && isLora && (s.steps != null || s.cfg != null) ? `<button class="ghost lora-use-settings" data-steps="${s.steps ?? ""}" data-cfg="${s.cfg ?? ""}">Make clips with it at ${esc(settingsLabel({ steps: s.steps, cfg: s.cfg }))}</button>` : ""}</p>
+        </div>
+      </div>`;
+    const shown = r.samples ?? [];
+    out.innerHTML = `
+      <p class="small"><b>How ${r.creator ? esc(r.creator) : "the creator"} made the clips that show it off</b> <span class="muted">· <a href="${esc(r.url)}" target="_blank" rel="noopener">the page</a>${r.version?.name ? ` · ${esc(r.version.name)}` : ""}</span></p>
+      <p class="small">Strength: ${strengthLine}</p>
+      ${r.settings && (r.settings.steps || r.settings.cfg != null) ? `<p class="small">Settings: <b>${esc(settingsLabel(r.settings))}</b> <span class="muted">${r.source === "civitai" ? "what most of the showcase clips used" : "from the page"}</span>${key && here && isLora ? ` <button class="ghost lora-use-settings" data-steps="${r.settings.steps ?? ""}" data-cfg="${r.settings.cfg ?? ""}">Make clips with it at these</button>` : ""}</p>` : ""}
+      ${r.trigger?.length ? `<p class="small">Trigger words: ${r.trigger.map((w) => `<code>${esc(w)}</code>`).join(" ")}${isLora ? ` <span class="muted">put at the start of your description for you while it is ticked</span>` : ""}</p>` : ""}
+      ${r.tips?.length ? `<p class="small"><b>The creator's notes</b></p><ul class="lora-tips small">${r.tips.map((tip) => `<li>${esc(tip)}</li>`).join("")}</ul>` : `<p class="muted small">The page says nothing about how to use it.</p>`}
+      ${r.notesText ? `<details class="small"><summary class="muted">Everything written on the page</summary><pre class="lora-notes">${esc(r.notesText)}</pre></details>` : ""}
+      ${shown.length ? `<p class="small"><b>Showcase clips</b> <span class="muted">${shown.some((s) => s.reactions != null) ? "the most liked first" : "in the creator's order"}, each with the prompt it was made from${r.hidden ? `; ${r.hidden} adult one${r.hidden === 1 ? "" : "s"} not shown (tick Include 18+ results)` : ""}</span></p>${shown.slice(0, 3).map(sample).join("")}${shown.length > 3 ? `<details class="small"><summary class="muted">${shown.length - 3} more</summary>${shown.slice(3).map((s, n) => sample(s, n + 3)).join("")}</details>` : ""}` : `<p class="muted small">No showcase clip with its prompt on the page${r.hidden ? ` (${r.hidden} adult one${r.hidden === 1 ? "" : "s"} not shown; tick Include 18+ results)` : ""}.</p>`}
+      <p class="tools-row"><button class="ghost lora-ask-claude">Ask Claude how to prompt with it</button><span class="muted small">Claude reads the notes and the showcase prompts and says what to set and how to shape your description.</span></p>
+      <div class="lora-claude" hidden></div>`;
+    out.querySelector(".lora-use-strength")?.addEventListener("click", (e) => {
+      const v = Number(e.currentTarget.dataset.value);
+      const nb = book();
+      if (!nb.items[key]) return;
+      nb.items[key].scale = v;
+      if (key in nb.on) nb.on[key] = v;
+      save(nb);
+      const slider = out.closest(".lora-row")?.querySelector(".lora-strength");
+      if (slider) {
+        slider.value = String(v);
+        slider.nextElementSibling.textContent = v.toFixed(2);
+      }
+      notice(`${item.name} is set to strength ${v.toFixed(2)}.`, "ok");
+    });
+    out.querySelectorAll(".lora-sample").forEach((el) => {
+      const s = shown[Number(el.dataset.n)];
+      el.querySelector(".lora-use-prompt").addEventListener("click", () => {
+        const field = $("#image-prompt");
+        if (!field) return;
+        field.value = s.prompt;
+        field.dispatchEvent(new Event("input"));
+        if (s.negative && $("#image-negative")) $("#image-negative").value = s.negative;
+        notice("The showcase prompt is in the description box: change the subject and the scene to yours and keep its shape.", "info");
+        field.focus();
+      });
+      el.querySelector(".lora-copy-prompt").addEventListener("click", async (e) => {
+        const b = e.currentTarget;
+        try {
+          await navigator.clipboard.writeText(s.prompt);
+          b.textContent = "Copied";
+        } catch {
+          b.textContent = "Select it and copy";
+        }
+      });
+    });
+    out.querySelectorAll(".lora-use-settings").forEach((b) => b.addEventListener("click", () => {
+      const nb = book();
+      if (!nb.items[key]) return;
+      const steps = Number.parseInt(b.dataset.steps, 10);
+      const cfg = Number.parseFloat(b.dataset.cfg);
+      nb.items[key].settings = { ...(steps > 0 ? { steps } : {}), ...(Number.isFinite(cfg) ? { cfg } : {}), from: r.name };
+      save(nb);
+      notice(`Clips with ${item.name} ticked are made at ${settingsLabel(nb.items[key].settings)}, as its creator's were.`, "ok");
+      draw();
+    }));
+    out.querySelector(".lora-ask-claude").addEventListener("click", async (e) => {
+      const b = e.currentTarget;
+      const slot = out.querySelector(".lora-claude");
+      b.disabled = true;
+      slot.hidden = false;
+      slot.innerHTML = `<p class="muted small">Claude is reading the creator's page</p>`;
+      const got = await claudeText({ kind: "prompt", mode: "lora", model: t.repo, lora: { name: r.name, creator: r.creator, trigger: r.trigger, strength: r.strength ? `${r.strength.low === r.strength.high ? r.strength.low : `${r.strength.low} to ${r.strength.high}`}${r.strength.from === "notes" ? ` (the creator's words: ${r.strength.text || "on the page"})` : " (what the showcase clips used)"}` : "", tips: r.tips, samples: shown.slice(0, 4).map((s) => ({ prompt: s.prompt, settings: sampleSettingsParts(s).join(", ") })) } }, (text) => {
+        slot.innerHTML = `<pre class="lora-claude-text">${esc(text)}</pre>`;
+      });
+      b.disabled = false;
+      if (!got.text) {
+        slot.innerHTML = `<p class="muted small">No answer: ${esc(got.why)}.</p>`;
+        return;
+      }
+      slot.innerHTML = `<p class="muted small"><b>Claude on using ${esc(r.name)}</b></p><pre class="lora-claude-text">${esc(got.text)}</pre>`;
+    });
   }
   const civitaiNote = () => (state.civitaiToken ? "" : `<p class="muted small">Civitai lets only signed-in accounts download: add your Civitai API key in Settings (Hugging Face and Civitai) to add one from there.</p>`);
   // A repository's or Civitai model's files, one to pick when there are several.
   async function pickFile(item, btn) {
-    const slot = btn.parentElement.querySelector(".lora-files");
+    const slot = btn.closest(".lora-hit").querySelector(".lora-files");
     let files = item.files;
     if (!files) {
       btn.disabled = true;

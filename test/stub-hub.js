@@ -171,6 +171,8 @@ export function tinySafetensors(names) {
 }
 
 export const CARDS = {
+  // A LoRA's card: the trigger word, an example with its clip, a settings table and advice.
+  "motionlab/Wan-TI2V-Motion-LoRA": "---\nlicense: apache-2.0\nbase_model: Wan-AI/Wan2.2-TI2V-5B-Diffusers\nbase_model_relation: adapter\ninstance_prompt: mvmt\nwidget:\n  - text: \"mvmt, a dancer spins across a sunlit studio floor, slow dolly in\"\n    output:\n      url: samples/spin.mp4\n---\n# Wan TI2V Motion LoRA\n\nSmoother human motion for Wan 2.2 TI2V-5B. Start the description with the trigger word and describe one continuous movement.\n\n## Recommended settings\n\n| setting | value |\n|---|---|\n| strength | 0.8 |\n| steps | 30 |\n| guidance | 1 |\n\nWorks best at 0.7 to 0.9 strength; above 1.0 limbs smear.\n\n```sh\npip install diffusers\n```\n",
   "bartowski/Llama-3.2-3B-Instruct-GGUF": "---\nlicense: llama3.2\ntags:\n- llama\n---\n# Llama 3.2 3B Instruct\n\nA small assistant that is **great for quick answers** and summaries. Runs on a laptop.\n\n```sh\nollama run x\n```\n",
   "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF": "# Qwen2.5 Coder\n\nTrained on code. People use it for [coding help](https://example.com) and refactoring.",
   "ggerganov/whisper.cpp": "# whisper.cpp models\n\nggml files for whisper.cpp. Transcribes recordings offline.",

@@ -456,6 +456,16 @@ a.button { display: inline-block; border: 1px solid var(--line); border-radius: 
 .lora-files { flex-basis: 100%; }
 .lora-link input { flex: 1 1 260px; min-width: 0; }
 .lora-files select { max-width: 100%; }
+.lora-settings-pill button { border: 0; background: none; cursor: pointer; padding: 0 2px; font-size: 14px; line-height: 1; color: inherit; }
+.lora-recipe-box { flex-basis: 100%; border-top: 1px dashed var(--line); margin-top: 4px; padding: 8px 0 4px; }
+.lora-recipe-box > p { margin: 4px 0; }
+.lora-tips { margin: 2px 0 8px 18px; }
+.lora-notes, .lora-claude-text { white-space: pre-wrap; max-height: 260px; overflow: auto; font-size: 12px; margin: 4px 0; }
+.lora-sample { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0; }
+.lora-sample video, .lora-sample img { max-width: 200px; max-height: 200px; border-radius: 6px; background: #000; flex: 0 0 auto; }
+.lora-sample-body { flex: 1 1 260px; min-width: 0; }
+.lora-sample-body p { margin: 2px 0; }
+.lora-sample-prompt { width: 100%; box-sizing: border-box; font-size: 12px; font-family: inherit; }
 .boot { margin: 10px 0 4px; }
 .boot .progress { margin-bottom: 6px; }
 .boot p { margin: 4px 0; }
