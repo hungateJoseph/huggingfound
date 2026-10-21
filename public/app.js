@@ -2590,7 +2590,19 @@ function chatRequest(body, signal = null) {
   if (!agent && state.hosted && !direct) return Promise.reject(new Error(noChatRoute()));
   if (!agent) return plain();
   // An agent from before image 28 has no chat route: the plain way then.
-  return fetch(`${agent}/chat`, { method: "POST", headers: { "Content-Type": "application/json", ...agentHeaders() }, body: JSON.stringify({ b64: base64Utf8(JSON.stringify({ ...body, stream: true })) }), ...(signal ? { signal } : {}) }).then((res) => (res.status === 404 || res.status === 405 ? plain() : res));
+  // A reply the browser could not read at all (the agent down, or the
+  // proxy in front of it answering with a page of its own) is tried the
+  // plain way too, when there is one; otherwise it is said for what it is.
+  return fetch(`${agent}/chat`, { method: "POST", headers: { "Content-Type": "application/json", ...agentHeaders() }, body: JSON.stringify({ b64: base64Utf8(JSON.stringify({ ...body, stream: true })) }), ...(signal ? { signal } : {}) })
+    .then((res) => (res.status === 404 || res.status === 405 ? plain() : res))
+    .catch((err) => {
+      if (signal?.aborted) throw err;
+      if (direct) return plain().catch(() => Promise.reject(new Error(machineUnreachable(err))));
+      throw new Error(machineUnreachable(err));
+    });
+}
+function machineUnreachable(err) {
+  return `The browser could not reach the machine (${err?.message || "no answer"}). Either the agent on it is not answering, or the proxy in front of the machine answered with a page of its own that the browser may not read: an outage, a block, or its limit of 100 seconds without a word. Open the Machine report from the bar; if the agent is not answering, stop and start the machine there.`;
 }
 
 // Hands the browser a file to save: a conversation, a transcript.

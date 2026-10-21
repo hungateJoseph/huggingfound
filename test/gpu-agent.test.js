@@ -49,7 +49,7 @@ before(async () => {
   fs.chmodSync(fake, 0o755);
   // Ollama is played by a script answering its version on a port of its own.
   // Answers its version, and echoes a chat's body back as two lines, as Ollama streams.
-  fs.writeFileSync(fakeOllama, `#!${process.execPath}\nrequire("node:http").createServer((q, s) => { if (q.method !== "POST") return s.end(JSON.stringify({ version: "fake" })); let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { s.setHeader("Content-Type", "application/x-ndjson"); s.write(JSON.stringify({ message: { role: "assistant", content: "echo" }, got: JSON.parse(b) }) + "\\n"); s.end(JSON.stringify({ done: true }) + "\\n"); }); }).listen(${ollamaPort}, "127.0.0.1");\n`);
+  fs.writeFileSync(fakeOllama, `#!${process.execPath}\nrequire("node:http").createServer((q, s) => { if (q.method !== "POST") return s.end(JSON.stringify({ version: "fake" })); let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { if (/make-it-fail/.test(b)) { s.statusCode = 500; return s.end(JSON.stringify({ error: "model requires more system memory (40.0 GiB) than is available (20.0 GiB)" })); } s.setHeader("Content-Type", "application/x-ndjson"); s.write(JSON.stringify({ message: { role: "assistant", content: "echo" }, got: JSON.parse(b) }) + "\\n"); s.end(JSON.stringify({ done: true }) + "\\n"); }); }).listen(${ollamaPort}, "127.0.0.1");\n`);
   fs.chmodSync(fakeOllama, 0o755);
   // A half-written part from a download cut off before the restart.
   fs.mkdirSync(path.join(modelsDir, "x", "y", "unet"), { recursive: true });
@@ -606,8 +606,14 @@ test("a chat model held up by an earlier reply is freed: Ollama is started afres
   // A chat carried to Ollama: base64-wrapped in, decoded, streamed back line by line.
   const carried = await post("/chat", { b64: Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi <script>alert(1)</script>" }] })).toString("base64") });
   assert.equal(carried.status, 200);
+  // The first line is the agent's own, at once, so the proxy in front of the machine sees a byte before Ollama's first word.
   const lines = (await carried.text()).trim().split("\n").map((l) => JSON.parse(l));
-  assert.deepEqual([lines[0].got.model, lines[0].got.messages[0].content, lines[0].got.stream, lines[1].done], ["m", "hi <script>alert(1)</script>", true, true], "the chat reached Ollama as sent, streaming");
+  assert.deepEqual(lines[0], {}, "a heartbeat first");
+  assert.deepEqual([lines[1].got.model, lines[1].got.messages[0].content, lines[1].got.stream, lines[2].done], ["m", "hi <script>alert(1)</script>", true, true], "the chat reached Ollama as sent, streaming");
+  // Ollama's refusal comes as a line of its own, the headers being gone.
+  const refused = await post("/chat", { b64: Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: "make-it-fail" }] })).toString("base64") });
+  assert.equal(refused.status, 200);
+  assert.deepEqual((await refused.text()).trim().split("\n").map((l) => JSON.parse(l)).at(-1), { error: "model requires more system memory (40.0 GiB) than is available (20.0 GiB)" });
   assert.equal((await post("/chat", { b64: "not base64 json" })).status, 400);
   assert.match(await (await get("/journal?lines=20")).text(), /ollama restarted from the page \(answering after \d+ s\)/);
   // Without the site's secret, nothing is restarted.

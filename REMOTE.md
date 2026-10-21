@@ -607,6 +607,20 @@ the token estimate counts symbol runs as tokens so the chip's warning
 is honest; and Ollama's context error is said in plain words with both
 counts.
 
+Then "Failed to fetch" (2026-10-21, 14:51): the browser could not read
+the machine's reply at all. Across origins an error page from the proxy
+in front of the machine carries no CORS headers, so a 502, a block or
+Cloudflare's 524 (nothing said for 100 seconds) all show as a bare fetch
+failure, and the page's reading of a 403's body only works on the
+server's own proxy. The likely one was the 100 seconds: the agent sent
+nothing until Ollama's first word, and a big model loading and reading a
+16,000-token digest takes longer. Image 29: the agent's `/chat` answers
+at once with a blank line and a heartbeat (`{}`) every ten seconds until
+Ollama's first word, and says Ollama's errors on a line of their own; the
+page skips blank lines. A reply the browser still cannot read falls back
+to the plain route when there is one, else is said for what it is, with
+the Machine report as the next step.
+
 The app on a computer has the same path: its server's `/api/chat` proxy
 carries the chat to the rented machine's agent (image 28, falling back to
 the plain route when the agent says 404) and, when a request is still

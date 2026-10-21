@@ -1406,22 +1406,47 @@ const server = http.createServer(async (req, res) => {
       res.on("close", () => {
         if (!res.writableEnded) gone.abort();
       });
+      // The answer's first line goes out at once and a blank heartbeat
+      // every few seconds until Ollama's first word: the proxy in front of
+      // the machine (Cloudflare's, for RunPod's addresses) drops a
+      // connection with nothing said for 100 seconds, which a big model
+      // loading and reading a long request can take. The page skips lines
+      // with no words in them. Anything that goes wrong after this point
+      // is said on a line of its own, since the headers are gone.
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store", "X-Accel-Buffering": "no" });
+      res.write("{}\n");
+      const heartbeat = setInterval(() => {
+        if (!res.writableEnded) res.write("{}\n");
+      }, 10e3);
+      const fail = (error) => {
+        clearInterval(heartbeat);
+        if (!res.writableEnded) res.end(`${JSON.stringify({ error })}\n`);
+      };
       // Ollama not answering next door is started again, once, before giving up.
       const ask = () => fetch(`${OLLAMA_URL}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), signal: gone.signal });
       let upstream;
       try {
         upstream = await ask();
       } catch (err) {
-        if (gone.signal.aborted) return;
+        if (gone.signal.aborted) return fail("the page went away");
         journal(`chat: Ollama did not answer (${err.message}); starting it again`);
         const again = await restartOllama();
         try {
           upstream = await ask();
         } catch (err2) {
-          return send(res, 502, { error: `Ollama on this machine is not running${again.ok ? "" : " and could not be started"}: ${err2.message}. Stop and start the machine from the bar.` });
+          return fail(`Ollama on this machine is not running${again.ok ? "" : " and could not be started"}: ${err2.message}. Stop and start the machine from the bar.`);
         }
       }
-      res.writeHead(upstream.status, { "Content-Type": upstream.headers.get("content-type") || "application/x-ndjson", "Cache-Control": "no-store" });
+      if (!upstream.ok) {
+        const why = await upstream.text().catch(() => "");
+        let said = "";
+        try {
+          said = JSON.parse(why).error || "";
+        } catch {
+          said = why.slice(0, 300);
+        }
+        return fail(said || `Ollama replied HTTP ${upstream.status}`);
+      }
       const reader = upstream.body.getReader();
       for (;;) {
         let chunk;
@@ -1434,6 +1459,7 @@ const server = http.createServer(async (req, res) => {
         res.write(chunk.value);
         touchActivity();
       }
+      clearInterval(heartbeat);
       res.end();
       return;
     }
