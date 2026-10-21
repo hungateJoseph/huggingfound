@@ -299,7 +299,34 @@ body[data-mode="results"] .trait-search.big, body[data-mode="browse"] .trait-sea
 .reason.lead-reason h3 { font-size: 18px; color: var(--accent-ink); }
 .reason.lead-reason p { color: var(--ink); font-size: 15px; }
 .reason-note { margin: 14px auto 0; max-width: 640px; }
-body[data-mode="results"] #why, body[data-mode="browse"] #why { display: none; }
+body[data-mode="results"] #why, body[data-mode="browse"] #why, body[data-mode="results"] .flow, body[data-mode="browse"] .flow { display: none; }
+
+/* The two flowcharts under the search: nodes on a dotted field, wired left to right. */
+.flow { text-align: center; padding: 26px 20px 14px; margin: 6px 0 18px; border: 1px solid var(--line); border-radius: var(--radius); background-color: var(--surface); background-image: radial-gradient(#d6dce5 1.2px, transparent 1.3px); background-size: 20px 20px; }
+.flow h2 { margin: 0 0 8px; font-size: 26px; }
+.flow .lead { margin: 0 auto 10px; max-width: 680px; }
+.flow-art { display: block; width: 100%; max-width: 1000px; height: auto; margin: 0 auto; overflow: visible; }
+.flow-art .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; filter: drop-shadow(0 6px 14px rgba(15, 23, 42, 0.08)); }
+.flow-art .node.optional rect { stroke-dasharray: 5 4; }
+.flow-art .port { fill: var(--ink); }
+.flow-art .wire { fill: none; stroke: #c3cbd6; stroke-width: 2; }
+.flow-art .wire.faint { stroke-dasharray: 5 5; }
+.flow-art .wire.tie { stroke-dasharray: 3 4; stroke-width: 1.5; }
+.flow-art .icon { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.flow-art .icon .play { fill: var(--accent); stroke: none; }
+.flow-art .icon .check { stroke: var(--accent); stroke-width: 2.6; }
+.flow-art .emoji { font-size: 40px; }
+.flow-art .code { font: 700 26px ui-monospace, SFMono-Regular, Menlo, monospace; fill: var(--ink); }
+.flow-art .label { font: 600 15px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink); }
+.flow-art .label.sub { font-weight: 400; font-size: 13px; fill: var(--muted); }
+.flow-art .pill rect { fill: var(--accent-soft); stroke: none; }
+.flow-art .pill text { font: 600 12.5px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--accent-ink); }
+.flow-list { display: none; text-align: left; margin: 0 auto; padding: 0 0 0 20px; max-width: 520px; font-size: 14px; color: var(--muted); line-height: 1.6; }
+.flow-list b { color: var(--ink); }
+@media (max-width: 720px) {
+  .flow-art { display: none; }
+  .flow-list { display: block; }
+}
 .why { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .why span { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--chip); color: var(--muted); }
 .why span.say { background: var(--accent-soft); color: var(--accent-ink); }
