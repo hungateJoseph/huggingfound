@@ -115,7 +115,7 @@ function tunnels() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "26";
+const VERSION = "27";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -341,14 +341,16 @@ function askWorker(req, onProgress = null, timeoutMs = 60 * 60e3, onStart = null
 
 // Loads a folder model into the worker, replacing whatever either engine
 // had: the two cannot share the card.
-async function ensureWorkerLoaded(target, adapters = [], workflow = null) {
-  const key = JSON.stringify([target, adapters, workflow]);
+async function ensureWorkerLoaded(target, adapters = [], workflow = null, { fp8 = false, compile = false } = {}) {
+  const key = JSON.stringify([target, adapters, workflow, fp8, compile]);
   if (py.proc && py.dir && py.key === key) return;
   stopServer();
-  const req = { op: "load", adapters, ...(workflow ? { workflow } : {}) };
+  // fp8 weights are a way of loading (the model is loaded again to change
+  // it); the compiled blocks are set or unset on the loaded model.
+  const req = { op: "load", adapters, ...(workflow ? { workflow } : {}), ...(fp8 ? { fp8: true } : {}), ...(compile ? { compile: true } : {}) };
   if (target.endsWith(`/${INDEX}`)) req.dir = path.dirname(target);
   else req.file = target;
-  journal(`loading ${req.dir ?? req.file}${adapters.length ? ` with ${adapters.map((a) => path.basename(a.path)).join(", ")}` : ""}${workflow ? ` for ${workflow}` : ""}`);
+  journal(`loading ${req.dir ?? req.file}${adapters.length ? ` with ${adapters.map((a) => path.basename(a.path)).join(", ")}` : ""}${workflow ? ` for ${workflow}` : ""}${fp8 ? ", fp8 weights" : ""}${compile ? ", compiled blocks" : ""}`);
   const answer = await askWorker(req, null, 30 * 60e3);
   if (!answer.ok) {
     noteFailure("load", req.dir ?? req.file, answer.error || "the model did not load", answer.trace);
@@ -499,7 +501,7 @@ function startJob(input) {
         const req = { op: "generate", prompt: input.prompt, negative: input.negative, steps: input.steps, width: input.width, height: input.height, cfg: input.cfg, frames: input.frames, fps: input.fps, init: input.init, lastInit: input.lastInit ?? undefined, references: input.references?.length ? input.references : undefined, strength: input.init ? input.strength : undefined, ipImage: input.ipImage ?? undefined, seed: input.seed ?? undefined, cache: input.cache ?? undefined };
         let answer;
         for (let attempt = 0; ; attempt++) {
-          await ensureWorkerLoaded(file, adapters, input.references?.length ? "ref2va" : null);
+          await ensureWorkerLoaded(file, adapters, input.references?.length ? "ref2va" : null, { fp8: Boolean(input.fp8), compile: Boolean(input.compile) });
           job.kind = py.kind;
           job.note = py.note;
           // Jobs take the worker one at a time: this one waits its turn.
@@ -1201,7 +1203,7 @@ const server = http.createServer(async (req, res) => {
       const rel = (p) => path.relative(MODELS_DIR, p).split(path.sep).join("/");
       const loaded = sd.file ? rel(sd.file) : py.dir ? (py.dir.endsWith(".safetensors") || py.dir.endsWith(".ckpt") ? rel(py.dir) : `${rel(py.dir)}/${INDEX}`) : null;
       const room = diskSpace();
-      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, diskUsedGb: room?.usedGb != null ? Math.round(room.usedGb * 10) / 10 : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, busy: busy(), idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null, ...(tunnels() ? { tunnels: tunnels() } : {}) });
+      return send(res, 200, { ok: true, version: VERSION, sdOk: sdCheck.ok, sdProblem: sdCheck.problem, pyOk: pyCheck.ok, pyProblem: pyCheck.problem, gpu: pyCheck.gpu, vramGb: pyCheck.vramGb, fp8: pyCheck.fp8 ?? null, diskFreeGb: room ? Math.round(room.freeGb * 10) / 10 : null, diskTotalGb: room ? Math.round(room.totalGb) : null, diskUsedGb: room?.usedGb != null ? Math.round(room.usedGb * 10) / 10 : null, loaded, ready: sd.file ? sd.ready : Boolean(py.dir), loading: Boolean(sd.loading), models: listModels().length, busy: busy(), idleSeconds: Math.round((Date.now() - lastActivity) / 1000), idleMinutes: IDLE_MINUTES, leaseUntil: leaseUntil || null, ...(tunnels() ? { tunnels: tunnels() } : {}) });
     }
     if (req.method === "GET" && url.pathname === "/models") return send(res, 200, { models: listModels(), addons: listAddons() });
     // The image server's recent output and the Python side's, for a look
@@ -1455,7 +1457,11 @@ const server = http.createServer(async (req, res) => {
       // Skip the denoiser's passes that would barely change anything: the
       // threshold for "barely", as a fraction; nothing means every pass runs.
       const cache = Number.isFinite(body.cache) && body.cache > 0 && body.cache <= 1 ? body.cache : null;
-      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed, lastInit, references, loras: loraList, finetune, cache });
+      // Two more ways to be quicker, each a plain yes: fp8 weights on a
+      // card with fp8 units, and the blocks compiled.
+      const fp8 = body.fp8 === true;
+      const compile = body.compile === true;
+      const job = startJob({ repo, file, prompt, negative: String(body.negative ?? "").slice(0, 2000), width: size(body.width, diffusers ? 1024 : 512), height: size(body.height, diffusers ? 1024 : 512), steps, cfg, sampler, scheduler, init, strength, frames, fps, addon, ipImage, seed, lastInit, references, loras: loraList, finetune, cache, fp8, compile });
       return send(res, 202, { id: job.id, status: job.status });
     }
     const m = url.pathname.match(/^\/jobs\/([a-f0-9]{16})(\/result|\/last)?$/);

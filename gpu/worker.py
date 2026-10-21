@@ -61,7 +61,16 @@ def check():
             info["vramGb"] = round(props.total_memory / 1024**3, 1)
             info["cudaVersion"] = torch.version.cuda
             info["bf16"] = bool(torch.cuda.is_bf16_supported())
+            major, minor = torch.cuda.get_device_capability(0)
+            info["capability"] = f"{major}.{minor}"
             info["gpus"] = [{"name": torch.cuda.get_device_properties(i).name, "gb": round(torch.cuda.get_device_properties(i).total_memory / 1024**3, 1)} for i in range(torch.cuda.device_count())]
+        try:
+            info["torchao"] = __import__("torchao").__version__
+        except Exception:  # noqa: BLE001
+            info["torchao"] = None
+        ok, why = fp8_ready()
+        info["fp8"] = ok
+        info["fp8Why"] = why
         return info
     except Exception as err:  # noqa: BLE001
         return {"ok": False, "error": f"{type(err).__name__}: {err}"}
@@ -86,6 +95,8 @@ def unload():
     state["loraWeights"] = {}
     state["modular"] = False
     state["workflow"] = None
+    state["fp8"] = False
+    state["compiled"] = False
     gc.collect()
     with contextlib.suppress(Exception):
         import torch
@@ -104,19 +115,23 @@ def load(req):
     # request wants its reference one (MiniMax-H3's ref2va, another 62 GB
     # transformer), which means loading again.
     workflow = str(req.get("workflow") or "") or None
-    key = json.dumps([model_dir or single, adapters, workflow], sort_keys=True)
+    # Weights in fp8 are a way of loading; the compiled blocks can be set
+    # and unset on a loaded model, so only the first is part of the key.
+    fp8 = bool(req.get("fp8"))
+    compiled = bool(req.get("compile"))
+    key = json.dumps([model_dir or single, adapters, workflow] + ([True] if fp8 else []), sort_keys=True)
     if state.get("key") == key and state["pipe"] is not None:
-        return {"ok": True, "kind": state["kind"], "already": True}
+        return {"ok": True, "kind": state["kind"], "already": True, "fp8": bool(state.get("fp8")), "compiled": want_compiled(state["pipe"], compiled)}
     # The same modular model with other LoRAs (or none): swapped on the
     # loaded transformer rather than loading 130 GB again.
     # A fine-tune that stays the same is kept as it is; only its LoRAs change.
     def not_loras(items):
         return [a for a in items if (a.get("kind") or "lora") != "lora"]
 
-    if state["pipe"] is not None and state.get("modular") and state.get("dir") == model_dir and model_dir and not_loras(adapters) == not_loras(state.get("adapters") or []) and all((a.get("kind") or "lora") in ("lora", "transformer") for a in adapters):
+    if state["pipe"] is not None and state.get("modular") and state.get("dir") == model_dir and model_dir and bool(state.get("fp8")) == fp8 and not_loras(adapters) == not_loras(state.get("adapters") or []) and all((a.get("kind") or "lora") in ("lora", "transformer") for a in adapters):
         swap_loras(state["pipe"], [a for a in adapters if (a.get("kind") or "lora") == "lora"], dtype_of(state["pipe"]))
         state.update(adapters=adapters, key=key)
-        return {"ok": True, "kind": state["kind"], "already": True, "mode": state.get("mode"), "note": MODE_NOTES.get(state.get("mode"), "")}
+        return {"ok": True, "kind": state["kind"], "already": True, "mode": state.get("mode"), "note": MODE_NOTES.get(state.get("mode"), ""), "fp8": bool(state.get("fp8")), "compiled": want_compiled(state["pipe"], compiled)}
     unload()
     dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
     if single:
@@ -169,14 +184,29 @@ def load(req):
             mode = "staged"
         except Exception as err:  # noqa: BLE001
             say({"progress": 0, "note": f"the parts could not be staged ({type(err).__name__}: {str(err)[:160]}); all on the card"})
+    # The passes' matrix products in fp8 on a card with fp8 units, and the
+    # blocks compiled, when asked: each says what it did or why not.
+    extra = []
+    state["fp8"] = False
+    if fp8:
+        try:
+            layers, saved = fp8_weights(pipe)
+            state["fp8"] = True
+            extra.append(f"{layers} layers hold fp8 weights ({saved:.1f} GB less in memory).")
+            say({"progress": 0, "note": f"fp8 weights: {layers} linear layers of the transformer blocks, {saved:.1f} GB saved"})
+        except Exception as err:  # noqa: BLE001
+            extra.append(f"fp8 weights were not used: {err}.")
+            say({"progress": 0, "note": f"fp8 weights were not used ({type(err).__name__}: {str(err)[:200]})"})
     state.update(pipe=pipe, dir=model_dir or single, key=key, kind=kind, offloaded=mode == "offload", adapters=adapters, mode=mode, phase=None, weightsGb=round(weights, 1))
+    if want_compiled(pipe, compiled):
+        extra.append("The blocks are compiled: the first clip waits for it.")
     # What the model's parts weigh in memory, at which precision: the
     # answer to "where did the card's memory go" when a clip does not fit.
     sizes = component_sizes(pipe)
     if sizes:
         state["onCard"] = sum(gb for _, gb, _ in sizes)
         say({"progress": 0, "note": f"the model in memory: {', '.join(f'{name} {gb:.1f} GB {dt}' for name, gb, dt in sizes)}; {state['onCard']:.1f} GB in all"})
-    return {"ok": True, "kind": kind, "mode": mode, "note": MODE_NOTES.get(mode, ""), "offloaded": mode == "offload", "weightsGb": round(weights, 1), "vramGb": round(vram, 1), "gpus": torch.cuda.device_count() if torch.cuda.is_available() else 0}
+    return {"ok": True, "kind": kind, "mode": mode, "note": " ".join(filter(None, [MODE_NOTES.get(mode, ""), *extra])), "offloaded": mode == "offload", "weightsGb": round(weights, 1), "vramGb": round(vram, 1), "gpus": torch.cuda.device_count() if torch.cuda.is_available() else 0, "fp8": bool(state.get("fp8")), "compiled": bool(state.get("compiled"))}
 
 
 MODE_NOTES = {
@@ -468,6 +498,14 @@ def apply_transformer_lora(pipe, path, scale, name="addon"):
     while name in taken:
         name = f"{name}_"
     transformer.load_lora_adapter(sd, adapter_name=name, prefix=None)
+    # On fp8 blocks the library would cast the LoRA's own small matrices to
+    # the base weight's fp8; they work in the model's working precision.
+    if state.get("fp8"):
+        working = dtype_of(pipe)
+        with torch.no_grad():
+            for pname, p in transformer.named_parameters():
+                if ".lora_" in pname and p.dtype != working:
+                    p.data = p.data.to(working)
     taken.append(name)
     state.setdefault("loraWeights", {})[name] = scale
     transformer.set_adapters(taken, weights=[state["loraWeights"].get(n, 1.0) for n in taken])
@@ -1017,6 +1055,110 @@ def step_counter(pipe, steps):
         return denoiser.register_forward_pre_hook(before)
     except Exception:  # noqa: BLE001
         return None
+
+
+def denoiser_of(pipe):
+    return next((getattr(pipe, n, None) for n in ("transformer", "transformer_ref", "unet") if getattr(pipe, n, None) is not None), None)
+
+
+def fp8_ready():
+    """Whether the passes' matrix products can run in fp8 here: a card with
+    fp8 units (Ada, Hopper, Blackwell: compute capability 8.9 and up) and
+    the torchao library on the image. Returns (yes, why not)."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False, "no card"
+        major, minor = torch.cuda.get_device_capability(0)
+        if (major, minor) < (8, 9):
+            return False, f"the card (compute capability {major}.{minor}) has no fp8 units; Ada, Hopper and Blackwell cards (L40S, RTX 4090 and 5090, H100, H200, B200) do"
+        from torchao.quantization import Float8DynamicActivationFloat8WeightConfig, quantize_  # noqa: F401
+
+        return True, ""
+    except ImportError:
+        return False, "this machine image lacks the torchao library; a machine on the current image has it"
+    except Exception as err:  # noqa: BLE001
+        return False, f"{type(err).__name__}: {err}"
+
+
+def fp8_weights(pipe):
+    """The linear layers of the denoiser's blocks quantised to fp8, weights
+    and activations, so their matrix products run on the card's fp8 units
+    at about twice the rate of bf16 and the weights take half the memory.
+    Returns (layers, GB saved). The LoRA matrices peft adds later are kept
+    out of it. Raises with the plain reason when it cannot be done."""
+    import torch
+    from torch import nn
+
+    ok, why = fp8_ready()
+    if not ok:
+        raise ValueError(why)
+    from torchao.quantization import Float8DynamicActivationFloat8WeightConfig, quantize_
+
+    denoiser = denoiser_of(pipe)
+    blocks = getattr(denoiser, "transformer_blocks", None) if denoiser is not None else None
+    if blocks is None:
+        raise ValueError("this model has no transformer blocks to quantise")
+
+    def wanted(module, name):
+        return isinstance(module, nn.Linear) and ".lora_" not in name and module.in_features % 16 == 0 and module.out_features % 16 == 0
+
+    before = sum(p.numel() * p.element_size() for p in blocks.parameters())
+    layers = sum(1 for name, module in blocks.named_modules() if wanted(module, name))
+    if not layers:
+        raise ValueError("the blocks have no linear layers of a shape fp8 takes")
+    try:
+        from torchao.quantization import PerRow
+
+        config = Float8DynamicActivationFloat8WeightConfig(granularity=PerRow())
+    except Exception:  # noqa: BLE001
+        config = Float8DynamicActivationFloat8WeightConfig()
+    quantize_(blocks, config, filter_fn=wanted)
+    after = sum(p.numel() * p.element_size() for p in blocks.parameters())
+    with contextlib.suppress(Exception):
+        torch.cuda.empty_cache()
+    return layers, max(0.0, (before - after) / 1024**3)
+
+
+def want_compiled(pipe, on):
+    """The denoiser's blocks compiled with torch.compile, or set back to
+    plain: each block's forward is compiled on its own, and as they share
+    one code the compiler does the work once, at the first pass. Returns
+    whether the blocks are compiled now."""
+    denoiser = denoiser_of(pipe)
+    blocks = getattr(denoiser, "transformer_blocks", None) if denoiser is not None else None
+    if not blocks:
+        state["compiled"] = False
+        return False
+    now = bool(state.get("compiled"))
+    if on == now:
+        return now
+    import torch
+
+    try:
+        if on:
+            # Several shapes of clip, and LoRAs swapped under the compiled
+            # blocks, each mean a new compile; the limit leaves room.
+            for name in ("cache_size_limit", "recompile_limit"):
+                with contextlib.suppress(Exception):
+                    setattr(torch._dynamo.config, name, max(getattr(torch._dynamo.config, name, 0) or 0, 64))
+            for block in blocks:
+                block.forward = torch.compile(block.forward)
+        else:
+            for block in blocks:
+                if "forward" in block.__dict__:
+                    del block.forward
+            with contextlib.suppress(Exception):
+                torch._dynamo.reset()
+        state["compiled"] = on
+    except Exception as err:  # noqa: BLE001
+        say({"progress": 0, "note": f"the blocks could not be {'compiled' if on else 'set back'} ({type(err).__name__}: {str(err)[:200]})"})
+        for block in blocks:
+            if "forward" in block.__dict__:
+                del block.forward
+        state["compiled"] = False
+    return bool(state.get("compiled"))
 
 
 def generate(req):

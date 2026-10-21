@@ -556,6 +556,67 @@ floor. The guest's keys and machine last twelve hours after the last use,
 as before. The model window's "Renting a GPU takes a RunPod or Vast.ai
 API key" prompt takes either key or both; one is enough to rent.
 
+## fp8 weights, compiled blocks, and files for a chat model (2026-10-20, image 27)
+
+Two more speed switches under the quality levels of a video model on a
+rented machine, next to "Skip passes that barely change", each per model
+and kept in this browser (`fp8Weights:<repo>`, `compiledBlocks:<repo>`),
+each sent with the job as a plain `fp8: true` or `compile: true`. The
+agent (27) passes both to the worker's load: fp8 is part of the load key,
+so changing it loads the model again; the compiled blocks are set or
+unset on the loaded model without a reload.
+
+fp8 weights. `fp8_weights(pipe)` quantises the linear layers of the
+denoiser's `transformer_blocks` with torchao's
+`Float8DynamicActivationFloat8WeightConfig` (per row), weights and
+activations both, so the passes' matrix products run on the card's fp8
+units: about twice the bf16 rate on paper, and the blocks take half the
+memory (MiniMax-H3's 62 GB transformer becomes about 31). It needs a card
+of compute capability 8.9 or more (Ada: L4, L40, L40S, RTX 4090; Hopper:
+H100, H200; Blackwell: RTX 5090, B200, B300; not the A100, A40, A6000 or
+3090) and the torchao library, which the image installs from 27. The
+worker's check reports `fp8` and `fp8Why`; the agent's `/health` carries
+`fp8`, the site puts it on the rental as `fp8`, and the page disables the
+switch with the card's name when it is false. When the quantisation
+cannot be done the worker says why in the load note and goes on in bf16.
+LoRAs load on the fp8 blocks through peft as before; the worker casts
+peft's small matrices back to the working precision, since peft would
+cast them to the base weight's fp8. Only the first part is checked
+locally: torchao refuses fp8 on a machine without the units and the
+worker says so plainly (test/minimax_fast_check.py). The speed, the
+memory and the LoRA path on fp8 blocks are untested on hardware; the
+page guesses 0.75 of the time.
+
+Compiled blocks. `want_compiled(pipe, on)` gives each block of
+`transformer_blocks` a `torch.compile`d forward of its own (and takes
+them off again); as the blocks share one code, the compiler does the
+work once, at the first pass, which is why the first clip after a start
+waits a minute or two, and again after a LoRA change (peft swaps the
+linear layers under the compiled forwards, so the compiler runs once
+more; the dynamo cache limit is raised to 64 for it). Pass skipping
+installs its hooks over the compiled forwards and hands them back when
+it is removed. Checked locally on the tiny transformer: compiled blocks
+match plain to 1e-4, skipping still skips 6 of 12 passes on top of them,
+and setting them back restores the plain forwards. The gain is untested
+on hardware; the page guesses 0.85 of the time. Both switches can be on
+together with skipping; the page multiplies the guesses.
+
+Files for a chat model. "Attach files" and "Attach a folder" under the
+chat box take code and text files (a folder's node_modules, .git, build
+output, dotfiles and binary files left out; at most 60 files, 400 KB
+each, 600 KB together); they show as chips with a token estimate (a
+warning past 24,000) until the message goes. The message to Ollama puts
+each file under `### name` in a fenced block, the person's words after
+them; the bubble shows the words with the files folded under, and the
+files travel with the conversation so follow-up questions still have
+them (`m.files` on the user message, `withFiles()` when the history is
+sent). Ollama's usual window of 4096 tokens would silently cut the start
+of a long request, so `contextFor()` sets `num_ctx` in steps of 4096 to
+hold the conversation and the answer's room (up to 131072) whenever the
+usual window would not; the hosted proxy on the machine and `/api/chat`
+already pass `num_ctx` through. When the browser's store will not hold
+the files' text the conversation is saved with their names alone.
+
 ## LoRAs and fine-tunes for video models (2026-10-20, image 25)
 
 Every video model on the GPU has an optional "LoRAs and fine-tunes" fold
@@ -693,6 +754,11 @@ picture are the two tests); the MiniMax-H3 360 orbit LoRA end to end
 the grown-disk size hint (image 21); the Machine report on a real
 machine (image 21). When one of these runs, move it up and note the
 date and the machine.
+- The speed switches of images 26 and 27: the real ratio from skipped
+  passes; fp8 weights (the speed, the memory saved, and a LoRA loading on
+  the fp8 blocks); the compiled blocks' gain and how long the first clip
+  waits; and a long chat with files on a rented Ollama (the window set
+  with `num_ctx` reloads the model once).
 - A disk grown after the rent (image 21): the agent took its size from
   `HF_DISK_GB` once, so after a grow to 250 GB it still counted against
   160, reported 0 GB free, and the plan asked for ten more every time.

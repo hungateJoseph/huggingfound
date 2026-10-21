@@ -556,6 +556,8 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       imageProblem: counts.imageProblem ?? "",
       agentVersion: counts.agentVersion ?? null,
       agentCurrent: AGENT_VERSION,
+      // Whether the card has fp8 units, as the machine's Python side says; null until it has answered.
+      fp8: counts.fp8 ?? null,
       idleMinutes: idleMinutes(),
       idleSeconds: Math.round((now() - lastActivity) / 1000),
       maxSpend: maxSpend(),
@@ -953,7 +955,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
       if (running && !pod.runtime && pod.startedAt && now() - new Date(pod.startedAt).getTime() > 10 * 60e3 && pod.dataCenterId) rememberSlowDataCenter(pod.dataCenterId);
       let ready = Boolean(last?.ready) && running;
       let imagesReady = Boolean(last?.imagesReady) && running;
-      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "", agentVersion: last?.agentVersion ?? null, agentRefused: last?.agentRefused ?? false };
+      let counts = { chat: last?.chatModels ?? 0, images: last?.imageModels ?? 0, imageProblem: last?.imageProblem ?? "", agentVersion: last?.agentVersion ?? null, fp8: last?.fp8 ?? null, agentRefused: last?.agentRefused ?? false };
       if (running && wantProbe) {
         // A Vast.ai machine's addresses are its tunnels', asked of the machine itself.
         if (onVast()) await learnTunnels(pod);
@@ -962,7 +964,7 @@ export function createRental({ env, save, fetchImpl = fetch, base = RUNPOD_BASE,
         const [tags, health] = await Promise.all([urlFor(id) ? probe(urlFor(id)) : null, hasAgent() && agentFor(id) ? probe(agentFor(id), `/health${diskNow ? `?diskGb=${Math.round(diskNow)}` : ""}`) : null]);
         ready = Boolean(tags);
         imagesReady = Boolean(health?.ok);
-        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "", agentVersion: health ? Number(health.version) || 1 : null, agentRefused };
+        counts = { chat: tags?.models?.length ?? 0, images: health?.models ?? 0, imageProblem: health && health.sdOk === false ? String(health.sdProblem || "the image server cannot start") : "", agentVersion: health ? Number(health.version) || 1 : null, fp8: typeof health?.fp8 === "boolean" ? health.fp8 : null, agentRefused };
       }
       last = summarize(pod, ready, imagesReady, counts);
       lastAt = now();

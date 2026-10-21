@@ -635,3 +635,19 @@ details.levels-note summary { cursor: pointer; }
 .shots .shot-lora-note { flex-basis: 100%; }
 .rent-faster { margin: 6px 0; }
 .fast-passes { margin: 6px 0 2px; }
+.speed-switches { display: grid; gap: 4px; margin: 6px 0 2px; }
+.speed-switches .check { margin: 0; }
+.speed-switches input:disabled + span, .speed-switches label:has(input:disabled) { opacity: 0.7; }
+
+/* Files for a chat model: chosen as chips, then folded under the message. */
+.chat-attach { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 2px; }
+.chat-attach button { font-size: 13px; padding: 4px 10px; }
+.chat-chips { display: contents; }
+.chat-chips .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 6px 2px 10px; font-size: 13px; background: var(--surface); max-width: 100%; }
+.chat-chips .chip small { color: var(--muted); }
+.chat-chips .chip-off { border: 0; background: none; cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; color: var(--muted); }
+.chat-chips .chip-note { flex-basis: 100%; }
+.chat-chips .chip-note.warn { color: var(--warn); }
+.msg-files { display: grid; gap: 4px; margin-top: 8px; font-size: 13px; }
+.msg-file summary { cursor: pointer; color: var(--muted); }
+.msg-file pre { margin: 4px 0 0; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.4; padding: 8px; border-radius: 6px; background: var(--bg); white-space: pre; }

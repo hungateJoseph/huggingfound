@@ -790,6 +790,60 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.unroute((u) => u.pathname === "/api/model" && u.searchParams.get("id") === id);
 });
 
+await step("files go with a chat message: chosen as chips, sent under their names in fenced blocks with the window grown to hold them, and kept folded under the bubble", async () => {
+  await page.click("#nav-browse");
+  await page.click(".tab[data-tab=chat]");
+  await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
+  await page.waitForSelector("#chat-send");
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
+  if (await page.isChecked("#chat-handoff")) await page.uncheck("#chat-handoff");
+  const rows = Array.from({ length: 1200 }, (_, i) => `export const row${i} = ${i}; // one line of the module`).join("\n");
+  await page.setInputFiles("#chat-files", [
+    { name: "main.py", mimeType: "text/x-python", buffer: Buffer.from("def add(a, b):\n    return a + b\n") },
+    { name: "rows.js", mimeType: "text/javascript", buffer: Buffer.from(rows) },
+    { name: "logo.png", mimeType: "image/png", buffer: Buffer.from([137, 80, 78, 71, 0, 1]) },
+  ]);
+  await page.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 2);
+  assert.match(await page.locator("#chat-chips").innerText(), /main\.py\s+32 B[\s\S]*rows\.js\s+\d+ KB[\s\S]*2 files, about [\d,]+ tokens$/);
+  assert.match(await page.locator("#notice").innerText(), /1 file left out: logo\.png is not a text file/);
+  // A chip comes off; the file can be chosen again.
+  await page.click('#chat-chips .chip-off[data-i="0"]');
+  await page.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 1);
+  await page.setInputFiles("#chat-files", [{ name: "main.py", mimeType: "text/x-python", buffer: Buffer.from("def add(a, b):\n    return a + b\n") }]);
+  await page.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 2);
+  await page.fill("#chat-text", "what does add do?");
+  await page.click("#chat-send");
+  await page.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 0, null, { timeout: 5000 });
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
+  const body = chatBodies.at(-1);
+  const toModel = body.messages.at(-1).content;
+  assert.match(toModel, /^Files attached \(2\):\n\n### rows\.js\n```js\nexport const row0 = 0; \/\/ one line of the module\n/, "each file under its name, fenced");
+  assert.match(toModel, /### main\.py\n```py\ndef add\(a, b\):\n    return a \+ b\n\n```\n\nwhat does add do\?$/, "the words after the files");
+  assert.ok(body.options.num_ctx >= 24576 && body.options.num_ctx % 4096 === 0, `the window holds the files and the answer (${body.options.num_ctx})`);
+  const bubble = page.locator("#messages .msg.user").last();
+  assert.match(await bubble.innerText(), /^what does add do\?/, "the bubble shows the words");
+  assert.deepEqual(await bubble.locator(".msg-file summary").allInnerTexts(), ["rows.js · 62 KB", "main.py · 32 B"]);
+  await bubble.locator(".msg-file summary").last().click();
+  assert.match(await bubble.locator(".msg-file pre").last().innerText(), /^def add\(a, b\):/);
+  // The window drawn again, as leaving and coming back does, shows the same, and the files' text is kept with the conversation.
+  await page.evaluate(() => renderTry(state.model, state.plan));
+  await page.waitForSelector("#chat-send");
+  assert.equal(await page.locator("#messages .msg.user").last().locator(".msg-file").count(), 2);
+  const kept = await page.evaluate(() => JSON.parse(localStorage.getItem("chat:qwen-test") ?? "[]").findLast((m) => m.role === "user"));
+  assert.deepEqual([kept.content, kept.files.map((f) => f.name), typeof kept.files[1].text], ["what does add do?", ["rows.js", "main.py"], "string"]);
+  // A later message carries the earlier files along, so a follow-up question still has them.
+  await page.fill("#chat-text", "and in one word?");
+  await page.click("#chat-send");
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
+  const follow = chatBodies.at(-1).messages;
+  assert.equal(follow.at(-1).content, "and in one word?");
+  assert.match(follow.at(-3).content, /^Files attached \(2\):/);
+  assert.ok(chatBodies.at(-1).options.num_ctx >= 24576);
+  await page.click("#chat-clear");
+  await page.waitForFunction(() => document.querySelectorAll("#messages .msg").length === 0);
+  await page.keyboard.press("Escape");
+});
+
 await step("cards carry what users say and one tag for what the model makes; the author's text and the runner stay in the window", async () => {
   await page.click("#nav-browse");
   await page.click(".tab[data-tab=chat]");
@@ -1998,7 +2052,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.waitForSelector("#gpu-runs li");
   // The machine's own report, to read or copy: what it runs, holds and how its failures went.
   await visitor.click("#gpu-report");
-  await visitor.waitForFunction(() => /Agent 26, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  await visitor.waitForFunction(() => /Agent 27, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
   assert.match(await visitor.locator("#gpu-report-out").innerText(), /Python 3\.12\.3, torch 2\.6\.0 \(CUDA 12\.4\), diffusers 0\.41\.0, transformers 5\.5\.3, peft 0\.18\.0, av 15\.0\.0[\s\S]*Cards: Fake A40 48 GB[\s\S]*Disk: 41\.5 GB free of 50, 8\.5 GB in the machine's folders \(a quota; the size as the site said it\)[\s\S]*No failures on this machine\.[\s\S]*Journal \(tail\):/);
   assert.equal(await visitor.locator("#gpu-report-copy").isHidden(), false);
   assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");
@@ -2121,6 +2175,12 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.equal(await visitor.isChecked("#fast-passes"), false);
   await visitor.check("#fast-passes");
   assert.match(await visitor.locator("#estimate").innerText(), /Passes that barely change are skipped\./);
+  // Two more under it, image 27's: fp8 weights (the machine has not said its card lacks the units) and compiled blocks.
+  assert.equal(await visitor.isChecked("#fp8-weights"), false);
+  assert.equal(await visitor.isDisabled("#fp8-weights"), false);
+  await visitor.check("#fp8-weights");
+  await visitor.check("#compiled-blocks");
+  assert.match(await visitor.locator("#estimate").innerText(), /Passes that barely change are skipped\. The weights are fp8\. The blocks are compiled, so the first clip after a start or a LoRA change waits a minute or two more\./);
   // The next clip carries it, at the creator's steps and guidance.
   await visitor.fill("#image-prompt", "a kite over a field");
   await visitor.click("#image-go");
@@ -2132,12 +2192,14 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.equal(sent.steps, 30, "the creator's steps");
   assert.equal(sent.cfg, 1, "the creator's guidance");
   assert.equal(sent.cache, 0.1, "the pass-skipping threshold");
+  assert.deepEqual([sent.fp8, sent.compile], [true, true], "fp8 weights and compiled blocks go with the job");
   await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 30000 });
   // The window opened again shows the same: ticked, at 0.7.
   await visitor.evaluate(() => openModel("Wan-AI/Wan2.2-TI2V-5B-Diffusers"));
   await visitor.waitForSelector("#loras[open] .lora-row");
   const again = visitor.locator(".lora-row", { hasText: "Wan-TI2V-Motion-LoRA" });
   assert.equal(await again.locator(".lora-on").isChecked(), true);
+  assert.deepEqual([await visitor.isChecked("#fast-passes"), await visitor.isChecked("#fp8-weights"), await visitor.isChecked("#compiled-blocks")], [true, true, true], "the speed switches are as they were left");
   assert.equal(await again.locator(".lora-strength").inputValue(), "0.7");
   assert.match(await again.locator(".lora-settings-pill").innerText(), /30 steps, guidance 1/, "the borrowed settings are kept too");
   await again.locator(".lora-drop-settings").click();

@@ -1619,11 +1619,102 @@ function chatFor(modelName) {
   return chat;
 }
 function saveChat(modelName, chat) {
+  const kept = chat.messages.filter((m) => m.role !== "system").slice(-200);
   try {
-    localStorage.setItem(`chat:${modelName}`, JSON.stringify(chat.messages.filter((m) => m.role !== "system").slice(-200)));
+    localStorage.setItem(`chat:${modelName}`, JSON.stringify(kept));
   } catch {
-    // no storage
+    // Too much for the browser's store, most likely the files: kept by
+    // name alone, so the conversation still reads; or no storage at all.
+    try {
+      localStorage.setItem(`chat:${modelName}`, JSON.stringify(kept.map((m) => (m.files?.length ? { ...m, files: m.files.map(({ name, size }) => ({ name, size })) } : m))));
+    } catch {
+      // no storage
+    }
   }
+}
+
+// ---- files for a chat model ------------------------------------------------
+// Code or text files go with a message, each under its name in a fenced
+// block, so a coding model reads the project it is asked about. Binary
+// files, build output and the like are left out; the message is capped so
+// it still fits a window a model can hold.
+const MAX_FILES = 60;
+const MAX_FILE_BYTES = 400 * 1024;
+const MAX_FILES_CHARS = 600 * 1000;
+const SKIP_DIRS = /(^|\/)(node_modules|\.git|\.hg|\.svn|dist|build|out|target|coverage|\.next|\.nuxt|\.cache|\.venv|venv|env|__pycache__|\.idea|\.vscode|vendor|Pods|DerivedData)\//;
+const BINARY_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|icns|svgz|mp[34]|m4[av]|wav|flac|ogg|webm|mov|avi|mkv|zip|gz|bz2|xz|7z|rar|tar|jar|war|pdf|docx?|xlsx?|pptx?|exe|dll|so|dylib|bin|dat|class|pyc|pyo|o|a|wasm|ttf|otf|woff2?|eot|safetensors|gguf|ckpt|pt|pth|onnx|sqlite|db|lock|DS_Store)$/i;
+function tokensOf(text) {
+  return Math.ceil(String(text ?? "").length / 3.2);
+}
+function sizeText(bytes) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
+}
+async function readAttachments(list, folder) {
+  const files = [];
+  const skipped = [];
+  let chars = 0;
+  for (const file of Array.from(list ?? [])) {
+    const name = file.webkitRelativePath || file.name;
+    if (folder && SKIP_DIRS.test(name)) continue;
+    if (folder && /(^|\/)\./.test(name) && !/\.(env\.example|gitignore|editorconfig|prettierrc|eslintrc)/.test(name)) continue;
+    if (BINARY_EXT.test(name)) {
+      if (!folder) skipped.push(`${name} is not a text file`);
+      continue;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      skipped.push(`${name} is ${sizeText(file.size)}, more than ${sizeText(MAX_FILE_BYTES)}`);
+      continue;
+    }
+    if (files.length >= MAX_FILES) {
+      skipped.push(`${name}: at most ${MAX_FILES} files at once`);
+      continue;
+    }
+    const text = await file.text();
+    if (/\u0000/.test(text.slice(0, 8192))) {
+      if (!folder) skipped.push(`${name} is not a text file`);
+      continue;
+    }
+    if (chars + text.length > MAX_FILES_CHARS) {
+      skipped.push(`${name}: the files together would pass ${sizeText(MAX_FILES_CHARS)} of text`);
+      continue;
+    }
+    chars += text.length;
+    files.push({ name, size: file.size, text });
+  }
+  return { files, skipped };
+}
+function withFiles(text, files) {
+  const blocks = files.map((f) => {
+    const body = typeof f.text === "string" ? f.text : "(the contents were not kept)";
+    const fence = "`".repeat(Math.max(3, (body.match(/`+/g) ?? []).reduce((n, run) => Math.max(n, run.length + 1), 0)));
+    return `### ${f.name}\n${fence}${(f.name.match(/\.(\w+)$/) ?? [])[1] ?? ""}\n${body}\n${fence}`;
+  });
+  return `Files attached (${files.length}):\n\n${blocks.join("\n\n")}\n\n${text}`;
+}
+// The window Ollama should hold for this request: nothing when its usual
+// 4096 tokens do, otherwise the conversation and the answer's room, in
+// steps of 4096 so the model is not reloaded for every message.
+function contextFor(messages, answerTokens) {
+  const tokens = messages.reduce((n, m) => n + tokensOf(m.content), 0) + 64;
+  if (tokens + Math.min(answerTokens, 2048) <= 4096) return null;
+  return Math.min(131072, Math.ceil(((tokens + answerTokens) * 1.15) / 4096) * 4096);
+}
+// A user bubble's files, folded under its words.
+function showFiles(el, files) {
+  const row = document.createElement("div");
+  row.className = "msg-files";
+  for (const f of files) {
+    const d = document.createElement("details");
+    d.className = "msg-file";
+    const sm = document.createElement("summary");
+    sm.textContent = `${f.name} · ${sizeText(f.size)}`;
+    d.append(sm);
+    const pre = document.createElement("pre");
+    pre.textContent = typeof f.text === "string" ? f.text : "(the contents were not kept in this browser)";
+    d.append(pre);
+    row.append(d);
+  }
+  el.append(row);
 }
 
 // Scrolls a box to its end only when the reader was already there, so
@@ -1699,6 +1790,7 @@ function renderChat(box, modelName) {
       <div class="chat-tools"><span class="muted small">${chat.messages.length ? "The conversation is kept in this browser until you start a new one." : `Ask anything; the answer comes from ${esc(modelName)} on ${state.plan?.remote ? "the rented GPU" : "this computer"}.`}</span><span class="tools-row"><button class="ghost" id="chat-download" ${chat.messages.length ? "" : "hidden"}>Download</button><button class="ghost" id="chat-clear">New chat</button></span></div>
       <div class="messages" id="messages"></div>
       <div class="chat-progress" id="chat-progress" ${chat.busy ? "" : "hidden"}><div class="progress"><div class="fill"></div></div><div class="chat-progress-row"><span class="progress-text muted small"></span><button class="ghost" id="chat-stop">Stop</button></div><div class="chat-held" hidden></div></div>
+      <div class="chat-attach"><button class="ghost" id="chat-attach-files" title="Code or text files the model reads with your message">Attach files</button><button class="ghost" id="chat-attach-folder" title="Every code and text file under a folder, leaving out node_modules, .git, build output and anything binary">Attach a folder</button><input type="file" id="chat-files" multiple hidden><input type="file" id="chat-folder" webkitdirectory multiple hidden><span class="chat-chips" id="chat-chips"></span></div>
       <div class="chat-input">
         <textarea id="chat-text" placeholder="Type a message" rows="2"></textarea>
         <button class="primary" id="chat-send" ${chat.busy ? "disabled" : ""}>Send</button>
@@ -1748,6 +1840,7 @@ function renderChat(box, modelName) {
   for (const m of chat.messages) {
     if (m.role === "system") continue;
     const el = addMsg(m.role, m.content);
+    if (m.role === "user" && m.files?.length) showFiles(el, m.files);
     if (m.role === "user" && m.handoff) showHandoff(el, m);
     if (m.role === "assistant" && (m.thinking || m.note)) {
       el.textContent = "";
@@ -1821,8 +1914,10 @@ function renderChat(box, modelName) {
   };
   const send = async () => {
     if (chat.busy) return;
-    const text = $("#chat-text").value.trim();
-    if (!text) return;
+    const typed = $("#chat-text").value.trim();
+    const files = chat.pending ?? [];
+    if (!typed && !files.length) return;
+    const text = typed || "Please read the attached files.";
     // A model that writes cannot draw; asking it for a picture gets an
     // apology and a description. Say so first, with the way to a model that can.
     if (!chat.pictureOk && asksForPicture(text) && ["text", "vision"].includes(makesOf(state.model ?? {}).kind)) {
@@ -1857,10 +1952,16 @@ function renderChat(box, modelName) {
     if (system && messages[0]?.role !== "system") messages.unshift({ role: "system", content: system });
     else if (system) messages[0].content = system;
     else if (messages[0]?.role === "system") messages.shift();
-    const userMsg = { role: "user", content: text };
+    // The files go with the words, each under its name in a fenced block;
+    // the bubble shows the words and the files folded under them.
+    const userMsg = { role: "user", content: text, ...(files.length ? { files } : {}) };
+    const asked = files.length ? withFiles(text, files) : text;
+    chat.pending = [];
+    drawChips();
     messages.push(userMsg);
     saveChat(modelName, chat);
     const userEl = addMsg("user", text);
+    if (files.length) showFiles(userEl, files);
     $("#chat-download").hidden = false;
     const out = addMsg("assistant", "");
     out.id = "chat-live";
@@ -1887,15 +1988,15 @@ function renderChat(box, modelName) {
       // model is asked to write the rest and leave marked stubs for them.
       if ($("#chat-handoff")?.checked && claudeAvailable()) {
         meter.note("Claude is reading the request for the parts to leave to it");
-        const plan = await claudeText({ kind: "code", mode: "handoff-plan", question: text, model: modelName }, null, (st) => meter.note(st.status === "thinking" ? "Claude is reading the request for the parts to leave to it (thinking)" : "Claude is reading the request for the parts to leave to it"));
+        const plan = await claudeText({ kind: "code", mode: "handoff-plan", question: asked, model: modelName }, null, (st) => meter.note(st.status === "thinking" ? "Claude is reading the request for the parts to leave to it (thinking)" : "Claude is reading the request for the parts to leave to it"));
         const parts = parseHandoffParts(plan.text);
-        userMsg.sent = handoffPrompt(text, parts);
+        userMsg.sent = handoffPrompt(asked, parts);
         userMsg.handoff = { parts, why: plan.text ? "" : plan.why };
         saveChat(modelName, chat);
         showHandoff(userEl, userMsg);
         meter.note("");
       }
-      const sent = messages.map(({ role, content, sent: asSent }) => ({ role, content: asSent ?? content }));
+      const sent = messages.map(({ role, content, sent: asSent, files: withF }) => ({ role, content: asSent ?? (withF?.length ? withFiles(content, withF) : content) }));
       if (effort.system) {
         if (sent[0]?.role === "system") sent[0] = { role: "system", content: `${sent[0].content}\n\n${effort.system}` };
         else sent.unshift({ role: "system", content: effort.system });
@@ -1905,6 +2006,11 @@ function renderChat(box, modelName) {
       // Every reply has an end: a model thinking in circles stops at the cap
       // instead of holding the machine for hours.
       if (effort.options || effort.cap) body.options = { ...(effort.cap ? { num_predict: effort.cap } : {}), ...(effort.options ?? {}) };
+      // A conversation longer than Ollama's usual window of 4096 tokens,
+      // files attached or not, would have its start cut off in silence:
+      // the window is set to hold it all, and the answer after it.
+      const room = contextFor(sent, body.options?.num_predict ?? 2048);
+      if (room) body.options = { ...(body.options ?? {}), num_ctx: room };
       let res = await chatRequest(body, ctl.signal);
       // A model without a thinking pass refuses the knob; ask again without it.
       if (!res.ok && "think" in body) {
@@ -2071,18 +2177,50 @@ function renderChat(box, modelName) {
     drawCodeJob(m, mode);
   }
   $("#chat-send").addEventListener("click", send);
+  // Files for the model to read: chosen one by one or as a folder, shown
+  // as chips until the message goes, with how much of the window they take.
+  const drawChips = () => {
+    const out = $("#chat-chips");
+    if (!out) return;
+    const files = chat.pending ?? [];
+    out.innerHTML = files.map((f, i) => `<span class="chip" title="${esc(f.name)}">${esc(f.name.split("/").pop())} <small>${esc(sizeText(f.size))}</small><button type="button" class="chip-off" data-i="${i}" aria-label="Remove ${esc(f.name)}">×</button></span>`).join("");
+    if (files.length) {
+      const tokens = files.reduce((n, f) => n + tokensOf(f.text), 0);
+      const note = document.createElement("span");
+      note.className = `muted small chip-note${tokens > 24000 ? " warn" : ""}`;
+      note.textContent = `${files.length} file${files.length === 1 ? "" : "s"}, about ${tokens.toLocaleString()} tokens${tokens > 24000 ? "; more than most models hold at once, so the model may miss parts" : ""}`;
+      out.appendChild(note);
+    }
+    for (const b of out.querySelectorAll(".chip-off")) b.addEventListener("click", () => {
+      chat.pending.splice(Number(b.dataset.i), 1);
+      drawChips();
+    });
+  };
+  const takeFiles = async (list, folder) => {
+    const { files, skipped } = await readAttachments(list, folder);
+    chat.pending = [...(chat.pending ?? []), ...files].slice(0, MAX_FILES);
+    drawChips();
+    if (skipped.length) notice(`${skipped.length} file${skipped.length === 1 ? "" : "s"} left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? "; …" : ""}`, "warn");
+    $("#chat-text")?.focus();
+  };
+  $("#chat-attach-files")?.addEventListener("click", () => $("#chat-files").click());
+  $("#chat-attach-folder")?.addEventListener("click", () => $("#chat-folder").click());
+  $("#chat-files")?.addEventListener("change", (e) => takeFiles(e.target.files, false).then(() => (e.target.value = "")));
+  $("#chat-folder")?.addEventListener("change", (e) => takeFiles(e.target.files, true).then(() => (e.target.value = "")));
+  drawChips();
   $("#chat-stop").addEventListener("click", () => chat.abort?.());
   $("#chat-download").addEventListener("click", () => {
     const lines = [`# ${modelName}`, ""];
     for (const m of chat.messages) {
       if (m.role === "system") lines.push(`_Instructions: ${m.content}_`, "");
-      else lines.push(`**${m.role === "user" ? "You" : m.chain?.length ? chainText(modelName, m.chain) : modelName}:**`, "", m.content, "");
+      else lines.push(`**${m.role === "user" ? "You" : m.chain?.length ? chainText(modelName, m.chain) : modelName}:**${m.files?.length ? ` _(with ${m.files.map((f) => f.name).join(", ")})_` : ""}`, "", m.content, "");
     }
     saveText(`${modelName.replace(/[^\w.-]+/g, "-")}-conversation.md`, lines.join("\n"));
   });
   $("#chat-clear").addEventListener("click", () => {
     if (chat.busy) return;
     chat.messages.length = 0;
+    chat.pending = [];
     saveChat(modelName, chat);
     renderChat(box, modelName);
     renderRemove(box, state.model, state.plan);
@@ -2773,7 +2911,11 @@ function renderImage(box, t) {
       <div class="effort-title">Quality</div>
       <div class="quality" id="video-level">${["low", "medium", "high"].map((l) => `<label><input type="radio" name="level" value="${l}" ${l === level ? "checked" : ""}> <b>${l[0].toUpperCase() + l.slice(1)}</b> <span class="muted">${esc(spec.levels[l].text)}</span></label>`).join("")}</div>
       <details class="levels-note muted small"><summary>What the levels change</summary>Low draws smaller with fewer passes. Medium and High draw at the model's full size; High adds passes${claudeAvailable() ? " and has Claude expand your words first" : ""}.</details>
-      ${video && t.engine === "diffusers" && t.agent ? `<label class="check small fast-passes"><input type="checkbox" id="fast-passes" ${fastPasses(t.repo) ? "checked" : ""}> Skip passes that barely change <span class="muted">about a third quicker at any level; fine detail softens a little. ${cacheMachineTooOld() ? "Needs a machine on the current image." : "Off for the keeper if it shows."}</span></label>` : ""}
+      ${video && t.engine === "diffusers" && t.agent ? `<div class="speed-switches">
+        <label class="check small fast-passes"><input type="checkbox" id="fast-passes" ${fastPasses(t.repo) ? "checked" : ""}> Skip passes that barely change <span class="muted">about a third quicker at any level; fine detail softens a little. ${cacheMachineTooOld() ? "Needs a machine on the current image." : "Off for the keeper if it shows."}</span></label>
+        <label class="check small fp8-weights"><input type="checkbox" id="fp8-weights" ${fp8Weights(t.repo) ? "checked" : ""} ${state.rental?.fp8 === false ? "disabled" : ""}> fp8 weights <span class="muted">the passes' arithmetic on the card's fp8 units: about a quarter quicker, more with the blocks compiled; a touch less precise. ${state.rental?.fp8 === false ? `This card (${esc(state.rental?.gpu ?? "")}) has no fp8 units; L40S, RTX 4090 and 5090, H100, H200 and B200 do.` : speedMachineTooOld() ? "Needs a machine on the current image." : "The model is loaded again when this changes."}</span></label>
+        <label class="check small compiled-blocks"><input type="checkbox" id="compiled-blocks" ${compiledBlocks(t.repo) ? "checked" : ""}> Compile the blocks <span class="muted">10 to 25 percent quicker from the second clip; the first after a start, and after a LoRA change, waits a minute or two for the compiler. ${speedMachineTooOld() ? "Needs a machine on the current image." : ""}</span></label>
+      </div>` : ""}
       <p class="muted small estimate" id="estimate"></p>
     </div>` : `<div class="effort-title">Effort</div>
     <div class="quality" id="quality">${options}</div>`;
@@ -2944,7 +3086,10 @@ function renderImage(box, t) {
     if (follow?.cfg != null) q.cfg = follow.cfg;
     // Passes skipped when they would barely change anything: quicker, a little softer.
     if (video && fastPasses(t.repo) && !cacheMachineTooOld()) q.cache = CACHE_THRESHOLD;
-    const stepScale = (q.steps / each.level.steps) * (q.cache ? CACHE_TIME : 1);
+    // fp8 weights on a card that has the units for them, and compiled blocks (image 27).
+    if (video && fp8Weights(t.repo) && !speedMachineTooOld() && state.rental?.fp8 !== false) q.fp8 = true;
+    if (video && compiledBlocks(t.repo) && !speedMachineTooOld()) q.compile = true;
+    const stepScale = (q.steps / each.level.steps) * (q.cache ? CACHE_TIME : 1) * (q.fp8 ? FP8_TIME : 1) * (q.compile ? COMPILE_TIME : 1);
     const eachText = `${(each.frames / spec.fps).toFixed(1)} s at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${q.steps} steps`;
     const estimate = pieces > 1 || stepScale !== 1 ? { ...each, seconds: each.seconds * pieces * stepScale } : each;
     const text = scene ? `about ${asked} s as a scene of shots laid out by Claude, at ${lvl} quality, ${each.level.width} by ${each.level.height}, ${q.steps} steps` : pieces > 1 ? `${((each.frames * pieces) / spec.fps).toFixed(1)} s as ${pieces} pieces of ${eachText}` : eachText;
@@ -2958,7 +3103,7 @@ function renderImage(box, t) {
     const load = loadSeconds(t.repo);
     const each = c.each ?? est;
     const shape = c.kind === "scene" ? `a scene of about ${c.asked} seconds, made as shots Claude lays out (guessed here as ${c.pieces} of about ${(each.frames / spec.fps).toFixed(1)} s) at ${each.level.width} by ${each.level.height}, ${c.q.steps} steps, each starting where the last ended, then joined (a soft seam at each cut)` : c.pieces > 1 ? `a ${((each.frames * c.pieces) / spec.fps).toFixed(1)}-second clip made as ${c.pieces} pieces of ${(each.frames / spec.fps).toFixed(1)} s at ${each.level.width} by ${each.level.height}, ${each.frames} frames each, ${c.q.steps} steps, each starting where the last ended, then joined (a soft seam at each join)` : `a ${(each.frames / spec.fps).toFixed(1)}-second clip at ${each.level.width} by ${each.level.height}, ${each.frames} frames, ${c.q.steps} steps`;
-    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""}${c.pieces > 1 ? " in all" : ""} for ${shape}${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}${c.follow ? ` Steps and guidance follow what ${c.follow.name}'s creator used (${settingsLabel(c.follow)}), as chosen under LoRAs.` : ""}${c.q.cache ? " Passes that barely change are skipped." : ""}`;
+    el.textContent = `About ${shortDuration(est.seconds)}${price ? ` and ${money((price * est.seconds) / 3600)} of machine time` : ""}${c.pieces > 1 ? " in all" : ""} for ${shape}${est.n ? ` (adjusted from the last ${est.n} clip${est.n === 1 ? "" : "s"} made here)` : " (a guess until the first clip is timed)"}.${load ? ` The first clip after a start adds about ${shortDuration(load)} to load the model.` : ""}${c.follow ? ` Steps and guidance follow what ${c.follow.name}'s creator used (${settingsLabel(c.follow)}), as chosen under LoRAs.` : ""}${c.q.cache ? " Passes that barely change are skipped." : ""}${c.q.fp8 ? " The weights are fp8." : ""}${c.q.compile ? " The blocks are compiled, so the first clip after a start or a LoRA change waits a minute or two more." : ""}`;
     // Above what this machine has run out of memory at: said before asking.
     const limit = memoryLimit(t.repo);
     const over = limit && each.frames * each.level.width * each.level.height >= limit.load;
@@ -3219,6 +3364,14 @@ function renderImage(box, t) {
   });
   box.querySelector("#fast-passes")?.addEventListener("change", (e) => {
     setFastPasses(t.repo, e.target.checked);
+    refreshEstimate();
+  });
+  box.querySelector("#fp8-weights")?.addEventListener("change", (e) => {
+    setSpeedChoice("fp8Weights", t.repo, e.target.checked);
+    refreshEstimate();
+  });
+  box.querySelector("#compiled-blocks")?.addEventListener("change", (e) => {
+    setSpeedChoice("compiledBlocks", t.repo, e.target.checked);
     refreshEstimate();
   });
   if (box.querySelector("#loras")) wireLoras(box, t, () => {
@@ -4688,6 +4841,34 @@ function cacheMachineTooOld() {
   const v = state.rental?.agentVersion;
   return v != null && v < CACHE_AGENT;
 }
+// Two more speed switches per model, kept in this browser, which image 27
+// brought: fp8 weights (torchao's, on a card with fp8 units) and the
+// transformer's blocks compiled. Each scales the time guess until the
+// clips made here teach it better.
+const SPEED_AGENT = 27;
+const FP8_TIME = 0.75;
+const COMPILE_TIME = 0.85;
+function speedChoice(name, repo) {
+  try {
+    return localStorage.getItem(`${name}:${repo}`) === "1";
+  } catch {
+    return false;
+  }
+}
+function setSpeedChoice(name, repo, on) {
+  try {
+    if (on) localStorage.setItem(`${name}:${repo}`, "1");
+    else localStorage.removeItem(`${name}:${repo}`);
+  } catch {
+    // no storage: it lasts as long as the page
+  }
+}
+const fp8Weights = (repo) => speedChoice("fp8Weights", repo);
+const compiledBlocks = (repo) => speedChoice("compiledBlocks", repo);
+function speedMachineTooOld() {
+  const v = state.rental?.agentVersion;
+  return v != null && v < SPEED_AGENT;
+}
 // What the suggest button offers: with LoRAs ticked, a description in their creators' shape.
 function suggestLabel(t) {
   const book = loraBook(t.repo);
@@ -5146,7 +5327,7 @@ async function submitJob(agent, { repo, file, prompt, negative, quality, init = 
   // An add-on on an SDXL base draws at SDXL's size.
   const width = addon && xl ? 1024 : (q.width ?? q.size);
   const height = addon && xl ? 1024 : (q.height ?? q.size);
-  const body = { repo, file, prompt, negative, steps: q.steps, width, height, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler, ...(q.cache ? { cache: q.cache } : {}) };
+  const body = { repo, file, prompt, negative, steps: q.steps, width, height, cfg: q.cfg, sampler: q.sampler, scheduler: q.scheduler, ...(q.cache ? { cache: q.cache } : {}), ...(q.fp8 ? { fp8: true } : {}), ...(q.compile ? { compile: true } : {}) };
   if (Number.isInteger(seed)) body.seed = seed;
   if (addon) {
     body.addon = addon;
