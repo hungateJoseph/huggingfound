@@ -2777,7 +2777,7 @@ function renderImage(box, t) {
       <textarea id="image-prompt" rows="2" placeholder="${video ? "Describe a short clip, for example: waves rolling onto a beach at dusk, slow camera pan" : "Describe a picture, for example: a lighthouse at dusk, oil painting"}"></textarea>
       <span class="go-buttons"><button class="primary" id="image-go">${video ? "Generate a clip" : "Generate"}</button>${t.agent ? `<button class="ghost" id="queue-add" title="Starts as soon as the machine is free of the request under way, then the next after it; each is kept here and saved as it finishes">Add to queue</button>` : ""}${canScene ? `<button class="primary" id="scene-preview" hidden title="Claude lays the scene out as shots and shows them here, to read and change; nothing goes to the machine until you say so. This works while the machine is busy with something else">Preview Claude's scene setup</button>` : ""}</span>
     </div>
-    ${t.agent && claudeAvailable() ? `<p class="tools-row suggest-row"><button class="ghost" id="suggest-go" title="Claude reads what you typed, and the starting picture if there is one, and writes the description these models follow best; you choose whether to use it">Suggest a better description</button></p>
+    ${t.agent && claudeAvailable() ? `<p class="tools-row suggest-row"><button class="ghost" id="suggest-go" title="Claude reads what you typed, and the starting picture if there is one, and writes the description these models follow best; with a LoRA ticked, in the shape its creator prompts for it, with the strength and settings they call for; you choose whether to use it">${esc(suggestLabel(t))}</button></p>
     <div class="suggest" id="suggest" hidden></div>` : ""}
     <label class="field avoid">
       <span>Avoid</span>
@@ -2834,7 +2834,10 @@ function renderImage(box, t) {
       }
     }
     const now = video && spec ? chosen() : null;
-    const got = await claudeText({ kind: "prompt", mode: "suggest", clip: video, model: t.repo, prompt: typed, negative: $("#image-negative").value.trim(), ...(now && now.kind !== "scene" && now.q?.frames ? { seconds: clipSeconds(now.q) } : {}), ...(image ? { image } : {}) });
+    // With LoRAs ticked, Claude is shown how their creators prompt for them.
+    const loras = video ? await loraContext(t) : [];
+    if (loras.length) out.innerHTML = `<p class="muted small">Claude is reading what you typed${file ? ", the starting picture" : ""} and how ${loras.map((l) => l.name).join(" and ")} ${loras.length > 1 ? "are" : "is"} prompted for</p>`;
+    const got = await claudeText({ kind: "prompt", mode: "suggest", clip: video, model: t.repo, prompt: typed, negative: $("#image-negative").value.trim(), ...(now && now.kind !== "scene" && now.q?.frames ? { seconds: clipSeconds(now.q) } : {}), ...(image ? { image } : {}), ...(loras.length ? { loras } : {}) });
     btn.disabled = false;
     const description = /^Description:\s*(.+)$/m.exec(got.text)?.[1]?.trim();
     if (!got.text || !description) {
@@ -2844,7 +2847,8 @@ function renderImage(box, t) {
     const avoid = (/^Avoid:\s*(.+)$/m.exec(got.text)?.[1] ?? "").trim();
     const avoidText = /^(nothing|none|-)\.?$/i.test(avoid) ? "" : avoid;
     const why = (/^Why:\s*([\s\S]+)$/m.exec(got.text)?.[1] ?? "").trim();
-    showSuggestion({ description, avoidText, why });
+    const changes = loras.length ? suggestedLoraChanges(got.text, loras) : { strengths: [], settings: null };
+    showSuggestion({ description, avoidText, why, strengths: changes.strengths, settings: changes.settings, loraKey: loras[0]?.key ?? null, loraNames: loras.map((l) => l.name) });
   });
   // Claude's suggestion, kept until it is used or set aside, so the window
   // can be left and opened again with it still there.
@@ -2857,16 +2861,36 @@ function renderImage(box, t) {
     }
     const kept = (state.runs ??= {})[t.repo] ??= { lines: [], active: false, failed: [] };
     kept.suggestion = sug;
-    const { description, avoidText, why } = sug;
+    const { description, avoidText, why, strengths = [], settings = null, loraNames = [] } = sug;
     out.hidden = false;
-    out.innerHTML = `<p class="muted small"><b>Claude suggests</b>${why ? ` · ${esc(why)}` : ""}</p>
-      <textarea class="suggest-text" rows="4">${esc(description)}</textarea>
+    out.innerHTML = `<p class="muted small"><b>Claude suggests${loraNames.length ? `, fitted to ${esc(loraNames.join(" and "))}` : ""}</b>${why ? ` · ${esc(why)}` : ""}</p>
+      <textarea class="suggest-text" rows="${loraNames.length ? 7 : 4}">${esc(description)}</textarea>
       ${avoidText ? `<p class="muted small">Avoid: <span class="suggest-avoid">${esc(avoidText)}</span></p>` : ""}
+      ${strengths.length ? `<p class="muted small suggest-strength">Strength: ${strengths.map((x) => `${esc(x.name)} from ${x.from.toFixed(2)} to ${x.to.toFixed(2)}`).join("; ")}</p>` : ""}
+      ${settings ? `<p class="muted small suggest-settings">Settings: ${esc(settingsLabel(settings))} for clips with ${esc(loraNames[0] ?? "it")}</p>` : ""}
       <p class="tools-row"><button class="primary" id="suggest-use">Use it</button><button class="ghost" id="suggest-keep">Keep mine</button></p>`;
     out.querySelector(".suggest-text").addEventListener("input", (e) => (sug.description = e.target.value));
     out.querySelector("#suggest-use").addEventListener("click", () => {
       $("#image-prompt").value = out.querySelector(".suggest-text").value.trim();
       if (avoidText) $("#image-negative").value = avoidText;
+      // The strength and settings go onto the LoRAs' own rows, and stay with them.
+      if (strengths.length || settings) {
+        const nb = loraBook(t.repo);
+        for (const x of strengths) {
+          if (!nb.items[x.key]) continue;
+          nb.items[x.key].scale = x.to;
+          if (x.key in nb.on) nb.on[x.key] = x.to;
+        }
+        if (settings && sug.loraKey && nb.items[sug.loraKey]) nb.items[sug.loraKey].settings = { ...settings, from: "Claude" };
+        saveLoraBook(t.repo, nb);
+        const live = box.isConnected ? box : liveBox();
+        if (live?.querySelector("#loras")) wireLoras(live, t, () => {
+          refreshEstimate();
+          const sb = live.querySelector("#suggest-go");
+          if (sb) sb.textContent = suggestLabel(t);
+        });
+        refreshEstimate();
+      }
       out.hidden = true;
       delete kept.suggestion;
       $("#image-prompt").focus();
@@ -3179,7 +3203,11 @@ function renderImage(box, t) {
     await load();
     openModel(t.repo);
   });
-  if (box.querySelector("#loras")) wireLoras(box, t, refreshEstimate);
+  if (box.querySelector("#loras")) wireLoras(box, t, () => {
+    refreshEstimate();
+    const sb = box.querySelector("#suggest-go");
+    if (sb) sb.textContent = suggestLabel(t);
+  });
   box.querySelector("#replace-for-refs")?.addEventListener("click", () => {
     state.rentFrom = t.repo;
     replaceMachine({ diskGb: t.referenceGrowTo });
@@ -3303,7 +3331,7 @@ function renderImage(box, t) {
     if (!item.expand || item.expanded || !claudeAvailable() || !el) return [];
     el.hidden = false;
     el.innerHTML = `<p class="muted small">Claude is expanding the description for High quality; it shows here first, to change before it is sent.</p>`;
-    const got = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo), clipSeconds(item.q));
+    const got = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo), clipSeconds(item.q), video ? await loraContext(t) : null);
     if (!got.text) {
       el.hidden = true;
       item.expand = false;
@@ -3783,7 +3811,7 @@ function renderImage(box, t) {
     item.notes = [];
     if (item.expand && !item.replyTo && !item.expanded && claudeAvailable()) {
       say("Claude is expanding the description");
-      const expanded = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo), clipSeconds(item.q));
+      const expanded = await expandWords(item.prompt, video, t.repo, item.negative, await startingPictureFor(item, t.repo), clipSeconds(item.q), video ? await loraContext(t) : null);
       if (expanded.text) {
         item.expanded = expanded.text;
         say(`Expanded: "${expanded.text}"`);
@@ -4562,6 +4590,12 @@ function loraJobPart(t) {
   if ((loras.length || finetune) && loraMachineTooOld()) throw new Error(loraMachineTooOld());
   return { job: { ...(loras.length ? { loras } : {}), ...(finetune ? { finetune } : {}) }, trigger: [...new Set(trigger)].slice(0, 8) };
 }
+// What the suggest button offers: with LoRAs ticked, a description in their creators' shape.
+function suggestLabel(t) {
+  const book = loraBook(t.repo);
+  const names = Object.keys(book.on).filter((k) => loraHere(t, k) && book.items[k] && book.items[k].kind !== "finetune").map((k) => book.items[k].name);
+  return names.length ? `Ask Claude to fit it to ${names.join(" and ")}` : "Suggest a better description";
+}
 // The steps and guidance a ticked LoRA's creator used, when the person
 // chose to follow them under LoRAs: the last ticked one with any.
 function loraSettings(t) {
@@ -4580,6 +4614,51 @@ function sampleSettingsParts(s) {
 }
 // The recipes read this visit, by model, version and adult setting.
 const loraRecipes = new Map();
+async function loadLoraRecipe(t, item) {
+  const id = item.repo ?? item.id;
+  // The version on the machine, from the file's name; a card's newest file otherwise.
+  const version = /^v(\d+)_f\d+\.safetensors$/.exec(item.file ?? item.files?.[0]?.file ?? "")?.[1] ?? null;
+  const adult = Boolean(item.adult) || loraAdult();
+  const key = `${id}|${version ?? ""}|${adult ? 1 : 0}`;
+  if (!loraRecipes.has(key)) loraRecipes.set(key, await api.get(`/api/loras/recipe?base=${encodeURIComponent(t.repo)}&id=${encodeURIComponent(id)}${version ? `&version=${version}` : ""}${adult ? "&adult=1" : ""}`));
+  return loraRecipes.get(key);
+}
+// The LoRAs ticked for a model's clips, each with how its creator prompts
+// for it, for Claude to write the description in that shape and name the
+// strength and settings; nothing when none is on.
+async function loraContext(t) {
+  if (t.engine !== "diffusers" || !t.agent) return [];
+  const book = loraBook(t.repo);
+  const out = [];
+  for (const [key, scale] of Object.entries(book.on)) {
+    const item = book.items[key];
+    if (!item || item.kind === "finetune" || !loraHere(t, key)) continue;
+    let r = null;
+    try {
+      r = await loadLoraRecipe(t, item);
+    } catch {
+      r = null;
+    }
+    const rec = r?.strength ? `${r.strength.low === r.strength.high ? r.strength.low : `${r.strength.low} to ${r.strength.high}`}${r.strength.from === "notes" ? ` (their words: ${r.strength.text || "on the page"})` : " (what the showcase clips used)"}` : "";
+    out.push({ key, name: item.name, creator: r?.creator ?? item.creator ?? "", strength: Number(scale), recommended: rec, trigger: r?.trigger?.length ? r.trigger : item.trigger ?? [], tips: r?.tips ?? [], settings: r?.settings && (r.settings.steps || r.settings.cfg != null) ? settingsLabel(r.settings) : "", samples: (r?.samples ?? []).slice(0, 3).map((x) => ({ prompt: x.prompt, settings: sampleSettingsParts(x).join(", ") })) });
+  }
+  return out;
+}
+// The strengths and settings Claude's suggestion names for the ticked LoRAs.
+function suggestedLoraChanges(text, loras) {
+  const strengths = [];
+  for (const m of String(text).matchAll(/^Strength:\s*(.+?)\s*=\s*(\d+(?:\.\d+)?)\s*$/gm)) {
+    const name = m[1].trim().toLowerCase();
+    const l = loras.find((x) => x.name.toLowerCase() === name) ?? loras.find((x) => x.name.toLowerCase().includes(name) || name.includes(x.name.toLowerCase()));
+    const to = Math.min(1.5, Math.max(0, Math.round(Number(m[2]) * 20) / 20));
+    if (l && to !== l.strength && !strengths.some((x) => x.key === l.key)) strengths.push({ key: l.key, name: l.name, from: l.strength, to });
+  }
+  const line = /^Settings:\s*(.+)$/m.exec(String(text))?.[1] ?? "";
+  const steps = Number.parseInt(/(\d{1,3})\s*steps/i.exec(line)?.[1] ?? "", 10);
+  const cfg = Number.parseFloat(/guidance\s*(?:of\s*)?(\d+(?:\.\d+)?)/i.exec(line)?.[1] ?? "");
+  const settings = /as they are/i.test(line) || (!(steps > 0) && !Number.isFinite(cfg)) ? null : { ...(steps > 0 ? { steps } : {}), ...(Number.isFinite(cfg) ? { cfg } : {}) };
+  return { strengths, settings };
+}
 function wireLoras(box, t, onChange = () => {}) {
   const body = box.querySelector("#loras-body");
   const count = box.querySelector("#loras-count");
@@ -4780,21 +4859,15 @@ function wireLoras(box, t, onChange = () => {}) {
     out.hidden = false;
     btn.textContent = "Hide the creator's settings";
     if (holder.dataset.key) openRecipe = holder.dataset.key;
-    const id = item.repo ?? item.id;
-    // The version on the machine, from the file's name; a card's newest file otherwise.
-    const version = /^v(\d+)_f\d+\.safetensors$/.exec(item.file ?? item.files?.[0]?.file ?? "")?.[1] ?? null;
-    const adult = Boolean(item.adult) || loraAdult();
-    const cacheKey = `${id}|${version ?? ""}|${adult ? 1 : 0}`;
-    if (!loraRecipes.has(cacheKey)) {
-      out.innerHTML = `<p class="muted small">Reading the creator's page</p>`;
-      try {
-        loraRecipes.set(cacheKey, await api.get(`/api/loras/recipe?base=${encodeURIComponent(t.repo)}&id=${encodeURIComponent(id)}${version ? `&version=${version}` : ""}${adult ? "&adult=1" : ""}`));
-      } catch (err) {
-        out.innerHTML = `<p class="notice bad small">Could not read the creator's page: ${esc(err.message)}</p>`;
-        return;
-      }
+    out.innerHTML = `<p class="muted small">Reading the creator's page</p>`;
+    let recipe;
+    try {
+      recipe = await loadLoraRecipe(t, item);
+    } catch (err) {
+      out.innerHTML = `<p class="notice bad small">Could not read the creator's page: ${esc(err.message)}</p>`;
+      return;
     }
-    drawRecipe(out, loraRecipes.get(cacheKey), item, holder.dataset.key ?? null);
+    drawRecipe(out, recipe, item, holder.dataset.key ?? null);
   }
   function drawRecipe(out, r, item, key) {
     const here = key ? loraHere(t, key) : false;
@@ -6693,8 +6766,8 @@ function parseShots(text) {
 // A clip's length in seconds from its settings, for Claude to write only
 // as much action as the clip has time for.
 const clipSeconds = (q) => (q?.frames && q?.fps ? Math.round((q.frames / q.fps) * 10) / 10 : null);
-async function expandWords(prompt, clip, model, negative, image = null, seconds = null) {
-  const got = await claudeText({ kind: "prompt", mode: "expand", clip, model, prompt, negative, ...(clip && seconds ? { seconds } : {}), ...(image ? { image } : {}) });
+async function expandWords(prompt, clip, model, negative, image = null, seconds = null, loras = null) {
+  const got = await claudeText({ kind: "prompt", mode: "expand", clip, model, prompt, negative, ...(clip && seconds ? { seconds } : {}), ...(image ? { image } : {}), ...(loras?.length ? { loras } : {}) });
   if (got.text && got.text.length <= prompt.length) return { text: "", why: "Claude's description was no longer than yours" };
   return got;
 }

@@ -153,6 +153,31 @@ Dropped: the actions left out, in a few words, or the word nothing
 
 Plain text only; no markdown.`;
 
+// The LoRAs ticked for a clip, each with how its creator prompts for it:
+// the description is written in that shape, and the suggestion names the
+// strength and settings the creator's material calls for.
+const WITH_LORAS = `
+
+The person has LoRAs (small add-ons trained onto the model) ticked for this clip, shown below with how each one's creator uses it: their notes, the trigger words, and the prompts their showcase clips were made from. Write the description in the shape those showcase prompts share (their sections and order, their length, how they describe the subject, the action, the camera and the sound), with the trigger words where the showcase puts them, while keeping the person's own subject, action and setting exactly. Where the showcase prompts and the person's words differ in style, the showcase wins; where they differ in content, the person wins.`;
+const LORA_LINES = `
+Strength: one line per LoRA, "Strength: <name> = <number>", the strength the creator's material calls for (their recommendation, else what the showcase used, else the current one), between 0 and 1.5
+Settings: "Settings: <steps> steps, guidance <number>" when the creator's clips call for particular ones (a turbo or distilled LoRA wants its few steps and guidance 1), else "Settings: as they are"`;
+function loraMaterial(input) {
+  const loras = (Array.isArray(input.loras) ? input.loras : []).slice(0, 4).map((l) => ({
+    name: String(l?.name ?? "").trim().slice(0, 120),
+    creator: String(l?.creator ?? "").trim().slice(0, 80),
+    strength: Number.isFinite(Number(l?.strength)) ? Number(l.strength) : null,
+    recommended: String(l?.recommended ?? "").trim().slice(0, 160),
+    trigger: (Array.isArray(l?.trigger) ? l.trigger : []).map((t) => String(t).trim()).filter(Boolean).slice(0, 8),
+    tips: (Array.isArray(l?.tips) ? l.tips : []).map((t) => String(t).trim()).filter(Boolean).slice(0, 8),
+    settings: String(l?.settings ?? "").trim().slice(0, 120),
+    samples: (Array.isArray(l?.samples) ? l.samples : []).slice(0, 3).map((x) => ({ prompt: String(x?.prompt ?? "").trim().slice(0, 2500), settings: String(x?.settings ?? "").trim().slice(0, 300) })).filter((x) => x.prompt),
+  })).filter((l) => l.name);
+  if (!loras.length) return { loras, text: "" };
+  const text = loras.map((l) => [`<lora name="${l.name.replace(/"/g, "'")}">`, l.creator ? `By ${l.creator}.` : "", l.strength != null ? `Ticked at strength ${l.strength}.` : "", l.recommended ? `The strength the creator names: ${l.recommended}.` : "", l.trigger.length ? `Trigger words: ${l.trigger.join(", ")}.` : "", l.settings ? `Settings the creator's clips used: ${l.settings}.` : "", l.tips.length ? `The creator's notes:\n${l.tips.join("\n")}` : "", ...l.samples.map((x, i) => `Showcase clip ${i + 1}${x.settings ? ` (${x.settings})` : ""} was made from:\n${x.prompt}`), "</lora>"].filter(Boolean).join("\n")).join("\n\n");
+  return { loras, text };
+}
+
 // A LoRA's creator left notes and showcase prompts; Claude reads how they
 // get the best out of it and says what to set and how to write for it.
 const LORA_SYSTEM = `You explain how to use a LoRA (a small add-on trained onto an open-source video model) the way its creator meant it, for people making clips on rented GPUs. The person shows you the LoRA's name, the model it is for, the creator's own notes from its page, its trigger words, the prompts the creator's showcase clips were made from, and the settings of those clips where the upload kept them. Work out from this how the creator gets the best out of it and tell the person plainly:
@@ -314,9 +339,12 @@ export function buildRequest(input, { outputDir } = {}) {
     const picture = pictureOf(input);
     if (picture) parts.push(`The ${thing} starts from the picture shown: the person, clothes, place and light are to stay as they are in it, and the avoid list should name a different person, a changed face, changed clothes and a changed background.`);
     if (input.clip && lengthLine(input.seconds)) parts.push(lengthLine(input.seconds));
-    parts.push("Write the Description, Avoid and Why lines.");
+    const lora = loraMaterial(input);
+    if (lora.text) parts.push(`The LoRAs ticked for it, each with how its creator prompts for it:\n\n${lora.text}`);
+    parts.push(lora.text ? "Write the Description, Avoid, Strength, Settings and Why lines." : "Write the Description, Avoid and Why lines.");
     const text = parts.join("\n\n");
-    const suggestSystem = input.clip ? SUGGEST_SYSTEM.replace("\n\nReply with exactly", `${PACING}\n\nReply with exactly`) : SUGGEST_SYSTEM;
+    let suggestSystem = input.clip ? SUGGEST_SYSTEM.replace("\n\nReply with exactly", `${PACING}\n\nReply with exactly`) : SUGGEST_SYSTEM;
+    if (lora.text) suggestSystem = suggestSystem.replace("\n\nReply with exactly", `${WITH_LORAS}\n\nReply with exactly`).replace("Description: the description to use, 40 to 120 words, one paragraph", "Description: the description to use, one paragraph; 40 to 120 words, or as long as the showcase prompts run when LoRAs are ticked").replace("\nWhy: one or two plain sentences", `${LORA_LINES}\nWhy: one or two plain sentences`);
     return { ...base, max_tokens: 4000, system: picture ? suggestSystem + WITH_PICTURE : suggestSystem, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   if (input.kind === "prompt" && input.mode === "continue") {
@@ -389,9 +417,12 @@ export function buildRequest(input, { outputDir } = {}) {
     if (negative) parts.push(`It is asked to avoid: ${negative}. Leave those out of the description.`);
     if (picture) parts.push(`The ${input.clip ? "clip" : "picture"} starts from the picture shown: the person, clothes, place and light in it are to be kept, and the description should say so.`);
     if (input.clip && lengthLine(input.seconds)) parts.push(lengthLine(input.seconds));
+    const lora = loraMaterial(input);
+    if (lora.text) parts.push(`The LoRAs ticked for it, each with how its creator prompts for it:\n\n${lora.text}`);
     parts.push("Reply with only the expanded description.");
     const text = parts.join("\n\n");
-    const system = input.clip ? EXPAND_CLIP_SYSTEM : EXPAND_SYSTEM;
+    let system = input.clip ? EXPAND_CLIP_SYSTEM : EXPAND_SYSTEM;
+    if (lora.text) system = system.replace("\n\nReply with only", `${WITH_LORAS}\n\nReply with only`).replace("60 to 120 words in one paragraph", "one paragraph, as long as the showcase prompts run");
     return { ...base, max_tokens: 4000, system: picture ? system + WITH_PICTURE : system, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
   throw new ReviewError("Unknown kind of check.");

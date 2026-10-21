@@ -82,6 +82,10 @@ const reviewer = {
       return { declined: false, model: "claude-opus-5", note: "" };
     }
     // A better description for what was typed: the motion spelt out, the unwanted moved to the avoid list.
+    if (input.mode === "suggest" && input.loras?.length) {
+      onText(`Description: ${input.loras[0].trigger?.[0] ?? "mvmt"}, ${input.prompt.replace(/^show this man /, "the man as in the picture ")} in one continuous movement, medium shot, camera still, as the showcase describes it.\nAvoid: nothing\nStrength: ${input.loras[0].name} = 0.7\nSettings: 30 steps, guidance 1\nWhy: Written in the shape of the showcase prompts with the trigger word first, at the strength the creator recommends.`);
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
     if (input.mode === "suggest") {
       onText(`Description: a woman in a bright gym doing jumping jacks in bare feet, feet apart as her hands meet overhead, then together as her arms come down; medium shot, camera still, whole body in frame.${input.image ? " She stays as she is in the picture." : ""}\nAvoid: socks, shoes, zooming in, closed eyes\nWhy: Spelt out the motion and moved what you did not want into the avoid list, since the model cannot read "not".`);
       return { declined: false, model: "claude-opus-5", note: "" };
@@ -2074,23 +2078,43 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.match(await row.locator(".lora-settings-pill").innerText(), /30 steps, guidance 1/);
   assert.equal(await row.locator(".lora-recipe-box").isVisible(), true, "the panel stays open through the redraw");
   assert.match(await visitor.locator("#estimate").innerText(), /30 steps[\s\S]*Steps and guidance follow what Wan-TI2V-Motion-LoRA's creator used \(30 steps, guidance 1\)/);
+  // A few words of the person's own, fitted by Claude to the LoRA: the
+  // description in the showcase's shape with the trigger word first, the
+  // strength the creator recommends and the settings, all taken on "Use it".
+  assert.equal(await visitor.locator("#suggest-go").innerText(), "Ask Claude to fit it to Wan-TI2V-Motion-LoRA");
+  await visitor.fill("#image-prompt", "show this man eating an apple");
+  await visitor.click("#suggest-go");
+  await visitor.locator("#suggest .suggest-text").waitFor();
+  const fitted = reviewed.at(-1);
+  assert.equal(fitted.mode, "suggest");
+  assert.deepEqual([fitted.loras.length, fitted.loras[0].name, fitted.loras[0].trigger, fitted.loras[0].strength, fitted.loras[0].recommended, fitted.loras[0].settings, fitted.loras[0].samples[0].prompt], [1, "Wan-TI2V-Motion-LoRA", ["mvmt"], 0.8, "0.8 (their words: strength: 0.8)", "30 steps, guidance 1", "mvmt, a dancer spins across a sunlit studio floor, slow dolly in"], "Claude was shown how the creator prompts for it");
+  assert.ok(fitted.loras[0].tips.includes("Works best at 0.7 to 0.9 strength; above 1.0 limbs smear."));
+  const suggestText = await visitor.locator("#suggest").innerText();
+  assert.match(suggestText, /Claude suggests, fitted to Wan-TI2V-Motion-LoRA/);
+  assert.match(suggestText, /Strength: Wan-TI2V-Motion-LoRA from 0\.80 to 0\.70/);
+  assert.match(suggestText, /Settings: 30 steps, guidance 1 for clips with Wan-TI2V-Motion-LoRA/);
+  assert.match(await visitor.inputValue("#suggest .suggest-text"), /^mvmt, the man as in the picture eating an apple in one continuous movement/);
+  await visitor.click("#suggest-use");
+  assert.match(await visitor.inputValue("#image-prompt"), /^mvmt, the man as in the picture eating an apple/);
+  await visitor.waitForFunction(() => document.querySelector(".lora-row .lora-strength")?.value === "0.7");
+  assert.match(await visitor.locator(".lora-row .lora-settings-pill").innerText(), /30 steps, guidance 1/);
   // The next clip carries it, at the creator's steps and guidance.
   await visitor.fill("#image-prompt", "a kite over a field");
   await visitor.click("#image-go");
   for (let i = 0; i < 100 && rentedAgent.state.jobs.length === jobs; i++) await new Promise((r) => setTimeout(r, 100));
   const sent = rentedAgent.state.jobs.at(-1);
   assert.equal(sent.prompt.endsWith("a kite over a field"), true, sent.prompt);
-  assert.deepEqual(sent.loras, [{ repo: "motionlab/Wan-TI2V-Motion-LoRA", file: "wan_motion_v1.safetensors", scale: 0.8 }]);
+  assert.deepEqual(sent.loras, [{ repo: "motionlab/Wan-TI2V-Motion-LoRA", file: "wan_motion_v1.safetensors", scale: 0.7 }], "at the strength Claude set");
   assert.equal(sent.finetune, undefined);
   assert.equal(sent.steps, 30, "the creator's steps");
   assert.equal(sent.cfg, 1, "the creator's guidance");
   await visitor.waitForFunction(() => !document.querySelector("#image-go").disabled, null, { timeout: 30000 });
-  // The window opened again shows the same: ticked, at 0.8.
+  // The window opened again shows the same: ticked, at 0.7.
   await visitor.evaluate(() => openModel("Wan-AI/Wan2.2-TI2V-5B-Diffusers"));
   await visitor.waitForSelector("#loras[open] .lora-row");
   const again = visitor.locator(".lora-row", { hasText: "Wan-TI2V-Motion-LoRA" });
   assert.equal(await again.locator(".lora-on").isChecked(), true);
-  assert.equal(await again.locator(".lora-strength").inputValue(), "0.8");
+  assert.equal(await again.locator(".lora-strength").inputValue(), "0.7");
   assert.match(await again.locator(".lora-settings-pill").innerText(), /30 steps, guidance 1/, "the borrowed settings are kept too");
   await again.locator(".lora-drop-settings").click();
   await again.locator(".lora-settings-pill").waitFor({ state: "detached" });

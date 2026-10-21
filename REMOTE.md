@@ -598,6 +598,23 @@ through `/api/review` (`kind: "prompt", mode: "lora"`) for Strength,
 Prompt, Settings, Pairs with and Avoid lines. Nothing in the panel needs
 Claude; it is read off the page.
 
+Fitting the person's own words to a LoRA (2026-10-20): with LoRAs ticked,
+the suggest button under the description reads "Ask Claude to fit it to
+<LoRA>". The suggestion request (`mode: "suggest"`) and the expansion at
+send time (`mode: "expand"`) carry `loras`: each ticked LoRA with its
+current strength, the creator's recommended strength, trigger words,
+notes, settings and up to three showcase prompts (`loraContext` on the
+page, `loraMaterial` in src/review.js). Claude writes the description in
+the showcase prompts' shape with the person's subject, action and setting
+kept (the showcase wins on style, the person on content), and the
+suggestion adds "Strength: <name> = <number>" per LoRA and "Settings: N
+steps, guidance X" or "as they are". The suggestion box shows the
+description, the strength change and the settings; "Use it" puts the
+words in the box, moves the LoRA's slider and keeps the settings on its
+row, so the next clip goes out that way. A starting picture goes along as
+before, so "show this man eating an apple" with a picture keeps the man
+as he is.
+
 Not yet verified on hardware: DaSiWa loading and its clips, Civitai
 downloads with a real key, any Civitai LoRA, several LoRAs at once, a
 turbo LoRA at its borrowed steps and guidance.

@@ -365,3 +365,21 @@ test("how a LoRA's creator uses it: the notes, trigger words and showcase prompt
   assert.throws(() => buildRequest({ kind: "prompt", mode: "lora", lora: { name: "x" } }), /no notes or showcase prompts/);
   assert.throws(() => buildRequest({ kind: "prompt", mode: "lora", lora: {} }), /Which LoRA/);
 });
+
+test("with LoRAs ticked, a suggestion and an expansion are written in the creators' shape, and the suggestion names the strength and settings", () => {
+  const loras = [{ name: "Better Human Motion", creator: "mover", strength: 1, recommended: "0.7 (their words: strength 0.7)", trigger: ["mvmt"], tips: ["I recommend using strength 0.7."], settings: "30 steps, guidance 5", samples: [{ prompt: "mvmt, a woman walks across a bridge", settings: "30 steps, guidance 5" }] }];
+  const sug = buildRequest({ kind: "prompt", mode: "suggest", clip: true, model: "MiniMaxAI/MiniMax-H3", prompt: "show this man eating an apple", loras });
+  assert.match(sug.system, /shape those showcase prompts share/);
+  assert.match(sug.system, /Strength: one line per LoRA, "Strength: <name> = <number>"/);
+  assert.match(sug.system, /Settings: "Settings: <steps> steps, guidance <number>"/);
+  const text = sug.messages[0].content;
+  assert.match(text, /<lora name="Better Human Motion">\nBy mover\.\nTicked at strength 1\.\nThe strength the creator names: 0\.7 \(their words: strength 0\.7\)\.\nTrigger words: mvmt\.\nSettings the creator's clips used: 30 steps, guidance 5\.\nThe creator's notes:\nI recommend using strength 0\.7\.\nShowcase clip 1 \(30 steps, guidance 5\) was made from:\nmvmt, a woman walks across a bridge\n<\/lora>/);
+  assert.match(text, /Write the Description, Avoid, Strength, Settings and Why lines\./);
+  const plain = buildRequest({ kind: "prompt", mode: "suggest", clip: true, prompt: "a kite", loras: [] });
+  assert.doesNotMatch(plain.system, /Strength: one line per LoRA/);
+  const exp = buildRequest({ kind: "prompt", mode: "expand", clip: true, model: "MiniMaxAI/MiniMax-H3", prompt: "a man eats an apple", loras });
+  assert.match(exp.system, /shape those showcase prompts share/);
+  assert.match(exp.system, /one paragraph, as long as the showcase prompts run/);
+  assert.doesNotMatch(exp.system, /60 to 120 words/);
+  assert.match(exp.messages[0].content, /<lora name="Better Human Motion">/);
+});
