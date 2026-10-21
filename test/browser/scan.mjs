@@ -1393,22 +1393,36 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   assert.equal(await visitor.locator("#steps .step .progress-text").innerText(), "Done");
   await visitor.waitForSelector("#chat-send");
   assert.match(await visitor.locator(".chat-tools").innerText(), /on the rented GPU/);
-  const before = rentedOllama.state.chats.length;
+  // The chat goes to the machine's agent (image 28), base64-wrapped past the proxy's firewall, and on to Ollama there.
+  const before = (rentedAgent.state.chats ?? []).length;
+  const ollamaBefore = rentedOllama.state.chats.length;
   await visitor.fill("#chat-text", "hello machine");
   await visitor.click("#chat-send");
-  await visitor.waitForFunction(() => /from the server/.test(document.querySelector("#messages")?.textContent ?? ""));
-  assert.equal(rentedOllama.state.chats.length, before + 1, "the message reached the machine");
-  assert.equal(rentedOllama.state.chats.at(-1).messages.at(-1).content, "hello machine");
+  await visitor.waitForFunction(() => /from the machine's agent/.test(document.querySelector("#messages")?.textContent ?? ""));
+  assert.equal(rentedAgent.state.chats.length, before + 1, "the message reached the machine's agent");
+  assert.equal(rentedAgent.state.chats.at(-1).messages.at(-1).content, "hello machine");
+  assert.equal(rentedAgent.state.chats.at(-1).stream, true);
+  assert.equal(rentedOllama.state.chats.length, ollamaBefore, "not straight to Ollama");
   // A machine rented for another address refuses the page: the message says which address, and the way out.
   await visitor.waitForFunction(() => !document.querySelector("#chat-send").disabled);
-  rentedOllama.state.refuse = true;
+  rentedAgent.state.refuse = true;
   await visitor.fill("#chat-text", "hello again");
   await visitor.click("#chat-send");
   await visitor.waitForFunction(() => /HTTP 403/.test(document.querySelector("#messages")?.textContent ?? ""));
   assert.match(await visitor.locator("#messages .msg.assistant").last().innerText(), new RegExp(`The machine refused this page's address, ${hostedBase.replace(/[.]/g, "\\.")} \\(HTTP 403 from Ollama there\\)\\. A machine answers only the addresses it was rented for\\. It was rented before this address was allowed: replace the machine from the bar`));
-  rentedOllama.state.refuse = false;
+  rentedAgent.state.refuse = false;
+  // The proxy's firewall blocking the request (Cloudflare's page, HTTP 403) is told apart, with the files named.
   await visitor.waitForFunction(() => !document.querySelector("#chat-send").disabled);
-  assert.ok(rentedOllama.state.origins.includes(hostedBase), "sent by the page itself, from the site's origin");
+  rentedAgent.state.block = true;
+  await visitor.setInputFiles("#chat-files", [{ name: "crack.exe", mimeType: "application/octet-stream", buffer: Buffer.from([0x4d, 0x5a, 0x90, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0xff, 0xff, 0, 0, 0x50, 0x45, 0, 0]) }]);
+  await visitor.waitForFunction(() => document.querySelectorAll("#chat-chips .chip").length === 1);
+  await visitor.fill("#chat-text", "what hwid does it want");
+  await visitor.click("#chat-send");
+  await visitor.waitForFunction(() => /Cloudflare/.test(document.querySelector("#messages")?.textContent ?? ""));
+  assert.match(await visitor.locator("#messages .msg.assistant").last().innerText(), /^Something went wrong: The proxy in front of the machine \(a web firewall, Cloudflare's\) blocked this request before it reached the machine: HTTP 403, most likely over crack\.exe: a binary file's strings, or code, read like attack payloads to it, and the files go with every later message of the conversation\. Even carried by the machine's agent it was blocked; start a new chat without that file\.$/);
+  rentedAgent.state.block = false;
+  await visitor.waitForFunction(() => !document.querySelector("#chat-send").disabled);
+  assert.ok(rentedAgent.state.origins.includes(hostedBase), "sent by the page itself, from the site's origin, to the machine's agent");
   // Improve goes to Claude with the account's saved key; the site relays that one request.
   await visitor.locator("#messages .improve-go").last().click();
   const improve = visitor.locator("#messages .improve-wrap").last();
@@ -2078,7 +2092,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.waitForSelector("#gpu-runs li");
   // The machine's own report, to read or copy: what it runs, holds and how its failures went.
   await visitor.click("#gpu-report");
-  await visitor.waitForFunction(() => /Agent 27, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  await visitor.waitForFunction(() => /Agent 28, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
   assert.match(await visitor.locator("#gpu-report-out").innerText(), /Python 3\.12\.3, torch 2\.6\.0 \(CUDA 12\.4\), diffusers 0\.41\.0, transformers 5\.5\.3, peft 0\.18\.0, av 15\.0\.0[\s\S]*Cards: Fake A40 48 GB[\s\S]*Disk: 41\.5 GB free of 50, 8\.5 GB in the machine's folders \(a quota; the size as the site said it\)[\s\S]*No failures on this machine\.[\s\S]*Journal \(tail\):/);
   assert.equal(await visitor.locator("#gpu-report-copy").isHidden(), false);
   assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");

@@ -115,7 +115,7 @@ function tunnels() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "27";
+const VERSION = "28";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -1385,6 +1385,48 @@ const server = http.createServer(async (req, res) => {
       }
       const job = startJoin(pieces);
       return send(res, 202, { id: job.id, status: job.status });
+    }
+    // A chat for Ollama on this machine, carried by the agent: the page
+    // sends the request base64-wrapped, because the proxy in front of a
+    // machine's addresses (Cloudflare, for RunPod's) blocks a plain one
+    // whose words look like attack code to a web firewall, as a binary
+    // file's strings do, with a 403 that never reaches Ollama. Decoded
+    // here, handed to Ollama next door, its answer streamed back as it comes.
+    if (req.method === "POST" && url.pathname === "/chat") {
+      touchActivity();
+      const wrapped = await readJson(req, 64 * 1024 * 1024);
+      let body;
+      try {
+        body = typeof wrapped.b64 === "string" ? JSON.parse(Buffer.from(wrapped.b64, "base64").toString("utf8")) : wrapped;
+      } catch {
+        return send(res, 400, { error: "Bad chat body" });
+      }
+      if (!body || typeof body !== "object" || !Array.isArray(body.messages)) return send(res, 400, { error: "Bad chat body" });
+      const gone = new AbortController();
+      res.on("close", () => {
+        if (!res.writableEnded) gone.abort();
+      });
+      let upstream;
+      try {
+        upstream = await fetch(`${OLLAMA_URL}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), signal: gone.signal });
+      } catch (err) {
+        return send(res, 502, { error: `Ollama on this machine did not answer: ${err.message}` });
+      }
+      res.writeHead(upstream.status, { "Content-Type": upstream.headers.get("content-type") || "application/x-ndjson", "Cache-Control": "no-store" });
+      const reader = upstream.body.getReader();
+      for (;;) {
+        let chunk;
+        try {
+          chunk = await reader.read();
+        } catch {
+          break;
+        }
+        if (chunk.done) break;
+        res.write(chunk.value);
+        touchActivity();
+      }
+      res.end();
+      return;
     }
     if (req.method === "POST" && url.pathname === "/jobs") {
       touchActivity();

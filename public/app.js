@@ -2093,15 +2093,14 @@ function renderChat(box, modelName) {
       const room = contextFor(sent, body.options?.num_predict ?? 2048);
       if (room) body.options = { ...(body.options ?? {}), num_ctx: room };
       let res = await chatRequest(body, ctl.signal);
+      let why = res.ok ? "" : await res.text().catch(() => "");
       // A model without a thinking pass refuses the knob; ask again without it.
-      if (!res.ok && "think" in body) {
-        const why = await res.text().catch(() => "");
-        if (/think/i.test(why)) {
-          delete body.think;
-          res = await chatRequest(body, ctl.signal);
-        }
+      if (!res.ok && "think" in body && /think/i.test(why)) {
+        delete body.think;
+        res = await chatRequest(body, ctl.signal);
+        why = res.ok ? "" : await res.text().catch(() => "");
       }
-      if (!res.ok) throw new Error(res.status === 403 && chatDirect() ? refusedByMachine() : `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
+      if (!res.ok) throw new Error(res.status === 403 && chatDirect() ? refusedByMachine(why, messages.flatMap((m) => m.files ?? [])) : `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -2495,9 +2494,32 @@ function chatHeld(held) {
 function chatDirect() {
   return Boolean(state.hosted && state.chatServer?.direct && state.chatServer.url);
 }
-// Ollama on the machine answers 403 to a page from an address it was not
-// rented for: the site with or without "www", say, or an older address.
-function refusedByMachine() {
+// From image 28 the machine's agent carries the chat to Ollama, the
+// request base64-wrapped: the proxy in front of a machine's addresses
+// (Cloudflare, for RunPod's) blocks a plain request whose words look like
+// attack code to a web firewall, as a binary file's strings do.
+const CHAT_VIA_AGENT = 28;
+function chatViaAgent() {
+  // The agent's version is known once the machine has been asked; until
+  // then the agent is tried, and an image without the route says 404.
+  const v = state.rental?.agentVersion;
+  return chatDirect() && state.chatServer?.agent && (v == null || Number(v) >= CHAT_VIA_AGENT) ? state.chatServer.agent : "";
+}
+function base64Utf8(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+// What a 403 on the way to the machine means, from its body: a web
+// firewall's page (Cloudflare's) means the request never reached the
+// machine, most likely over an attached file's contents; anything else
+// is Ollama refusing a page from an address it was not rented for.
+function refusedByMachine(why = "", files = []) {
+  if (/cloudflare|ray id|attention required|<html/i.test(why)) {
+    const named = files.length ? `most likely over ${files.slice(0, 3).map((f) => f.name).join(", ")}${files.length > 3 ? " and the others" : ""}: a binary file's strings, or code, read like attack payloads to it, and the files go with every later message of the conversation` : "most likely over something in the conversation that read like an attack payload to it";
+    return `The proxy in front of the machine (a web firewall, Cloudflare's) blocked this request before it reached the machine: HTTP 403, ${named}.${chatViaAgent() ? " Even carried by the machine's agent it was blocked; start a new chat without that file." : " A machine on the current image carries chats past that filter: replace the machine from the bar. Until then, start a new chat without that file."}`;
+  }
   const site = state.siteOrigin && state.siteOrigin !== location.origin ? state.siteOrigin : "";
   return `The machine refused this page's address, ${location.origin} (HTTP 403 from Ollama there). A machine answers only the addresses it was rented for.${site ? ` This site's own address is ${site}: open it there and try again, or` : " It was rented before this address was allowed:"} replace the machine from the bar, and the new one accepts this address too.`;
 }
@@ -2505,7 +2527,11 @@ function chatRequest(body, signal = null) {
   const direct = chatDirect();
   // The site is told only that the machine is in use, so it is not stopped as idle mid-conversation.
   if (direct) api.post("/api/rent/touch", {}).catch(() => {});
-  return fetch(direct ? `${state.chatServer.url}/api/chat` : "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), ...(signal ? { signal } : {}) });
+  const plain = () => fetch(direct ? `${state.chatServer.url}/api/chat` : "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), ...(signal ? { signal } : {}) });
+  const agent = chatViaAgent();
+  if (!agent) return plain();
+  // An agent from before image 28 has no chat route: the plain way then.
+  return fetch(`${agent}/chat`, { method: "POST", headers: { "Content-Type": "application/json", ...agentHeaders() }, body: JSON.stringify({ b64: base64Utf8(JSON.stringify({ ...body, stream: true })) }), ...(signal ? { signal } : {}) }).then((res) => (res.status === 404 || res.status === 405 ? plain() : res));
 }
 
 // Hands the browser a file to save: a conversation, a transcript.

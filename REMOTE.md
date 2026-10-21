@@ -556,20 +556,35 @@ floor. The guest's keys and machine last twelve hours after the last use,
 as before. The model window's "Renting a GPU takes a RunPod or Vast.ai
 API key" prompt takes either key or both; one is enough to rent.
 
-## HTTP 403 from the machine's Ollama (2026-10-21)
+## HTTP 403 on a chat: the proxy's firewall, or Ollama's origins (2026-10-21, image 28)
 
-"Ollama replied HTTP 403" on the hosted site means Ollama on the machine
-refused the page's address: the browser talks to the machine directly,
-and Ollama answers 403 to any origin outside `OLLAMA_ORIGINS` (the agent
-does the same with `HF_ORIGINS`). A machine used to be rented for one
-address, `SITE_ORIGIN` or the host the rent request came through, so a
-visitor at the site's other spelling (with or without "www") or an older
-address was refused. Now `pageOrigins()` in src/server.js rents with the
-site's address and the request's, each with and without "www", and the
-page's 403 message names this page's address and the site's own, with
-the way out: open the site at its own address, or replace the machine,
-which is rented with the wider list. A machine rented before this change
-keeps its single address until it is replaced.
+Seen on hardware (2026-10-21, a Quadro RTX 6000 on image 27): "Ollama
+replied HTTP 403" on the hosted site, in a conversation with a 9.2 MB
+.exe attached, on a fresh machine too. The Machine report had come
+straight from the agent, which checks the same origin list as Ollama, so
+the page's address was allowed; what blocked the request was the proxy
+in front of RunPod's addresses, Cloudflare, whose web firewall answers
+403 to a request body that reads like an attack payload, and a binary's
+strings do. The files travel with every later message, so the whole
+conversation was blocked from then on.
+
+The fix, image 28: the agent carries chats. `POST /chat` on the agent
+takes `{ b64 }`, the Ollama request base64-wrapped (a firewall reads
+nothing in it), decodes it, hands it to Ollama next door and streams the
+answer back; the page uses it whenever the rental's agent is 28 or
+newer, and the plain route to Ollama's address otherwise. The page also
+reads a 403's body now: a Cloudflare page means the firewall, and the
+message names the attached files and the way out (a machine on the
+current image, or a new chat without the file); anything else means
+Ollama refusing the page's address, which the message names with the
+site's own address and "replace the machine".
+
+Origins. A machine used to be rented for one address, `SITE_ORIGIN` or
+the host the rent request came through, so a visitor at the site's other
+spelling (with or without "www") was refused. `pageOrigins()` in
+src/server.js now rents with the site's address and the request's, each
+with and without "www"; a machine rented before keeps its single address
+until replaced.
 
 ## fp8 weights, compiled blocks, and files for a chat model (2026-10-20, image 27)
 
