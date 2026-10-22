@@ -53,6 +53,13 @@ const fetchImpl = (url, init) => {
           controller.close();
           return;
         }
+        // A model that closes its thinking and stops without a word; asked again from its notes, it answers.
+        if (/think then hush/.test(asked.messages.at(-1)?.content ?? "") && asked.think !== false) {
+          for (let i = 0; i < 4; i++) controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: "", thinking: `quiet${i} ` } })}\n`));
+          controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: "" }, done: true, done_reason: "stop", eval_count: 4, eval_duration: 1e9 })}\n`));
+          controller.close();
+          return;
+        }
         if (/^Stop thinking and answer now/.test(asked.messages.at(-1)?.content ?? "")) {
           controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: "answered from notes" } })}\n`));
           controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ done: true, eval_count: 3, eval_duration: 1e9 })}\n`));
@@ -889,6 +896,14 @@ await step("files go with a chat message: chosen as chips, sent under their name
   assert.match(again.messages.at(-2).content, /^My notes so far, before answering:\nstep0 step1 /);
   assert.equal(again.messages.at(-3).content, "think forever about this");
   assert.match(await page.locator("#messages .msg.assistant").last().innerText(), /Thought it through[\s\S]*answered from notes[\s\S]*It thought for the whole length limit \(24576 tokens\) without starting the answer, so it was asked again to answer from its notes, with thinking off\./);
+  // One that closes its thinking under the cap and says nothing gets the same second ask.
+  await page.fill("#chat-text", "think then hush");
+  await page.click("#chat-send");
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
+  const hushed = chatBodies.at(-1);
+  assert.equal(hushed.think, false);
+  assert.match(hushed.messages.at(-2).content, /^My notes so far, before answering:\nquiet0 quiet1 quiet2 quiet3$/);
+  assert.match(await page.locator("#messages .msg.assistant").last().innerText(), /answered from notes[\s\S]*It finished thinking \(about 4 words\) and stopped without an answer, so it was asked again to answer from its notes, with thinking off\./);
   await page.click("#chat-clear");
   await page.waitForFunction(() => document.querySelectorAll("#messages .msg").length === 0);
   await page.keyboard.press("Escape");
@@ -2126,7 +2141,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.waitForSelector("#gpu-runs li");
   // The machine's own report, to read or copy: what it runs, holds and how its failures went.
   await visitor.click("#gpu-report");
-  await visitor.waitForFunction(() => /Agent 28, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  await visitor.waitForFunction(() => /Agent 29, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
   assert.match(await visitor.locator("#gpu-report-out").innerText(), /Python 3\.12\.3, torch 2\.6\.0 \(CUDA 12\.4\), diffusers 0\.41\.0, transformers 5\.5\.3, peft 0\.18\.0, av 15\.0\.0[\s\S]*Cards: Fake A40 48 GB[\s\S]*Disk: 41\.5 GB free of 50, 8\.5 GB in the machine's folders \(a quota; the size as the site said it\)[\s\S]*No failures on this machine\.[\s\S]*Journal \(tail\):/);
   assert.equal(await visitor.locator("#gpu-report-copy").isHidden(), false);
   assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");

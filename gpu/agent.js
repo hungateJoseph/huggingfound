@@ -115,7 +115,7 @@ function tunnels() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "28";
+const VERSION = "29";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -1461,17 +1461,30 @@ const server = http.createServer(async (req, res) => {
         }
         return fail(said || `Ollama replied HTTP ${upstream.statusCode}`);
       }
+      // Ollama's lines go through as they come. A stream that breaks off
+      // before its last line (Ollama killed, the model crashing) is said
+      // so, instead of ending in silence that looks like an empty answer.
+      let tail = "";
+      let whole = false;
       upstream.on("data", (chunk) => {
         res.write(chunk);
         touchActivity();
+        tail = (tail + String(chunk)).slice(-4096);
       });
-      await new Promise((resolve) => {
-        upstream.on("end", resolve);
-        upstream.on("error", resolve);
-        upstream.on("close", resolve);
+      const broke = await new Promise((resolve) => {
+        upstream.on("end", () => {
+          whole = true;
+          resolve("");
+        });
+        upstream.on("error", (err) => resolve(err?.message || "the connection broke"));
+        upstream.on("close", () => resolve(whole ? "" : "the connection closed"));
       });
       clearInterval(heartbeat);
-      res.end();
+      if (!res.writableEnded) {
+        if (gone.signal.aborted) res.end();
+        else if (broke || !/"done"\s*:\s*true/.test(tail.trim().split("\n").pop())) res.end(`${JSON.stringify({ error: `Ollama's reply ended early (${broke || "no last line"}). If this keeps happening, stop and start the machine from the bar.` })}\n`);
+        else res.end();
+      }
       return;
     }
     if (req.method === "POST" && url.pathname === "/jobs") {

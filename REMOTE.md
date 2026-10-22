@@ -382,6 +382,15 @@ minutes.
   still thinks its whole budget away is asked again at once to answer
   from its notes with thinking off; a reply
   stopped at the cap says so.
+- Later the same day the same question (a 9.2 MB .exe, the Q RTX 6000)
+  ended with "Thought it through, about 6,575 words" and no answer and no
+  note: the thinking closed under the new cap, so Ollama's end was not
+  "length" and the second ask never ran. Now any reply that has thinking
+  and no words gets the second ask, whether Ollama said stop, length, or
+  the stream ended without a last line; an empty reply always carries a
+  note saying which it was. The agent (29) ends a chat whose Ollama
+  stream breaks off before a `"done":true` line with an error line of
+  its own ("Ollama's reply ended early") instead of a silent close.
 - No first word in 30 s: the row says the machine is likely busy with an
   earlier reply and offers Free the machine, the agent's new
   `POST /ollama/restart` (image 23; older machines are told to Stop and

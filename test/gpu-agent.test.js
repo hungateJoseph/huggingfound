@@ -49,7 +49,7 @@ before(async () => {
   fs.chmodSync(fake, 0o755);
   // Ollama is played by a script answering its version on a port of its own.
   // Answers its version, and echoes a chat's body back as two lines, as Ollama streams.
-  fs.writeFileSync(fakeOllama, `#!${process.execPath}\nrequire("node:http").createServer((q, s) => { if (q.method !== "POST") return s.end(JSON.stringify({ version: "fake" })); let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { if (/make-it-fail/.test(b)) { s.statusCode = 500; return s.end(JSON.stringify({ error: "model requires more system memory (40.0 GiB) than is available (20.0 GiB)" })); } s.setHeader("Content-Type", "application/x-ndjson"); s.write(JSON.stringify({ message: { role: "assistant", content: "echo" }, got: JSON.parse(b) }) + "\\n"); s.end(JSON.stringify({ done: true }) + "\\n"); }); }).listen(${ollamaPort}, "127.0.0.1");\n`);
+  fs.writeFileSync(fakeOllama, `#!${process.execPath}\nrequire("node:http").createServer((q, s) => { if (q.method !== "POST") return s.end(JSON.stringify({ version: "fake" })); let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { if (/make-it-fail/.test(b)) { s.statusCode = 500; return s.end(JSON.stringify({ error: "model requires more system memory (40.0 GiB) than is available (20.0 GiB)" })); } if (/cut-me-off/.test(b)) { s.setHeader("Content-Type", "application/x-ndjson"); s.write(JSON.stringify({ message: { role: "assistant", content: "", thinking: "hmm" } }) + "\\n"); return setTimeout(() => s.destroy(), 50); } s.setHeader("Content-Type", "application/x-ndjson"); s.write(JSON.stringify({ message: { role: "assistant", content: "echo" }, got: JSON.parse(b) }) + "\\n"); s.end(JSON.stringify({ done: true }) + "\\n"); }); }).listen(${ollamaPort}, "127.0.0.1");\n`);
   fs.chmodSync(fakeOllama, 0o755);
   // A half-written part from a download cut off before the restart.
   fs.mkdirSync(path.join(modelsDir, "x", "y", "unet"), { recursive: true });
@@ -117,7 +117,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
   delete h.diskFreeGb;
   delete h.diskTotalGb;
   delete h.diskUsedGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "28", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, fp8: null, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "29", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, fp8: null, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
   // On Vast.ai the Cloudflare tunnels' addresses are read from their logs
   // and said on /health: the latest each, since a dropped tunnel comes back
   // with a new one.
@@ -584,16 +584,16 @@ test("removing a model unloads it and frees the disk", async () => {
 
 test("the machine reports on itself: what it runs, holds, has loaded and how its failures went, with a journal on its disk", async () => {
   const d = await (await get("/diagnostics")).json();
-  assert.equal(d.version, "28");
+  assert.equal(d.version, "29");
   assert.ok(d.agentUptimeSeconds >= 0);
   assert.deepEqual([d.env.HF_DISK_GB, typeof d.disk.totalGb, Array.isArray(d.models), Array.isArray(d.failures), typeof d.journal], ["50", "number", true, true, "string"]);
-  assert.match(d.journal, /agent 28 started: disk 50 GB/);
+  assert.match(d.journal, /agent 29 started: disk 50 GB/);
   assert.match(d.journal, /job .* done|failed/, "jobs from the tests before are in it");
   assert.ok(d.failures.length > 0, "the failed jobs of the tests before are remembered");
   for (const k of ["at", "error", "jobId", "kind", "trace", "what"]) assert.ok(k in d.failures[0], `a failure carries ${k}`);
   assert.equal(typeof d.ollamaLog, "string", "Ollama's log is in the report");
   const text = await (await get("/journal?lines=50")).text();
-  assert.match(text, /agent 28 started/);
+  assert.match(text, /agent 29 started/);
   assert.ok(fs.existsSync(path.join(modelsDir, "..", "journal.log")), "the journal lives on the disk beside the models");
 });
 
@@ -614,6 +614,10 @@ test("a chat model held up by an earlier reply is freed: Ollama is started afres
   const refused = await post("/chat", { b64: Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: "make-it-fail" }] })).toString("base64") });
   assert.equal(refused.status, 200);
   assert.deepEqual((await refused.text()).trim().split("\n").map((l) => JSON.parse(l)).at(-1), { error: "model requires more system memory (40.0 GiB) than is available (20.0 GiB)" });
+  // A reply that breaks off before its last line is said so, not left looking like an empty answer.
+  const cut = (await (await post("/chat", { b64: Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: "cut-me-off" }] })).toString("base64") })).text()).trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(cut.at(-2).message.thinking, "hmm");
+  assert.match(cut.at(-1).error, /^Ollama's reply ended early \(/);
   assert.equal((await post("/chat", { b64: "not base64 json" })).status, 400);
   assert.match(await (await get("/journal?lines=20")).text(), /ollama restarted from the page \(answering after \d+ s\)/);
   // Without the site's secret, nothing is restarted.

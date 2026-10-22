@@ -2175,22 +2175,32 @@ function renderChat(box, modelName) {
         return finished;
       };
       done = await run(body);
-      // Thought for the whole limit without a word of answer: asked again
-      // at once to answer from its notes, with thinking off, so the work
-      // is not lost; the thinking stays folded above the answer.
-      let fromNotes = false;
-      if (done?.done_reason === "length" && !reply.trim() && thinking.trim()) {
-        fromNotes = true;
-        meter.note("It thought for the whole limit; asking it to answer from its notes");
+      // Thinking, and then no answer: the budget spent on it, the model
+      // closing its thinking and stopping, or the stream ending without
+      // a last line. Asked again at once to answer from its notes, with
+      // thinking off, so the work is not lost; the thinking stays folded
+      // above the answer.
+      const silence = (d) => (d?.done_reason === "length" ? "length" : d ? "stop" : "cut");
+      const first = silence(done);
+      let fromNotes = "";
+      if (!reply.trim() && thinking.trim()) {
+        fromNotes = first;
+        meter.note(first === "length" ? "It thought for the whole limit; asking it to answer from its notes" : "It thought but gave no answer; asking it to answer from its notes");
         const notes = thinking.trim().split(/\s+/).slice(-3000).join(" ");
         done = await run({ ...body, think: false, messages: [...sent, { role: "assistant", content: `My notes so far, before answering:\n${notes}` }, { role: "user", content: "Stop thinking and answer now, directly and completely, from your notes above. Where something is unknown, say what you would check next." }] });
         meter.note("");
       }
       const said = { role: "assistant", content: reply, ...(thinking ? { thinking } : {}) };
-      // Stopped at the cap: said, with the way on.
+      // Stopped at the cap, or with nothing said: said, with the way on.
       const cap = body.options?.num_predict ?? "";
-      if (done?.done_reason === "length") said.note = reply ? `It stopped at the length limit of ${cap || "the model's"} tokens; ask it to go on.` : fromNotes ? `It thought for the whole length limit (${cap} tokens), was asked to answer from its notes with thinking off, and ran out again. Ask at Quick, or narrow the question.` : `It thought for the whole length limit (${cap} tokens) without starting the answer. Ask again at Quick, which skips the thinking, or narrow the question.`;
-      else if (fromNotes) said.note = `It thought for the whole length limit (${cap} tokens) without starting the answer, so it was asked again to answer from its notes, with thinking off.`;
+      const thought = { length: `It thought for the whole length limit (${cap} tokens) without starting the answer`, stop: `It finished thinking (about ${thinking.trim().split(/\s+/).length.toLocaleString()} words) and stopped without an answer`, cut: "Its reply ended during the thinking, before any answer" }[fromNotes];
+      if (reply.trim()) {
+        if (done?.done_reason === "length") said.note = `It stopped at the length limit of ${cap || "the model's"} tokens; ask it to go on.`;
+        else if (fromNotes) said.note = `${thought}, so it was asked again to answer from its notes, with thinking off.`;
+      } else if (fromNotes) said.note = `${thought}, was asked to answer from its notes with thinking off, and ${silence(done) === "length" ? "ran out again" : silence(done) === "cut" ? "its reply ended again" : "still said nothing"}. Ask at Quick, or narrow the question.`;
+      else if (!done) said.note = thinking.trim() ? "Its reply ended during the thinking, before any answer. Ask again." : "The reply ended before the model said anything. Ask again; if it happens twice, stop and start the machine from the bar.";
+      else if (done.done_reason === "length") said.note = `It reached the length limit (${cap} tokens) without saying anything. Ask at Quick, or narrow the question.`;
+      else said.note = "The model ended its turn without saying anything. Ask again, or ask at Quick.";
       messages.push(said);
       saveChat(modelName, chat);
       meter.finish(done?.eval_count);
