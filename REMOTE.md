@@ -376,7 +376,11 @@ minutes.
   and a share of the expected length, learned per model and effort in this
   browser (`chatTokens:<model>:<effort>`, first guesses 350, 2500, 6000);
   Stop ends the reply.
-- Caps: Standard 8192 tokens, Thorough 16384 (Quick 400 as before); a reply
+- Caps: Standard 8192 tokens, Thorough 16384 (Quick 400 as before), tripled
+  on 2026-10-21 to 24576, 49152 and 1200 after a model spent all of 8192
+  thinking over a 16,000-token digest and never answered; a model that
+  still thinks its whole budget away is asked again at once to answer
+  from its notes with thinking off; a reply
   stopped at the cap says so.
 - No first word in 30 s: the row says the machine is likely busy with an
   earlier reply and offers Free the machine, the agent's new

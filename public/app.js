@@ -1845,9 +1845,9 @@ function nearBottom(el) {
 // models spend more steps; speech models search wider. The choice is kept
 // per kind in this browser.
 const CHAT_EFFORTS = {
-  quick: { label: "Quick", hint: "no thinking, short answer", think: false, options: { num_predict: 400 } },
-  standard: { label: "Standard", hint: "the model's defaults", cap: 8192 },
-  thorough: { label: "Thorough", hint: "thinks first, checks its work; slower and better", think: true, cap: 16384, system: "Take your time. Think the problem through step by step, consider what could go wrong, and check your work before you answer. Be thorough and precise." },
+  quick: { label: "Quick", hint: "no thinking, short answer", think: false, options: { num_predict: 1200 } },
+  standard: { label: "Standard", hint: "the model's defaults", cap: 24576 },
+  thorough: { label: "Thorough", hint: "thinks first, checks its work; slower and better", think: true, cap: 49152, system: "Take your time. Think the problem through step by step, consider what could go wrong, and check your work before you answer. Be thorough and precise." },
 };
 const OTHER_EFFORTS = {
   quick: { label: "Quick", hint: "fastest" },
@@ -2126,52 +2126,71 @@ function renderChat(box, modelName) {
       // the window is set to hold it all, and the answer after it.
       const room = contextFor(sent, body.options?.num_predict ?? 2048);
       if (room) body.options = { ...(body.options ?? {}), num_ctx: room };
-      let res = await chatRequest(body, ctl.signal);
-      let why = res.ok ? "" : await res.text().catch(() => "");
-      // A model without a thinking pass refuses the knob; ask again without it.
-      if (!res.ok && "think" in body && /think/i.test(why)) {
-        delete body.think;
-        res = await chatRequest(body, ctl.signal);
-        why = res.ok ? "" : await res.text().catch(() => "");
-      }
-      if (!res.ok) {
-        let explained = "";
-        try {
-          explained = String(JSON.parse(why)?.error ?? "");
-        } catch {
-          explained = "";
+      // One request to the model, its words streamed into the bubble as they come.
+      const run = async (reqBody) => {
+        let res = await chatRequest(reqBody, ctl.signal);
+        let why = res.ok ? "" : await res.text().catch(() => "");
+        // A model without a thinking pass refuses the knob; ask again without it.
+        if (!res.ok && "think" in reqBody && /think/i.test(why)) {
+          delete reqBody.think;
+          res = await chatRequest(reqBody, ctl.signal);
+          why = res.ok ? "" : await res.text().catch(() => "");
         }
-        throw new Error(res.status === 403 && (chatDirect() || chatViaAgent()) ? refusedByMachine(why, messages.flatMap((m) => m.files ?? [])) : explained || `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
-      }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { value, done: end } = await reader.read();
-        if (end) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop();
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const j = JSON.parse(line);
-          if (j.error) throw new Error(plainOllamaError(j.error));
-          // The model's thinking comes apart from its answer: shown as it
-          // comes, folded, so a long think is seen to be going on.
-          const th = j.message?.thinking ?? "";
-          const piece = j.message?.content ?? "";
-          if (th) thinking += th;
-          if (piece) reply += piece;
-          if (th || piece) meter.token(piece ? "answer" : "thinking");
-          if (j.done) done = j;
-          chat.reply = reply;
-          chat.thinking = thinking;
-          paintSoon(reply, thinking);
+        if (!res.ok) {
+          let explained = "";
+          try {
+            explained = String(JSON.parse(why)?.error ?? "");
+          } catch {
+            explained = "";
+          }
+          throw new Error(res.status === 403 && (chatDirect() || chatViaAgent()) ? refusedByMachine(why, messages.flatMap((m) => m.files ?? [])) : explained || `Ollama replied HTTP ${res.status}. Is it running and is the model downloaded?`);
         }
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        let finished = null;
+        for (;;) {
+          const { value, done: end } = await reader.read();
+          if (end) break;
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const j = JSON.parse(line);
+            if (j.error) throw new Error(plainOllamaError(j.error));
+            // The model's thinking comes apart from its answer: shown as it
+            // comes, folded, so a long think is seen to be going on.
+            const th = j.message?.thinking ?? "";
+            const piece = j.message?.content ?? "";
+            if (th) thinking += th;
+            if (piece) reply += piece;
+            if (th || piece) meter.token(piece ? "answer" : "thinking");
+            if (j.done) finished = j;
+            chat.reply = reply;
+            chat.thinking = thinking;
+            paintSoon(reply, thinking);
+          }
+        }
+        return finished;
+      };
+      done = await run(body);
+      // Thought for the whole limit without a word of answer: asked again
+      // at once to answer from its notes, with thinking off, so the work
+      // is not lost; the thinking stays folded above the answer.
+      let fromNotes = false;
+      if (done?.done_reason === "length" && !reply.trim() && thinking.trim()) {
+        fromNotes = true;
+        meter.note("It thought for the whole limit; asking it to answer from its notes");
+        const notes = thinking.trim().split(/\s+/).slice(-3000).join(" ");
+        done = await run({ ...body, think: false, messages: [...sent, { role: "assistant", content: `My notes so far, before answering:\n${notes}` }, { role: "user", content: "Stop thinking and answer now, directly and completely, from your notes above. Where something is unknown, say what you would check next." }] });
+        meter.note("");
       }
       const said = { role: "assistant", content: reply, ...(thinking ? { thinking } : {}) };
       // Stopped at the cap: said, with the way on.
-      if (done?.done_reason === "length") said.note = reply ? `It stopped at the length limit of ${body.options?.num_predict ?? "the model's"} tokens; ask it to go on.` : `It thought for the whole length limit (${body.options?.num_predict ?? ""} tokens) without starting the answer. Ask again at Quick, which skips the thinking, or narrow the question.`;
+      const cap = body.options?.num_predict ?? "";
+      if (done?.done_reason === "length") said.note = reply ? `It stopped at the length limit of ${cap || "the model's"} tokens; ask it to go on.` : fromNotes ? `It thought for the whole length limit (${cap} tokens), was asked to answer from its notes with thinking off, and ran out again. Ask at Quick, or narrow the question.` : `It thought for the whole length limit (${cap} tokens) without starting the answer. Ask again at Quick, which skips the thinking, or narrow the question.`;
+      else if (fromNotes) said.note = `It thought for the whole length limit (${cap} tokens) without starting the answer, so it was asked again to answer from its notes, with thinking off.`;
       messages.push(said);
       saveChat(modelName, chat);
       meter.finish(done?.eval_count);

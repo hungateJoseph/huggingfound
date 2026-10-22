@@ -46,6 +46,19 @@ const fetchImpl = (url, init) => {
             await new Promise((r) => setTimeout(r, 60));
           }
         }
+        // A model that thinks for its whole budget and never answers; asked again from its notes, it answers.
+        if (/think forever/.test(asked.messages.at(-1)?.content ?? "") && asked.think !== false) {
+          for (let i = 0; i < 10; i++) controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: "", thinking: `step${i} ` } })}\n`));
+          controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ done: true, done_reason: "length", eval_count: 10, eval_duration: 1e9 })}\n`));
+          controller.close();
+          return;
+        }
+        if (/^Stop thinking and answer now/.test(asked.messages.at(-1)?.content ?? "")) {
+          controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: "answered from notes" } })}\n`));
+          controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ done: true, eval_count: 3, eval_duration: 1e9 })}\n`));
+          controller.close();
+          return;
+        }
         if (/HANDOFF TO CLAUDE/.test(asked.messages.at(-1)?.content ?? "")) {
           const answer = "I can do the board and the tiles; the mine odds are hard for me, so I leave them to Claude.\n```js\nfunction mineOdds(board) {\n  // HANDOFF TO CLAUDE: mineOdds\n  // Returns, for each hidden cell, the chance it holds a mine.\n}\nconsole.log(mineOdds([[0]]));\n```";
           for (const piece of answer.match(/[\s\S]{1,20}/g)) controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { role: "assistant", content: piece } })}\n`));
@@ -641,7 +654,7 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.waitForFunction(() => /^Thinking · \d+ tokens/.test(document.querySelector("#chat-progress .progress-text")?.textContent ?? ""));
   await page.waitForFunction(() => /word3 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
   await page.waitForFunction(() => /^Writing the answer after 10 tokens of thinking · \d+ tokens.* · about \d+%.*\(a first guess; it learns this model's lengths\)$/.test(document.querySelector("#chat-progress .progress-text")?.textContent ?? ""));
-  assert.equal(chatBodies.at(-1).options.num_predict, 16384, "every reply has an end, so a model thinking in circles cannot hold the machine");
+  assert.equal(chatBodies.at(-1).options.num_predict, 49152, "every reply has an end, so a model thinking in circles cannot hold the machine");
   // Scroll up while the reply is still arriving; new words must not drag the view back down.
   await page.evaluate(() => (document.querySelector("#messages").scrollTop = 0));
   await page.waitForFunction(() => /word9 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
@@ -744,7 +757,7 @@ await step("a conversation survives re-renders, an outside click and closing the
   await page.fill("#chat-text", "a long one please");
   await page.click("#chat-send");
   await page.waitForFunction(() => /word3 /.test(document.querySelector("#chat-live")?.textContent ?? ""));
-  assert.equal(chatBodies.at(-1).options.num_predict, 8192, "Standard has an end too");
+  assert.equal(chatBodies.at(-1).options.num_predict, 24576, "Standard has an end too");
   await page.click("#chat-stop");
   await page.waitForFunction(() => !document.querySelector("#chat-send").disabled);
   assert.match(await page.locator("#messages .msg.assistant").last().innerText(), /word3 [\s\S]*Stopped\.$/);
@@ -866,6 +879,16 @@ await step("files go with a chat message: chosen as chips, sent under their name
   assert.equal(follow.at(-1).content, "and in one word?");
   assert.match(follow.at(-3).content, /^Files attached \(3\):/);
   assert.ok(chatBodies.at(-1).options.num_ctx >= 24576);
+  // A model that spends its whole budget thinking is asked again at once to answer from its notes, thinking off.
+  await page.fill("#chat-text", "think forever about this");
+  await page.click("#chat-send");
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
+  const again = chatBodies.at(-1);
+  assert.equal(again.think, false);
+  assert.match(again.messages.at(-1).content, /^Stop thinking and answer now, directly and completely, from your notes above/);
+  assert.match(again.messages.at(-2).content, /^My notes so far, before answering:\nstep0 step1 /);
+  assert.equal(again.messages.at(-3).content, "think forever about this");
+  assert.match(await page.locator("#messages .msg.assistant").last().innerText(), /Thought it through[\s\S]*answered from notes[\s\S]*It thought for the whole length limit \(24576 tokens\) without starting the answer, so it was asked again to answer from its notes, with thinking off\./);
   await page.click("#chat-clear");
   await page.waitForFunction(() => document.querySelectorAll("#messages .msg").length === 0);
   await page.keyboard.press("Escape");
