@@ -16,6 +16,7 @@ this protocol goes to stdout; libraries' own chatter goes to stderr.
 
 import base64
 import contextlib
+import functools
 import gc
 import inspect
 import io
@@ -1019,8 +1020,14 @@ def pass_skipping(pipe, threshold):
         # The hooks keep their state under a named context the denoising
         # loop is meant to open; this model's loop opens none, so every
         # forward is wrapped in one here. One pass a step, so one name.
+        # Wrapped so the real signature shows through: MiniMax-H3's
+        # denoise block reads `inspect.signature(transformer.forward)` to
+        # pick the layout fields it passes, and a bare (*args, **kwargs)
+        # wrapper hid them all ("forward() missing 5 required positional
+        # arguments: token_tags, position_ids, video_indices, ...").
         original_forward = denoiser.forward
 
+        @functools.wraps(original_forward)
         def forward_in_context(*args, **kwargs):
             with denoiser.cache_context("cond"):
                 return original_forward(*args, **kwargs)

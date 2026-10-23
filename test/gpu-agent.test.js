@@ -117,7 +117,7 @@ test("it answers health, and only the allowed origins may call it from a page", 
   delete h.diskFreeGb;
   delete h.diskTotalGb;
   delete h.diskUsedGb;
-  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "30", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, fp8: null, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
+  assert.deepEqual({ ...h, idleSeconds: 0 }, { ok: true, version: "31", sdOk: true, sdProblem: "", pyOk: true, pyProblem: "", gpu: "Fake A40", vramGb: 48, fp8: null, loaded: null, ready: false, loading: false, models: 0, busy: false, idleSeconds: 0, idleMinutes: 30, leaseUntil: null }, "both engines' startup checks passed; nothing is being worked on");
   // On Vast.ai the Cloudflare tunnels' addresses are read from their logs
   // and said on /health: the latest each, since a dropped tunnel comes back
   // with a new one.
@@ -584,16 +584,16 @@ test("removing a model unloads it and frees the disk", async () => {
 
 test("the machine reports on itself: what it runs, holds, has loaded and how its failures went, with a journal on its disk", async () => {
   const d = await (await get("/diagnostics")).json();
-  assert.equal(d.version, "30");
+  assert.equal(d.version, "31");
   assert.ok(d.agentUptimeSeconds >= 0);
   assert.deepEqual([d.env.HF_DISK_GB, typeof d.disk.totalGb, Array.isArray(d.models), Array.isArray(d.failures), typeof d.journal], ["50", "number", true, true, "string"]);
-  assert.match(d.journal, /agent 30 started: disk 50 GB/);
+  assert.match(d.journal, /agent 31 started: disk 50 GB/);
   assert.match(d.journal, /job .* done|failed/, "jobs from the tests before are in it");
   assert.ok(d.failures.length > 0, "the failed jobs of the tests before are remembered");
   for (const k of ["at", "error", "jobId", "kind", "trace", "what"]) assert.ok(k in d.failures[0], `a failure carries ${k}`);
   assert.equal(typeof d.ollamaLog, "string", "Ollama's log is in the report");
   const text = await (await get("/journal?lines=50")).text();
-  assert.match(text, /agent 30 started/);
+  assert.match(text, /agent 31 started/);
   assert.ok(fs.existsSync(path.join(modelsDir, "..", "journal.log")), "the journal lives on the disk beside the models");
 });
 

@@ -8,6 +8,7 @@ test/comfy-minimax.test.js when HF_TEST_PYTHON names a Python that has
 them.
 """
 
+import inspect
 import os
 import sys
 
@@ -38,6 +39,10 @@ def run(model, steps, cache=None):
     computed = 0
     torch.manual_seed(3)
     with worker.pass_skipping(Pipe(model), cache) as skipping:
+        # The wrapped forward keeps the model's signature: the denoise
+        # block picks the layout fields it passes from it.
+        if skipping is not None:
+            assert "token_tags" in inspect.signature(model.forward).parameters, "the pass-skipping wrapper hides the forward's parameters"
         noise = torch.randn(1, 4, 16) * 0.05
         outs = []
         for i in range(steps):

@@ -716,6 +716,20 @@ and "peft none": the agent's startup check kept only `ok`, `gpu` and
 `/health`; image 30 keeps every field. AGENT_VERSION is 30, so machines
 on 29 and before are told to be replaced.
 
+Next clip on image 30, fp8 off, a long scene: every shot failed with
+`TypeError: MiniMaxH3Transformer3DModel.forward() missing 5 required
+positional arguments: 'token_tags', 'position_ids', 'video_indices',
+'audio_indices', and 'text_indices'`, the call going through the
+worker's `forward_in_context` (pass skipping), accelerate's offload hook
+and diffusers' peft wrapper. diffusers 0.41's MiniMax-H3 denoise block
+builds its layout kwargs from `inspect.signature(transformer.forward)`,
+and the pass-skipping wrapper, a bare `(*args, **kwargs)`, hid every
+parameter, so those five were never passed. Image 31 wraps it with
+`functools.wraps(original_forward)`, which `inspect.signature` follows
+to the real forward (test/minimax_fast_check.py asserts it). On image
+30 and before, turn "Skip passes that barely change" off for MiniMax-H3
+or replace the machine. AGENT_VERSION is 31.
+
 Compiled blocks. `want_compiled(pipe, on)` gives each block of
 `transformer_blocks` a `torch.compile`d forward of its own (and takes
 them off again); as the blocks share one code, the compiler does the
