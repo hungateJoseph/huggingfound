@@ -233,7 +233,7 @@ await step("the page opens on a single search box", async () => {
   // The examples are the kinds of work a team would own up to.
   assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["coding help", "summarize documents", "transcribe meetings", "product photos", "video clips", "math and reasoning", "creative writing"]);
   // Between the search and the flowcharts: what paid assistants cost their makers, each figure with its article.
-  assert.equal(await page.locator("#cost-title").innerText(), "The bill behind the chat window");
+  assert.equal(await page.locator("#cost-title").innerText(), "AI tokens won't be cheap forever. Explore open-source models today");
   assert.deepEqual(await page.$$eval("#cost .cost-figure", (els) => els.map((e) => e.textContent)), ["$115 billion", "$8.7 billion", "$14 billion", "$9 billion"]);
   assert.deepEqual(await page.$$eval("#cost .cost-card a", (els) => els.map((e) => [e.target, e.rel, /^https:\/\//.test(e.href)])), Array(4).fill(["_blank", "noopener", true]), "every figure links to its article");
   assert.match(await page.locator("#cost .cost-note").innerText(), /it will be the user[\s\S]*The Boston Globe, April 2026[\s\S]*the only bill is for the computer or the rented GPU/);
@@ -1347,9 +1347,23 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 0);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false, "no Sign in button until Google is set up; guests need none");
   assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
+  // Unknown to the site, the visitor sees no adult or video models and no LoRAs: not in the examples, the search, Browse or a model window.
+  assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), true, "no video example for a visitor");
+  assert.match(await visitor.locator("#home-hint").innerText(), /Video models and LoRAs open once you sign in or enter an Anthropic API key as a guest\./);
+  await visitor.fill("#trait", "porn roleplay writing");
+  await visitor.click("#trait-go");
+  await visitor.waitForSelector("#found .model");
+  assert.equal(await visitor.locator("#found .pill.adult").count(), 0, "no 18+ result for a visitor");
+  assert.equal(await visitor.locator("#found .model", { hasText: "Cydonia" }).count(), 0);
+  const asVisitor = await (await visitor.request.get(`${hostedBase}/api/find?q=video+clips`)).json();
+  assert.ok(asVisitor.models.every((m) => !/Wan|LTX|video/i.test(`${m.name} ${m.pipeline ?? ""}`) && !m.adult), "a search for clips finds no video model");
+  assert.equal((await visitor.request.get(`${hostedBase}/api/model?id=Wan-AI/Wan2.2-TI2V-5B-Diffusers`)).status(), 403);
+  assert.equal((await visitor.request.get(`${hostedBase}/api/loras?id=Wan-AI/Wan2.2-TI2V-5B-Diffusers`)).status(), 403);
   await visitor.click("#nav-browse");
   await visitor.click(".tab[data-tab=chat]");
-  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
+  assert.equal(await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).count(), 0, "the adult chat model is not in Browse either");
+  assert.equal(await visitor.locator("#models .pill.adult").count(), 0);
+  await visitor.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector(".rent-ask");
@@ -1362,6 +1376,18 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
 });
 
 await step("hosted: a guest enters a key in the model window, rents, and sees when the keys expire", async () => {
+  // An Anthropic key makes the visitor a guest with the whole catalogue: the adult model and the video example are back.
+  await openSettings(visitor);
+  await visitor.waitForSelector("#settings:not([hidden])");
+  await visitor.fill("#claude-key", "sk-ant-api03-guestbrowserkey0123456789");
+  await visitor.click("#save-claude");
+  await visitor.waitForFunction(() => /You are a guest/.test(document.querySelector("#account-line")?.textContent ?? ""));
+  await visitor.keyboard.press("Escape");
+  await visitor.waitForSelector("#settings", { state: "hidden" });
+  assert.equal((await (await visitor.request.get(`${hostedBase}/api/state`)).json()).access.full, true, "a guest with an Anthropic key");
+  await visitor.waitForFunction(() => document.querySelector("#models .model .name")?.textContent);
+  assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), false, "the video example is back");
+  assert.equal(await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).count(), 1, "and the adult model, with its mark");
   await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
@@ -1395,6 +1421,8 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
   await visitor.reload();
   await visitor.waitForSelector("#account:not([hidden])");
   assert.match(await visitor.locator("#account").innerText(), /Ana/);
+  assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), false, "signed in: video models are on show");
+  assert.doesNotMatch(await visitor.locator("#home-hint").innerText(), /Video models and LoRAs open/);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false);
   assert.equal(await visitor.locator("#delete-account").innerText(), "Delete my account");
   await openSettings(visitor);

@@ -33,9 +33,12 @@ async function check(res) {
 
 async function load() {
   const s = await api.get("/api/state");
-  Object.assign(state, { machine: s.machine, categories: s.categories, runners: s.runners, picks: s.picks, hosted: Boolean(s.hosted), refresh: s.refresh, user: s.user, auth: s.auth });
+  Object.assign(state, { machine: s.machine, categories: s.categories, runners: s.runners, picks: s.picks, hosted: Boolean(s.hosted), refresh: s.refresh, user: s.user, auth: s.auth, access: s.access });
   document.body.dataset.hosted = s.hosted ? "1" : "";
   state.claudeHosted = s.claudeHosted;
+  // A visitor the hosted site does not know is shown no video models: the example goes too.
+  const videoExample = document.querySelector('#examples [data-example="video clips"]');
+  if (videoExample) videoExample.hidden = !fullAccess();
   if (s.hosted) renderHostedCopy();
   if (s.hosted && !state.openChecker) setupChecker();
   renderAccount();
@@ -293,6 +296,7 @@ function renderHomeHint() {
   const parts = [];
   if (!state.scanAt && !state.hosted) parts.push("No scan yet, so results come from Hugging Face's own search and the curated picks.");
   if (!v?.count && !state.hosted) parts.push("Gather what people say (in Browse) to rank by reviews.");
+  if (state.hosted && !fullAccess()) parts.push("Video models and LoRAs open once you sign in or enter an Anthropic API key as a guest.");
   $("#home-hint").textContent = parts.join(" ");
   $("#home-hint").hidden = !parts.length;
 }
@@ -2651,6 +2655,13 @@ function chainText(first, chain) {
   return [`Made by ${first}`, ...chain.map((c) => `${c.verb ?? "revised"} by ${c.by}${c.request ? ` (${c.request})` : ""}`)].join(", ");
 }
 
+// Whether video models, LoRAs and adult models are on show: always on your
+// own copy; on the hosted site once signed in, or a guest with an Anthropic
+// key. The server decides and filters; the page only hides what it offers.
+function fullAccess() {
+  return !state.hosted || Boolean(state.access?.full);
+}
+
 // Whether Claude can be asked right now: a key in Settings, a saved key on
 // the account, or one typed into the hosted checker.
 function claudeAvailable() {
@@ -3154,7 +3165,7 @@ function renderImage(box, t) {
       <input type="text" id="image-negative" placeholder="anime, cartoon, drawing, blurry, extra fingers">
       <small class="muted">Models can't read "no" in the description, so list unwanted things here.</small>
     </label>
-    ${video && t.engine === "diffusers" && t.agent ? `<details class="loras" id="loras" ${loraSummary(t).on ? "open" : ""}><summary>LoRAs and fine-tunes <span class="muted small" id="loras-count">${esc(loraSummary(t).text)}</span></summary><div id="loras-body"></div></details>` : ""}
+    ${video && t.engine === "diffusers" && t.agent && fullAccess() ? `<details class="loras" id="loras" ${loraSummary(t).on ? "open" : ""}><summary>LoRAs and fine-tunes <span class="muted small" id="loras-count">${esc(loraSummary(t).text)}</span></summary><div id="loras-body"></div></details>` : ""}
     ${t.agent ? `<div class="queue" id="queue" hidden>
       <p class="muted small"><b>Queue.</b> Runs one after another by itself; each result is kept here.</p>
       <ol id="queue-list"></ol>

@@ -100,6 +100,44 @@ test("the server refreshes its own catalogue: a scan, then what people say", asy
   assert.ok(s.refresh.last);
 });
 
+test("a visitor the site does not know sees no adult or video models and no LoRAs; a guest's Anthropic key or signing in opens them", async () => {
+  const CYDONIA = "TheDrummer/Cydonia-24B-v2-GGUF";
+  const WAN = "Wan-AI/Wan2.2-TI2V-5B-Diffusers";
+  assert.equal((await (await get("/api/state")).json()).access.full, false);
+  const found = await (await get("/api/find?q=porn+roleplay+writing")).json();
+  assert.ok(found.models.length > 0, "the search still answers");
+  assert.ok(found.models.every((m) => !m.adult), "with no adult model in it");
+  assert.equal((await (await get("/api/search?q=cydonia")).json()).models.length, 0, "an adult model asked for by name is not there");
+  assert.equal((await (await get("/api/search?q=wan2.2")).json()).models.length, 0, "nor a video model");
+  const browse = (await (await get("/api/models")).json()).models;
+  assert.ok(browse.length > 5);
+  assert.ok(browse.every((m) => !m.adult && !/video/.test(m.pipeline ?? "")), "Browse has neither");
+  for (const [id, why] of [[CYDONIA, /for adults\. Sign in, or enter an Anthropic API key as a guest/], [WAN, /Video models and LoRAs open once you sign in, or enter an Anthropic API key as a guest/]]) {
+    const res = await get(`/api/model?id=${id}`);
+    assert.equal(res.status, 403, id);
+    assert.match((await res.json()).error, why);
+  }
+  for (const p of [`/api/loras?id=${WAN}`, `/api/loras/recipe?base=${WAN}&id=x/y`, `/api/loras/files?id=x/y`, "/api/loras/link?url=https://civitai.com/models/1"]) assert.equal((await get(p)).status, 403, p);
+  // A guest with only a RunPod key is still a visitor here; with an Anthropic key, not.
+  const runpodOnly = await post("/api/guest", { RUNPOD_API_KEY: "runpodkey0123456789abcdef" });
+  const cookie1 = runpodOnly.headers.get("set-cookie").split(";")[0];
+  assert.equal((await (await get("/api/state", { Cookie: cookie1 })).json()).access.full, false);
+  assert.equal((await (await get("/api/search?q=cydonia", { Cookie: cookie1 })).json()).models.length, 0);
+  const withClaude = await post("/api/guest", { ANTHROPIC_API_KEY: "sk-ant-api03-guestkey0123456789abcdef" });
+  const cookie2 = withClaude.headers.get("set-cookie").split(";")[0];
+  assert.equal((await (await get("/api/state", { Cookie: cookie2 })).json()).access.full, true);
+  assert.equal((await (await get("/api/search?q=cydonia", { Cookie: cookie2 })).json()).models.length, 1);
+  assert.equal((await (await get("/api/search?q=wan2.2", { Cookie: cookie2 })).json()).models.length, 2);
+  assert.equal((await get(`/api/model?id=${WAN}`, { Cookie: cookie2 })).status, 200);
+  assert.ok((await (await get("/api/models", { Cookie: cookie2 })).json()).models.some((m) => m.adult));
+  // Signed in: the same.
+  const user = server.accounts.findOrCreate({ email: "vis@example.com", name: "Vis" });
+  const signed = `hf_session=${server.accounts.issue(user.id)}`;
+  assert.equal((await (await get("/api/state", { Cookie: signed })).json()).access.full, true);
+  assert.equal((await get(`/api/model?id=${CYDONIA}`, { Cookie: signed })).status, 200);
+  assert.notEqual((await get(`/api/loras?id=${WAN}`, { Cookie: signed })).status, 403);
+});
+
 test("a model's plan lists the steps with commands, for a typical laptop, with nothing marked done", async () => {
   const { plan } = await (await get("/api/model?id=bartowski/Qwen2.5-Coder-7B-Instruct-GGUF")).json();
   assert.equal(plan.runnable, true);

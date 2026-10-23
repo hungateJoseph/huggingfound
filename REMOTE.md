@@ -569,6 +569,21 @@ floor. The guest's keys and machine last twelve hours after the last use,
 as before. The model window's "Renting a GPU takes a RunPod or Vast.ai
 API key" prompt takes either key or both; one is enough to rent.
 
+## Visitors see no adult or video models, and no LoRAs (2026-10-23)
+
+On the hosted site a visitor the server does not know (no session, or a
+guest whose keys hold no Anthropic key) gets a filtered catalogue:
+`fullAccess(ctx)` in src/server.js is true on your own copy, for anyone
+signed in, and for a guest with `ANTHROPIC_API_KEY` in their settings;
+otherwise `forVisitors(m)` (not `adult`, `kindOf(m) !== "video"`) is
+applied to `/api/find` (hub, scan and picks; Civitai hits marked nsfw
+dropped), `/api/search`, `/api/models` and `/api/voices/search`, and
+`/api/model` answers 403 for an adult or video model, as do the four
+`/api/loras` routes. `/api/state` carries `access.full`; the page hides
+the "video clips" example and the LoRA fold, and the home hint says
+what opens them. Nothing about adult content is advertised to a visitor.
+Page and server: a Render deploy, then a reload; no GPU change.
+
 ## HTTP 403 on a chat: the proxy's firewall, or Ollama's origins (2026-10-21, image 28)
 
 Seen on hardware (2026-10-21, a Quadro RTX 6000 on image 27): "Ollama
