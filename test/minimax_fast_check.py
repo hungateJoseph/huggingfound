@@ -59,6 +59,16 @@ def main():
     pipe = Pipe(model)
     plain, _ = run(model, 6)
 
+    # fp8 weights go only with the whole model on the card: a model whose
+    # parts move between the machine's memory and the card fails at the
+    # first move, so those modes are refused with the reason.
+    assert worker.fp8_allowed("gpu") == (True, "")
+    assert worker.fp8_allowed("two-cards")[0] is True
+    for mode in ("turns", "offload", "staged", "cpu"):
+        ok, why = worker.fp8_allowed(mode)
+        assert ok is False and "cannot move between" in why, (mode, why)
+    assert "take turns on the card" in worker.fp8_allowed("turns")[1]
+
     # Compiled: the same numbers, and each block's own forward is the compiled one.
     assert worker.want_compiled(pipe, True) is True
     assert worker.state["compiled"] is True

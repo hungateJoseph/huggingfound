@@ -695,6 +695,27 @@ worker says so plainly (test/minimax_fast_check.py). The speed, the
 memory and the LoRA path on fp8 blocks are untested on hardware; the
 page guesses 0.75 of the time.
 
+First run on hardware (2026-10-22, H200 NVL 141 GB, MiniMax-H3 134 GB,
+image 29): the model loaded in "turns" mode (its parts take turns on the
+card through diffusers' ComponentsManager), fp8 quantised 350 layers
+"(0.0 GB less in memory)" because the weights sat in the machine's
+memory at the time, and every clip then failed at the first move of a
+block onto the card: `RuntimeError: Attempted to set the storage of a
+tensor on device "cuda:0" to a storage on different device "cpu"` out of
+torchao's aliasing hook under `module.to(cuda)`. torchao's fp8 tensors
+cannot be moved between devices, so fp8 is for a model that stays on the
+card. Image 30: `fp8_allowed(mode)` in the worker refuses fp8 in the
+turns, offload, staged and cpu modes with the reason in the load note
+and the job's progress, and allows it in gpu, two-cards and multi-gpu;
+the two-card path is still unverified. A machine on image 29 with the
+fp8 switch on fails every clip of a model held in turns: turn the switch
+off, or replace the machine. The same report showed "Python ?, torch ?"
+and "peft none": the agent's startup check kept only `ok`, `gpu` and
+`vramGb` of what the worker's `--check` printed, so the versions (and
+`fp8`, which the page's switch goes by) never reached the report or
+`/health`; image 30 keeps every field. AGENT_VERSION is 30, so machines
+on 29 and before are told to be replaced.
+
 Compiled blocks. `want_compiled(pipe, on)` gives each block of
 `transformer_blocks` a `torch.compile`d forward of its own (and takes
 them off again); as the blocks share one code, the compiler does the
@@ -724,6 +745,28 @@ hold the conversation and the answer's room (up to 131072) whenever the
 usual window would not; the hosted proxy on the machine and `/api/chat`
 already pass `num_ctx` through. When the browser's store will not hold
 the files' text the conversation is saved with their names alone.
+
+## The shot preview as cards, with a line to Claude (2026-10-22)
+
+Claude's shots for a scene were on show before anything ran, with a
+LoRA row per shot, but a long clip at High went another way: the better
+description came as one text, then cut into equal pieces unseen. Now a
+long clip at High (`item.expand` with `pieces > 1`, Claude at hand, not
+a reply or a continuation) is turned into a scene of the same length on
+its way through `withExpansion`, so Claude's better description comes as
+the shots it would make, all shown together.
+
+The preview is cards: a head line (Shot N, the length, Remove), the
+words, the LoRAs folded behind one line that says what is on ("Add a
+LoRA" or "LoRAs: Motion 0.70"; the rows inside tick and set strength as
+before, with Fit the words to the LoRAs), and a line to Claude ("Ask
+Claude to change this shot"). Under the list, one line for all the shots.
+Claude's modes in src/review.js: `revise` (one shot: Description and
+Changed lines; the shot's ticked LoRAs go along with how their creators
+prompt for them) and `revise-all` (every shot back as Shot lines, then a
+Changed line; the rows are rebuilt and each row's LoRAs kept by place).
+What Claude changed is said in one line under the shot or the list. The
+rows go to the machine as they stand, unreviewed, as before.
 
 ## LoRAs and fine-tunes for video models (2026-10-20, image 25)
 

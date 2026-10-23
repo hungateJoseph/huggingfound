@@ -110,6 +110,15 @@ const reviewer = {
       onText(`Description: a woman in a bright gym doing jumping jacks in bare feet, feet apart as her hands meet overhead, then together as her arms come down; medium shot, camera still, whole body in frame.${input.image ? " She stays as she is in the picture." : ""}\nAvoid: socks, shoes, zooming in, closed eyes\nWhy: Spelt out the motion and moved what you did not want into the avoid list, since the model cannot read "not".`);
       return { declined: false, model: "claude-opus-5", note: "" };
     }
+    // One shot changed as asked, and all the shots changed as asked.
+    if (input.mode === "revise") {
+      onText(`Description: ${input.prompt.replace(/, sunny back garden$/, "")}, the arm in one slow arc, sunny back garden\nChanged: the arm's motion is spelt out.`);
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
+    if (input.mode === "revise-all") {
+      onText(`${input.shots.map((x) => `Shot ${x.index} (${x.seconds} s): ${x.text}, at dusk`).join("\n")}\nChanged: every shot is now at dusk.`);
+      return { declined: false, model: "claude-opus-5", note: "" };
+    }
     // A scene as shots, each with its length and its own words; one that
     // cannot be laid out comes back without Shot lines.
     if (input.mode === "scene") {
@@ -2024,6 +2033,15 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   // Changed by hand: one shot's words, another's length, a fourth added
   // then removed; nothing goes back to Claude.
   const sceneReviews = reviewed.length;
+  // A line to Claude under one shot: that shot's words change, and Claude says what changed in a line.
+  assert.deepEqual(await visitor.$$eval("#shots .shot-n", (els) => els.map((e) => e.textContent)), ["Shot 1", "Shot 2", "Shot 3"]);
+  await visitor.fill("#shots li:nth-child(2) .shot-ask-text", "the arm should swing slowly");
+  await visitor.press("#shots li:nth-child(2) .shot-ask-text", "Enter");
+  await visitor.waitForFunction(() => /^Claude: /.test(document.querySelector("#shots li:nth-child(2) .shot-said")?.textContent ?? ""));
+  assert.equal(await visitor.locator("#shots li:nth-child(2) .shot-said").innerText(), "Claude: the arm's motion is spelt out.");
+  assert.match(await visitor.inputValue("#shots li:nth-child(2) .shot-text"), /lands flat on his face on the trampoline, the arm in one slow arc, sunny back garden$/);
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).request, reviewed.at(-1).seconds, reviewed.at(-1).clip], ["revise", "the arm should swing slowly", 3, true]);
+  assert.equal(await visitor.inputValue("#shots li:nth-child(2) .shot-ask-text"), "", "the line is cleared once the change is made");
   await visitor.fill("#shots li:nth-child(2) .shot-text", "the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, bare feet, sunny back garden");
   await visitor.fill("#shots li:nth-child(3) .shot-seconds", "4");
   // Shorter than Claude wrote it for: the row says the end may be cut, and Claude can fit it.
@@ -2039,7 +2057,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.locator("#shots li:nth-child(4) .shot-remove").click();
   assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 11\.2 s in all at low quality/);
   await visitor.click("#scene-queue");
-  assert.equal(reviewed.length, sceneReviews + 1, "only the fit asked for went to Claude; the edited shots are not sent back");
+  assert.equal(reviewed.length, sceneReviews + 2, "only the change and the fit asked for went to Claude; the edited shots are not sent back");
   assert.equal(await visitor.locator("#suggest").isHidden(), true);
   assert.equal(await visitor.locator("#queue-list li").count(), 1);
   assert.match(await visitor.locator("#queue-list").innerText(), /a man on a trampoline[\s\S]*11\.2 s as a scene of 3 shots at low quality, 832 by 480, 20 steps/);
@@ -2141,7 +2159,7 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.waitForSelector("#gpu-runs li");
   // The machine's own report, to read or copy: what it runs, holds and how its failures went.
   await visitor.click("#gpu-report");
-  await visitor.waitForFunction(() => /Agent 29, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
+  await visitor.waitForFunction(() => /Agent 30, up 2 min/.test(document.querySelector("#gpu-report-out")?.textContent ?? ""), null, { timeout: 15000 });
   assert.match(await visitor.locator("#gpu-report-out").innerText(), /Python 3\.12\.3, torch 2\.6\.0 \(CUDA 12\.4\), diffusers 0\.41\.0, transformers 5\.5\.3, peft 0\.18\.0, av 15\.0\.0[\s\S]*Cards: Fake A40 48 GB[\s\S]*Disk: 41\.5 GB free of 50, 8\.5 GB in the machine's folders \(a quota; the size as the site said it\)[\s\S]*No failures on this machine\.[\s\S]*Journal \(tail\):/);
   assert.equal(await visitor.locator("#gpu-report-copy").isHidden(), false);
   assert.equal(await visitor.locator("#gpu-models li", { hasText: "stable-diffusion-xl-base-1.0" }).count(), 1, "one entry for a model still coming");
@@ -2307,10 +2325,13 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   await visitor.fill("#image-prompt", "a man skips rope, then drinks water, then eats an apple");
   await visitor.click("#scene-preview");
   await visitor.waitForSelector("#shots li");
-  assert.match(await visitor.locator("#suggest").innerText(), /Each shot ticks its own LoRAs at its own strength/);
+  assert.match(await visitor.locator("#suggest").innerText(), /Each shot can carry its own LoRAs\./);
   assert.equal(await visitor.locator("#shots li .shot-lora").count(), 3, "one LoRA row per shot");
   assert.deepEqual(await visitor.$$eval("#shots .shot-lora-on", (els) => els.map((e) => e.checked)), [false, false, false], "from the model's ticks: none");
+  // The LoRAs wait folded behind one line per shot, which says what is on.
+  assert.deepEqual(await visitor.$$eval("#shots .shot-loras summary", (els) => els.map((e) => [e.textContent, e.parentElement.open])), [["Add a LoRA", false], ["Add a LoRA", false], ["Add a LoRA", false]]);
   const shot1 = visitor.locator("#shots li").nth(0);
+  await shot1.locator(".shot-loras summary").click();
   await shot1.locator(".shot-lora-on").check();
   await shot1.locator(".shot-lora-strength").fill("0.6");
   await shot1.locator(".shot-fit-lora").click();
@@ -2318,6 +2339,18 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.match(await shot1.locator(".shot-text").inputValue(), /^mvmt, /, "the shot's words in the LoRA's shape, trigger word first");
   assert.equal(await shot1.locator(".shot-lora-strength").inputValue(), "0.7", "the strength the creator recommends");
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).loras.length, reviewed.at(-1).loras[0].strength, reviewed.at(-1).seconds], ["suggest", 1, 0.6, 4]);
+  assert.equal(await shot1.locator(".shot-loras summary").innerText(), "LoRAs: Wan-TI2V-Motion-LoRA 0.70");
+  // A line to Claude for all the shots: every row comes back changed, each keeping its LoRAs.
+  await visitor.fill("#shots-ask", "make it dusk");
+  await visitor.click("#shots-ask-go");
+  await visitor.waitForFunction(() => /^Claude: /.test(document.querySelector("#shots-ask-said")?.textContent ?? ""));
+  assert.equal(await visitor.locator("#shots-ask-said").innerText(), "Claude: every shot is now at dusk.");
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).request, reviewed.at(-1).shots.length, reviewed.at(-1).minSeconds, reviewed.at(-1).maxSeconds], ["revise-all", "make it dusk", 3, 1, 5]);
+  assert.deepEqual(await visitor.$$eval("#shots .shot-text", (els) => els.map((e) => /, at dusk$/.test(e.value))), [true, true, true]);
+  assert.match(await visitor.locator("#shots li").nth(0).locator(".shot-text").inputValue(), /^mvmt, /);
+  assert.deepEqual(await visitor.$$eval("#shots .shot-lora-on", (els) => els.map((e) => e.checked)), [true, false, false], "each row's LoRAs kept by place");
+  assert.equal(await visitor.locator("#shots li").nth(0).locator(".shot-lora-strength").inputValue(), "0.7");
+  assert.equal(await visitor.locator("#shots li").nth(0).locator(".shot-loras summary").innerText(), "LoRAs: Wan-TI2V-Motion-LoRA 0.70");
   const sceneJobs = rentedAgent.state.jobs.length;
   await visitor.click("#scene-go");
   for (let i = 0; i < 300 && rentedAgent.state.jobs.length < sceneJobs + 3; i++) await new Promise((r) => setTimeout(r, 100));
@@ -2325,6 +2358,27 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.deepEqual(shotJobs.map((j) => j.loras ?? null), [[{ repo: "motionlab/Wan-TI2V-Motion-LoRA", file: "wan_motion_v1.safetensors", scale: 0.7 }], null, null], "only the first shot carries the LoRA");
   assert.match(shotJobs[0].prompt, /^mvmt, /);
   await visitor.waitForFunction(() => !document.querySelector("#image-go")?.disabled && !document.querySelector("#scene-preview")?.disabled, null, { timeout: 60000 });
+  // A long clip at High: Claude's better description comes as the shots
+  // it would make, all shown first, not one text cut into equal pieces.
+  await pickKind(visitor, "long");
+  await visitor.fill("#video-seconds", "8");
+  await visitor.click("#video-level input[value=high]");
+  await visitor.fill("#image-prompt", "a man eats an apple, throws the core away, then sits down in a chair");
+  const heldBefore = await visitor.isChecked("#queue-hold");
+  await visitor.check("#queue-hold");
+  await visitor.click("#queue-add");
+  await visitor.waitForSelector("#shots li");
+  assert.equal(await visitor.locator("#expand-text").count(), 0, "no single expanded text");
+  assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).seconds, reviewed.at(-1).prompt], ["scene", 8, "a man eats an apple, throws the core away, then sits down in a chair"]);
+  assert.equal(await visitor.locator("#shots li").count(), 3);
+  assert.equal(await visitor.locator("#shots li .shot-ask-text").count(), 3, "a line to Claude under every shot");
+  await visitor.click("#shots-send");
+  assert.equal(await visitor.locator("#suggest").isHidden(), true);
+  assert.match(await visitor.locator("#queue-list").innerText(), /a man eats an apple[\s\S]*as a scene of 3 shots at high quality/);
+  await visitor.click("#queue-list .queue-remove");
+  assert.equal(await visitor.locator("#queue-list li").count(), 0);
+  if (!heldBefore) await visitor.uncheck("#queue-hold");
+  await visitor.click("#video-level input[value=medium]");
   await pickKind(visitor, "short");
   await visitor.click("#close-modal");
   rentedAgent.state.files = rentedAgent.state.files.filter((f) => f !== WAN_HERE);

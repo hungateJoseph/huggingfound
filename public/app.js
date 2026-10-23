@@ -3713,6 +3713,15 @@ function renderImage(box, t) {
   // change or to set aside. What is sent is what is in the box, as it
   // stands, with nobody reading it again.
   async function withExpansion(item) {
+    // A long clip at High: Claude's better description comes as the shots
+    // it would make, all shown together to read, change and send, instead
+    // of one text cut into equal pieces unseen.
+    if (item.expand && !item.scene && !item.expanded && item.pieces > 1 && canScene && !item.replyTo && !item.continues) {
+      item.scene = true;
+      item.sceneSeconds = Math.round((item.q.frames * item.pieces) / spec.fps);
+      item.shots = null;
+      item.expand = false;
+    }
     if (item.scene && !item.shots) return withScene(item);
     const el = box.querySelector("#suggest");
     if (!item.expand || item.expanded || !claudeAvailable() || !el) return [];
@@ -3850,15 +3859,17 @@ function renderImage(box, t) {
         });
         return out;
       };
-      const loraLine = shotLoraItems().length ? " Each shot ticks its own LoRAs at its own strength, starting from what is ticked for the model; a LoRA for one action can be on for that shot alone, and Claude can fit a shot's words to the LoRAs ticked for it." : "";
-      el.innerHTML = `<p class="muted small"><b>The scene as shots.</b> Each is made on its own, starting from the last frame of the one before, from the words in its row as they stand here, unreviewed. Change, add or remove shots; each runs ${spec.minSeconds} to ${spec.maxSeconds} seconds, and the one after a cut should repeat who and where, since the model sees only its own words and one frame.${loraLine}</p>${remark}
-        <ol class="shots" id="shots"></ol>
+      const loraLine = shotLoraItems().length ? " Each shot can carry its own LoRAs." : "";
+      el.innerHTML = `<p class="muted small"><b>Claude's shots.</b> Each is made on its own from its row (${spec.minSeconds} to ${spec.maxSeconds} s), then joined. Change the words or length, or ask Claude for edits.${loraLine}</p>${remark}
+        <ol class="shots shot-cards" id="shots"></ol>
         <p class="tools-row"><button class="ghost" id="shot-add">Add a shot</button></p>
         <p class="muted small" id="shots-total"></p>
+        ${claudeAvailable() ? `<div class="shots-ask"><input class="ask-text" id="shots-ask" placeholder="Ask Claude to change all the shots"><button class="ghost" id="shots-ask-go">Ask</button><span class="muted small ask-said" id="shots-ask-said"></span></div>` : ""}
         <p class="tools-row">${finals}</p>`;
       const list = el.querySelector("#shots");
       const read = () => [...list.querySelectorAll("li")].map((li) => ({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds)), text: li.querySelector(".shot-text").value.trim(), ...(shotLoraItems().length ? { loras: shotLorasOf(li) } : {}) })).filter((s) => s.text);
       const total = () => {
+        renumber();
         const shots = read();
         if (pending) pending.got = { ...pending.got, shots: [...list.querySelectorAll("li")].map((li) => ({ seconds: Number(li.querySelector(".shot-seconds").value) || spec.minSeconds, text: li.querySelector(".shot-text").value, written: Number(li.dataset.written) || 0, ...(shotLoraItems().length ? { loras: shotLorasOf(li) } : {}) })) };
         const secs = shots.reduce((a, s) => a + framesFor(s.seconds, spec) / spec.fps, 0);
@@ -3905,13 +3916,36 @@ function renderImage(box, t) {
           total();
         });
       };
+      // The shots numbered as they stand, and each card's LoRA line saying
+      // what is on for it, so a folded line still says what it holds.
+      const renumber = () => list.querySelectorAll("li").forEach((li, i) => {
+        li.querySelector(".shot-n").textContent = `Shot ${i + 1}`;
+        const sum = li.querySelector(".shot-loras summary");
+        if (sum) {
+          const on = Object.entries(shotLorasOf(li)).map(([key, scale]) => `${loraBook(t.repo).items[key]?.name ?? key} ${Number(scale).toFixed(2)}`);
+          sum.textContent = on.length ? `LoRAs: ${on.join(", ")}` : "Add a LoRA";
+        }
+      });
+      // The LoRAs ticked for a row, with how their creators prompt for them, for Claude.
+      const shotLoraMaterial = async (li) => {
+        const own = shotLorasOf(li);
+        if (!Object.keys(own).length) return null;
+        const all = await loraContext(t);
+        return Object.entries(own).map(([key, scale]) => {
+          const l = all.find((x) => x.key === key);
+          const item = loraBook(t.repo).items[key];
+          return l ? { ...l, strength: scale } : { key, name: item?.name ?? key, strength: scale, trigger: item?.trigger ?? [], tips: [], samples: [] };
+        });
+      };
+      const rowSeconds = (li) => Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds));
       const addRow = (shot) => {
         const li = document.createElement("li");
         if (shot.written || shot.text) li.dataset.written = String(shot.written || Math.min(spec.maxSeconds, Math.max(spec.minSeconds, shot.seconds)));
         const items = shotLoraItems();
         const chosen = shot.loras ?? loraBook(t.repo).on;
-        const loraRows = items.length ? `<div class="shot-loras small">${items.map(({ key, item }) => `<span class="shot-lora" data-key="${esc(key)}"><label class="check"><input type="checkbox" class="shot-lora-on" ${key in chosen ? "checked" : ""}> ${esc(item.name)}</label> <label class="lora-scale">at <input type="number" class="shot-lora-strength" min="0" max="1.5" step="0.05" value="${Number(chosen[key] ?? item.scale ?? 1)}"></label></span>`).join("")}${claudeAvailable() ? `<button class="ghost shot-fit-lora" title="Claude rewrites this shot's words in the shape its ticked LoRAs' creators prompt for, with their trigger words, and sets the strengths they recommend">Fit the words to the LoRAs</button>` : ""}<span class="shot-lora-note muted"></span></div>` : "";
-        li.innerHTML = `<label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><textarea class="shot-text" rows="2">${esc(shot.text)}</textarea><button class="ghost shot-remove" title="Remove this shot">Remove</button>${loraRows}`;
+        const loraRows = items.length ? `<details class="shot-loras small"><summary>Add a LoRA</summary><div class="shot-lora-rows">${items.map(({ key, item }) => `<span class="shot-lora" data-key="${esc(key)}"><label class="check"><input type="checkbox" class="shot-lora-on" ${key in chosen ? "checked" : ""}> ${esc(item.name)}</label> <label class="lora-scale">at <input type="number" class="shot-lora-strength" min="0" max="1.5" step="0.05" value="${Number(chosen[key] ?? item.scale ?? 1)}"></label></span>`).join("")}${claudeAvailable() ? `<button class="ghost shot-fit-lora" title="Claude rewrites this shot's words in the shape its ticked LoRAs' creators prompt for, with their trigger words, and sets the strengths they recommend">Fit the words to the LoRAs</button>` : ""}<span class="shot-lora-note muted"></span></div></details>` : "";
+        const askRow = claudeAvailable() ? `<div class="shot-ask"><input class="ask-text shot-ask-text" placeholder="Ask Claude to change this shot"><button class="ghost shot-ask-go">Ask</button></div><p class="shot-said muted small" hidden></p>` : "";
+        li.innerHTML = `<div class="shot-head"><span class="shot-n"></span><label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><button class="ghost shot-remove" title="Remove this shot">Remove</button></div><textarea class="shot-text" rows="3">${esc(shot.text)}</textarea>${loraRows}${askRow}`;
         li.querySelector(".shot-remove").addEventListener("click", () => {
           li.remove();
           total();
@@ -3922,6 +3956,38 @@ function renderImage(box, t) {
         });
         li.querySelector(".shot-text").addEventListener("input", total);
         li.querySelectorAll(".shot-lora-on, .shot-lora-strength").forEach((inp) => inp.addEventListener("input", total));
+        // A line to Claude for this shot alone: the change asked for is
+        // made in the row's words, and said back in one short line.
+        const askGo = li.querySelector(".shot-ask-go");
+        const ask = async () => {
+          const input = li.querySelector(".shot-ask-text");
+          const request = input.value.trim();
+          const said = li.querySelector(".shot-said");
+          if (!request) return;
+          askGo.disabled = true;
+          said.hidden = false;
+          said.textContent = "Claude is changing it";
+          const loras = await shotLoraMaterial(li);
+          const got = await claudeText({ kind: "prompt", mode: "revise", clip: true, model: t.repo, prompt: li.querySelector(".shot-text").value.trim(), request, seconds: rowSeconds(li), ...(loras ? { loras } : {}) });
+          askGo.disabled = false;
+          const description = (/^Description:\s*(.+)$/m.exec(got.text ?? "")?.[1] ?? "").trim();
+          if (!description) {
+            said.textContent = `No change: ${got.why || "Claude wrote no Description line"}.`;
+            return;
+          }
+          li.querySelector(".shot-text").value = description;
+          li.dataset.written = String(rowSeconds(li));
+          said.textContent = `Claude: ${(/^Changed:\s*(.+)$/m.exec(got.text)?.[1] ?? "").trim() || "changed as asked."}`;
+          input.value = "";
+          total();
+        };
+        askGo?.addEventListener("click", ask);
+        li.querySelector(".shot-ask-text")?.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") {
+            ev.preventDefault();
+            ask();
+          }
+        });
         // Claude fits this shot's words to the LoRAs ticked for it, the
         // way the suggest button does for a clip, and takes the strengths.
         li.querySelector(".shot-fit-lora")?.addEventListener("click", async (ev) => {
@@ -3934,13 +4000,8 @@ function renderImage(box, t) {
           }
           b.disabled = true;
           note.textContent = "Claude is reading how the LoRAs are prompted for";
-          const all = await loraContext(t);
-          const loras = Object.entries(own).map(([key, scale]) => {
-            const l = all.find((x) => x.key === key);
-            const item = loraBook(t.repo).items[key];
-            return l ? { ...l, strength: scale } : { key, name: item?.name ?? key, strength: scale, trigger: item?.trigger ?? [], tips: [], samples: [] };
-          });
-          const secs = Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds));
+          const loras = await shotLoraMaterial(li);
+          const secs = rowSeconds(li);
           const got = await claudeText({ kind: "prompt", mode: "suggest", clip: true, model: t.repo, prompt: li.querySelector(".shot-text").value.trim(), negative: $("#image-negative")?.value.trim() ?? "", seconds: secs, loras });
           b.disabled = false;
           const description = (/^Description:\s*(.+)$/m.exec(got.text ?? "")?.[1] ?? "").trim();
@@ -3966,6 +4027,39 @@ function renderImage(box, t) {
         addRow({ seconds: spec.minSeconds, text: "" });
         list.lastElementChild.querySelector(".shot-text").focus();
         total();
+      });
+      // A line to Claude for the whole scene: the shots come back changed
+      // where the request touches them, each row's LoRAs kept by place.
+      const askAll = async () => {
+        const input = el.querySelector("#shots-ask");
+        const said = el.querySelector("#shots-ask-said");
+        const go = el.querySelector("#shots-ask-go");
+        const request = input.value.trim();
+        const rows = [...list.querySelectorAll("li")];
+        const shots = rows.map((li, i) => ({ index: i + 1, seconds: rowSeconds(li), text: li.querySelector(".shot-text").value.trim() })).filter((x) => x.text);
+        if (!request || !shots.length) return;
+        go.disabled = true;
+        said.textContent = "Claude is changing the shots";
+        const got = await claudeText({ kind: "prompt", mode: "revise-all", clip: true, model: t.repo, request, shots, minSeconds: spec.minSeconds, maxSeconds: spec.maxSeconds });
+        go.disabled = false;
+        const revised = parseShots(got.text ?? "").shots;
+        if (!revised.length) {
+          said.textContent = `No change: ${got.why || "Claude wrote no Shot lines"}.`;
+          return;
+        }
+        const picks = rows.map((li) => (shotLoraItems().length ? shotLorasOf(li) : null));
+        list.innerHTML = "";
+        revised.forEach((x, i) => addRow({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, x.seconds)), text: x.text, ...(picks[i] ? { loras: picks[i] } : {}) }));
+        said.textContent = `Claude: ${(/^Changed:\s*(.+)$/m.exec(got.text)?.[1] ?? "").trim() || "changed as asked."}`;
+        input.value = "";
+        total();
+      };
+      el.querySelector("#shots-ask-go")?.addEventListener("click", askAll);
+      el.querySelector("#shots-ask")?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          askAll();
+        }
       });
       wire(() => {
         const shots = read();
@@ -6571,7 +6665,7 @@ function renderRental() {
       ${r.waitingForGpu ? `<div class="notice warn"><span>Waiting for the GPU on this machine's host to be free again: a stopped Vast.ai machine starts only on the host that holds its disk, and someone else has its card for now. It starts by itself once the card is free${r.podNote ? ` (Vast.ai: ${esc(r.podNote)})` : ""}.</span> <button class="ghost" id="rent-replace-wait">Replace the machine</button></div>` : ""}
       <p class="muted small">${esc(idle)} ${r.images === false ? "This machine runs chat models only: the full machine image was not available when it was rented. Delete it and rent again for image models once it is." : "Chat and image models are downloaded to it and run there; speech models stay on your computer."}${esc(trouble)}</p>
       ${(r.provider === "vast" ? state.vastKey : state.runpodKey) ? "" : `<div class="notice bad">The ${place} key is gone while this machine is rented: Stop and Delete need it. Enter the key of the account that rented it above. <button class="ghost" id="rent-key-focus">Enter the key</button> It still stops by itself after ${r.idleMinutes || 1440} minutes without use${r.maxSpend ? ` or at ${money(r.maxSpend)}` : ""}.</div>`}
-      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}${r.agentVersion < 20 ? ", clips from reference pictures on MiniMax-H3" : ""}${r.agentVersion < 21 ? ", a disk grown after the rent read at its new size" : ""}${r.agentVersion < 22 ? ", the disk's use counted once" : ""}${r.agentVersion < 23 ? ", freeing a chat model held up by an earlier reply" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
+      ${older ? `<div class="notice warn">This machine runs an older HuggingFound image (version ${r.agentVersion} of ${r.agentCurrent}). What was added since${r.agentVersion < 2 ? ", folder-layout models" : ""}${r.agentVersion < 3 ? ", the FLUX, Qwen-Image and video families" : ""}${r.agentVersion < 4 ? ", add-ons" : ""}${r.agentVersion < 9 ? ", MiniMax-H3 clips with sound" : ""}${r.agentVersion < 10 ? ", MiniMax-H3 on both cards of a two-card machine instead of swapping" : ""}${r.agentVersion < 11 ? ", fixes to one shot of a clip joined with the other shots kept in this browser" : ""}${r.agentVersion < 12 ? ", LTX-2.5 clips with sound" : ""}${r.agentVersion < 16 ? ", LTX-2.5 with its parts staged through the card and its memory accounted for" : ""}${r.agentVersion < 17 ? ", LoRAs on MiniMax-H3 such as the 360 orbit" : ""}${r.agentVersion < 18 ? ", a true reading of the disk's room" : ""}${r.agentVersion < 19 ? ", the library LoRAs are set with" : ""}${r.agentVersion < 20 ? ", clips from reference pictures on MiniMax-H3" : ""}${r.agentVersion < 21 ? ", a disk grown after the rent read at its new size" : ""}${r.agentVersion < 22 ? ", the disk's use counted once" : ""}${r.agentVersion < 23 ? ", freeing a chat model held up by an earlier reply" : ""}${r.agentVersion < 30 ? ", fp8 weights kept off a model that takes turns on the card (where every clip failed)" : ""}, needs a fresh machine. Chat and single-file image models still work on this one. <button class="primary" id="rent-replace-old">Replace the machine</button></div>` : ""}
       ${state.rentError ? `<div class="notice ${state.rentError.noGpu ? "warn" : "bad"}">${esc(state.rentError.message)}${state.rentError.retrying ? ` <b>Start is asked again every minute for ${Math.max(1, Math.ceil((startRetry.until - Date.now()) / 60e3))} more minutes${startRetry.tries ? ` (${startRetry.tries} so far)` : ""}; this can be left as it is.</b>` : state.rentError.noGpu && state.rentError.action === "start" ? " Start was asked again every minute for half an hour without luck." : ""}${state.rentError.noGpu ? ` <button class="primary" id="rent-replace">Replace the machine</button>${state.rentError.retrying ? `<button class="ghost" id="rent-stop-retry">Stop asking</button>` : ""}` : ""}</div>` : ""}
       <div class="actions">
         ${running ? `<button class="ghost" id="rent-stop">Stop</button>` : ""}

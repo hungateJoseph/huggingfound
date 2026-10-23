@@ -115,7 +115,7 @@ function tunnels() {
 const ADDONS_DIR = process.env.HF_ADDONS_DIR || path.join(MODELS_DIR, "..", "addons");
 const ORIGINS = (process.env.HF_ORIGINS || process.env.OLLAMA_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 const TOKEN = process.env.HF_AGENT_TOKEN || "";
-const VERSION = "29";
+const VERSION = "30";
 
 const REPO_RE = /^(?!\.)[\w.-]+\/(?!\.)[\w.-]+$/;
 const FILE_RE = /^(?!\.+$)[\w.+-]+$/;
@@ -197,6 +197,9 @@ function checkWorker() {
       pyCheck.problem = info.ok ? (info.cuda === false ? "torch sees no GPU" : "") : info.error;
       pyCheck.gpu = info.gpu ?? null;
       pyCheck.vramGb = info.vramGb ?? null;
+      // The rest of what the check found (Python, torch, CUDA, diffusers,
+      // the card's fp8 units) goes to the report and the page as it is.
+      for (const [k, v] of Object.entries(info)) if (!(k in pyCheck) || pyCheck[k] == null) pyCheck[k] = v;
     } catch {
       pyCheck.ok = false;
       pyCheck.problem = (err.trim().split("\n").pop() || `exit code ${code}`).slice(0, 300);

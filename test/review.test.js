@@ -155,6 +155,22 @@ test("a scene is laid out as shots within the model's range, cut at rest, each r
   assert.throws(() => buildRequest({ kind: "prompt", mode: "scene", prompt: " ", seconds: 10, minSeconds: 1, maxSeconds: 5 }), /happens in the scene/);
 });
 
+test("one shot, or the whole shot list, is changed as asked and the rest kept", () => {
+  const one = buildRequest({ kind: "prompt", mode: "revise", clip: true, model: "wan", prompt: "the man in the grey T-shirt tosses the apple core into the bin by the bench, camera still", request: "the arm should swing slowly, in one arc", seconds: 4 });
+  assert.match(one.system, /Make only the change asked for and keep everything else in the same words[\s\S]*Description: the whole revised description[\s\S]*Changed: what is different now/);
+  assert.match(one.messages[0].content, /^A shot of a scene for a video model \(wan\), 4 seconds long, reads:\n\n<description>\nthe man in the grey T-shirt tosses[\s\S]*<change>\nthe arm should swing slowly, in one arc\n<\/change>\n\nThe shot runs 4 seconds: describe at most 1 distinct action[\s\S]*Write the Description and Changed lines\.$/);
+  assert.equal(one.max_tokens, 3000);
+  const withLora = buildRequest({ kind: "prompt", mode: "revise", clip: true, prompt: "mvmt, the man skips rope", request: "faster", seconds: 4, loras: [{ name: "Motion", strength: 0.7, trigger: ["mvmt"], tips: ["start with mvmt"], samples: [] }] });
+  assert.match(withLora.messages[0].content, /The LoRAs on for this shot, each with how its creator prompts for it:/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "revise", prompt: "x", request: " " }), /Say what to change in the shot/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "revise", prompt: " ", request: "y" }), /no shot to change/);
+  const all = buildRequest({ kind: "prompt", mode: "revise-all", clip: true, model: "wan", request: "make it dusk throughout", minSeconds: 1, maxSeconds: 5, shots: [{ index: 1, seconds: 4, text: "a man eats an apple on a park bench" }, { index: 2, seconds: 3.5, text: "the man tosses the core into the bin" }] });
+  assert.match(all.system, /keep every other shot word for word[\s\S]*Shot 1 \(8 s\): the whole description of shot 1, changed or kept[\s\S]*Changed: what is different now/);
+  assert.match(all.messages[0].content, /^A scene for a video model \(wan\) is laid out as 2 shots, each made on its own\. The model makes 1 to 5 seconds in one go\.\n\n<shots>\nShot 1 \(4 s\): a man eats an apple on a park bench\nShot 2 \(3\.5 s\): the man tosses the core into the bin\n<\/shots>\n\nI want this changed:\n\n<change>\nmake it dusk throughout\n<\/change>\n\nReply with every shot of the revised scene as Shot lines, then the Changed line\.$/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "revise-all", request: "dusk", shots: [] }), /needs the shots/);
+  assert.throws(() => buildRequest({ kind: "prompt", mode: "revise-all", request: "", shots: [{ text: "a" }] }), /Say what to change in the shots/);
+});
+
 test("bad requests are refused before anything is sent", () => {
   assert.throws(() => buildRequest({ kind: "text", question: "q", answer: "  " }), ReviewError);
   assert.throws(() => buildRequest({ kind: "image", file: "notes.txt" }, { outputDir }), /not a picture/);

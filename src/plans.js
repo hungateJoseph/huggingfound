@@ -253,11 +253,11 @@ export function buildPlan({ model, files, machine, detected, hasToken, preferred
 // before a feature runs an older image. Each feature names the version it
 // needs, and a plan for an older machine says to replace it.
 export const AGENT_NEEDS = { "pull-image-folder": 2, "pull-image-repo": 3, "pull-addon": 4, "pull-lora": 19 };
-// The version a machine needs to be current. Image 24 only adds the
-// Cloudflare tunnels a Vast.ai machine opens (and a Vast.ai machine always
-// runs the newest image), so a version 23 machine at RunPod is not told
-// to be replaced for it.
-export const AGENT_VERSION = 23;
+// The version a machine needs to be current: the newest image whose
+// change a machine on an older one cannot do without (30: fp8 weights
+// kept off a model that takes turns on the card, where they failed every
+// clip; a chat stream that breaks off said so).
+export const AGENT_VERSION = 30;
 
 function staleMachine(model, gpu, kind, what) {
   const have = gpu.version ?? null;

@@ -141,6 +141,25 @@ Shot 2 (7 s): the next description
 
 If some part cannot be laid out, lay out the rest as shots all the same and add one last line starting with "Note:" saying in a few words what was left out. Plain text only; no heading, no markdown, no other comment.`;
 
+// One shot of a laid-out scene changed as the person asks, in place: the
+// change made, the rest of the words kept, said back in one short line.
+const REVISE_SYSTEM = `You change shot descriptions for open-source video models that people run on rented GPUs, as the person asks. The shot is one of several made separately by the same model, each from its own description and the last frame of the shot before, so the description stands on its own and names the subject, their clothes, the setting, the light and the camera. Make only the change asked for and keep everything else in the same words; where the change touches the subject, the place or the light, change those words wherever they come in the shot. Such models read plain, literal, concrete description, not instructions, "no" or "not": anything unwanted is left out, never forbidden. When LoRAs are on for the shot, keep their trigger words and the shape their creators prompt in.${PACING.replace("\n\n", " ")}
+
+Reply with exactly these lines and nothing else:
+
+Description: the whole revised description, one paragraph
+Changed: what is different now, in one short plain sentence`;
+
+// The whole shot list changed as the person asks: shots reworded, added,
+// cut or given another length, the untouched ones kept word for word.
+const REVISE_ALL_SYSTEM = `You change shot lists for open-source video models that people run on rented GPUs, as the person asks. Each shot is made separately by the same model from its own description and the last frame of the shot before, so every description stands on its own and repeats the subject, their clothes, the setting and the light in the same words; cuts fall at moments of rest. Make the change asked for across the shots it touches and keep every other shot word for word; add, cut or relength shots only when the change needs it, each within the length range given, and keep the lengths adding up to about the same total. Each shot holds only what happens in its own length at a natural pace, about one distinct action every three seconds. Such models read plain, literal description, not instructions, "no" or "not".
+
+Reply with every shot of the revised scene, one per line, in this form, then one last line, and nothing else:
+
+Shot 1 (8 s): the whole description of shot 1, changed or kept
+Shot 2 (7 s): the whole description of shot 2
+Changed: what is different now, in one short plain sentence`;
+
 // A shot made shorter by hand: its description is fitted to the new length,
 // keeping the look in the same words and the actions that fit, in order,
 // and saying what had to go, so nothing is dropped unseen.
@@ -391,6 +410,28 @@ export function buildRequest(input, { outputDir } = {}) {
     if (!(to > 0)) throw new ReviewError("Say the shot's new length.");
     const parts = [`This shot description was written for ${from > 0 ? `${from} seconds` : "a longer shot"}; the shot is now ${to} seconds.`, `<description>\n${prompt}\n</description>`, lengthLine(to, "The shot"), "Write the Description and Dropped lines."];
     return { ...base, max_tokens: 3000, system: FIT_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
+  }
+  if (input.kind === "prompt" && input.mode === "revise") {
+    const prompt = String(input.prompt ?? "").trim();
+    if (!prompt) throw new ReviewError("There is no shot to change.");
+    if (!request) throw new ReviewError("Say what to change in the shot.");
+    const secs = Number(input.seconds);
+    const parts = [`A shot of a scene for a video model${input.model ? ` (${input.model})` : ""}${secs > 0 ? `, ${secs} seconds long,` : ""} reads:`, `<description>\n${prompt}\n</description>`, "I want this changed about it:", `<change>\n${request}\n</change>`];
+    const lora = loraMaterial(input);
+    if (lora.text) parts.push(`The LoRAs on for this shot, each with how its creator prompts for it:\n\n${lora.text}`);
+    if (secs > 0) parts.push(lengthLine(secs, "The shot"));
+    parts.push("Write the Description and Changed lines.");
+    return { ...base, max_tokens: 3000, system: REVISE_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
+  }
+  if (input.kind === "prompt" && input.mode === "revise-all") {
+    if (!request) throw new ReviewError("Say what to change in the shots.");
+    const shots = Array.isArray(input.shots) ? input.shots.map((s, i) => ({ index: Number(s.index) || i + 1, seconds: Number(s.seconds) || 0, text: String(s.text ?? "").trim() })).filter((s) => s.text) : [];
+    if (!shots.length) throw new ReviewError("A change needs the shots.");
+    const min = Number(input.minSeconds);
+    const max = Number(input.maxSeconds);
+    const range = min > 0 && max >= min ? ` The model makes ${min} to ${max} seconds in one go.` : "";
+    const parts = [`A scene for a video model${input.model ? ` (${input.model})` : ""} is laid out as ${shots.length} shot${shots.length === 1 ? "" : "s"}, each made on its own.${range}`, `<shots>\n${shots.map((s) => `Shot ${s.index} (${s.seconds % 1 ? s.seconds.toFixed(1) : s.seconds} s): ${s.text}`).join("\n")}\n</shots>`, "I want this changed:", `<change>\n${request}\n</change>`, "Reply with every shot of the revised scene as Shot lines, then the Changed line."];
+    return { ...base, max_tokens: 6000, system: REVISE_ALL_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "prompt" && input.mode === "lora") {
     const lora = input.lora && typeof input.lora === "object" ? input.lora : {};

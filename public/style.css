@@ -572,6 +572,25 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .shots .shot-len { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); padding-top: 6px; }
 .shots .shot-seconds { width: 60px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .shots .shot-remove { font-size: 13px; padding: 4px 10px; margin-top: 4px; }
+/* The shot preview as cards: a head line, the words, the LoRAs folded
+   behind one line, and a line to Claude; little else to read. */
+.shot-cards { list-style: none; padding-left: 0; }
+.shot-cards li { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.shot-cards .shot-head { display: flex; align-items: center; gap: 10px; }
+.shot-cards .shot-n { font-weight: 600; }
+.shot-cards .shot-head .shot-len { padding-top: 0; }
+.shot-cards .shot-head .shot-remove { margin: 0 0 0 auto; }
+.shot-cards .shot-text { width: 100%; }
+.shots.shot-cards .shot-loras { display: block; margin: 0; padding: 0; }
+.shot-cards .shot-loras summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.shot-cards .shot-loras[open] summary { margin-bottom: 4px; }
+.shot-cards .shot-loras .shot-lora-rows { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.shot-cards .shot-ask, .shots-ask { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.shot-cards .shot-ask .ask-text, .shots-ask .ask-text { flex: 1 1 220px; font: inherit; font-size: 13px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.shot-cards .shot-ask button, .shots-ask button { font-size: 13px; padding: 4px 10px; }
+.shots-ask { margin: 6px 0; }
+.shots-ask .ask-said { flex-basis: 100%; }
+.shot-cards .shot-said { margin: 0; }
 .fix { display: grid; gap: 6px; width: 100%; padding-top: 6px; border-top: 1px solid var(--line); }
 .fix .fix-shots li { grid-template-columns: auto 1fr auto; }
 .fix .shot-len { white-space: nowrap; }

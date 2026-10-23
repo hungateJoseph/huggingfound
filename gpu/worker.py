@@ -190,6 +190,9 @@ def load(req):
     state["fp8"] = False
     if fp8:
         try:
+            ok, why = fp8_allowed(mode)
+            if not ok:
+                raise ValueError(why)
             layers, saved = fp8_weights(pipe)
             state["fp8"] = True
             extra.append(f"{layers} layers hold fp8 weights ({saved:.1f} GB less in memory).")
@@ -1080,6 +1083,20 @@ def fp8_ready():
         return False, "this machine image lacks the torchao library; a machine on the current image has it"
     except Exception as err:  # noqa: BLE001
         return False, f"{type(err).__name__}: {err}"
+
+
+def fp8_allowed(mode):
+    """Whether fp8 weights can go with the way the model is held. Quantised
+    weights cannot be moved between the machine's memory and the card: a
+    model whose parts take turns on the card, are streamed through it or
+    staged, moves them every step and fails at the first move ("Attempted
+    to set the storage of a tensor on device cuda:0 to a storage on
+    different device cpu", seen on MiniMax-H3 on an H200 in turns mode).
+    Returns (yes, why not)."""
+    if mode in ("gpu", "two-cards", "multi-gpu"):
+        return True, ""
+    held = {"turns": "its models take turns on the card", "offload": "it is streamed through the card from the machine's memory", "staged": "its parts are staged through the card", "cpu": "it runs on the processor"}.get(mode, f"it is held in {mode} mode")
+    return False, f"{held}, and fp8 weights cannot move between the machine's memory and the card; they need the whole model on the card (a bigger card, or a smaller model)"
 
 
 def fp8_weights(pipe):
