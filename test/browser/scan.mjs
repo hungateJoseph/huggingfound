@@ -103,7 +103,7 @@ const reviewer = {
     }
     // A better description for what was typed: the motion spelt out, the unwanted moved to the avoid list.
     if (input.mode === "suggest" && input.loras?.length) {
-      onText(`Description: ${input.loras[0].trigger?.[0] ?? "mvmt"}, ${input.prompt.replace(/^show this man /, "the man as in the picture ")} in one continuous movement, medium shot, camera still, as the showcase describes it.\nAvoid: nothing\nStrength: ${input.loras[0].name} = 0.7\nSettings: 30 steps, guidance 1\nWhy: Written in the shape of the showcase prompts with the trigger word first, at the strength the creator recommends.`);
+      onText(`Description: ${input.loras[0].trigger?.[0] ?? "mvmt"}, ${input.prompt.replace(/^show this man /, "the man as in the picture ")} in one continuous movement, medium shot, camera still, as the showcase describes it.\nAvoid: ${input.negative ? `${input.negative}, a tangled rope` : "nothing"}\nStrength: ${input.loras[0].name} = 0.7\nSettings: 30 steps, guidance 1\nWhy: Written in the shape of the showcase prompts with the trigger word first, at the strength the creator recommends.`);
       return { declined: false, model: "claude-opus-5", note: "" };
     }
     if (input.mode === "suggest") {
@@ -112,11 +112,11 @@ const reviewer = {
     }
     // One shot changed as asked, and all the shots changed as asked.
     if (input.mode === "revise") {
-      onText(`Description: ${input.prompt.replace(/, sunny back garden$/, "")}, the arm in one slow arc, sunny back garden\nChanged: the arm's motion is spelt out.`);
+      onText(`Description: ${input.prompt.replace(/, sunny back garden$/, "")}, the arm in one slow arc, sunny back garden\nAvoid: ${input.negative ? `${input.negative}, ` : ""}a stiff arm\nChanged: the arm's motion is spelt out.`);
       return { declined: false, model: "claude-opus-5", note: "" };
     }
     if (input.mode === "revise-all") {
-      onText(`${input.shots.map((x) => `Shot ${x.index} (${x.seconds} s): ${x.text}, at dusk`).join("\n")}\nChanged: every shot is now at dusk.`);
+      onText(`${input.shots.map((x) => `Shot ${x.index} (${x.seconds} s): ${x.text}, at dusk\nAvoid: ${[x.negative, "bright daylight"].filter(Boolean).join(", ")}`).join("\n")}\nChanged: every shot is now at dusk.`);
       return { declined: false, model: "claude-opus-5", note: "" };
     }
     // A scene as shots, each with its length and its own words; one that
@@ -127,7 +127,8 @@ const reviewer = {
       else if (/shy with the picture/.test(input.prompt) && input.image) onText("I would rather not describe this particular person from the photo.");
       else if (/shy with the picture/.test(input.prompt)) onText(`Shot 1 (4 s): the woman as in the picture, in the same clothes and place, pulls her sweater up and over her head, camera still${input.pictureUnseen ? ", the picture's setting kept" : ""}\nShot 2 (4 s): the same woman as in the picture folds the sweater and sets it down, the place unchanged\nNote: the person and place are taken as they are in the picture.`);
       // The lines as a model dresses them: bold, a bullet, "seconds", a range as a running time, and a closing note.
-      else onText("Shot 1 (4 s): a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still\n**Shot 2 (3 seconds):** the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, sunny back garden\n- Shot 3 (7–12 s) – the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence\nNote: the father is in frame from the first shot.");
+      // Each shot with its own avoid list, one of them empty.
+      else onText("Shot 1 (4 s): a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still\nAvoid: a second person, a flip\n**Shot 2 (3 seconds):** the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, sunny back garden\n**Avoid:** nothing\n- Shot 3 (7–12 s) – the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence\nAvoid: a second trampoline\nNote: the father is in frame from the first shot.");
       return { declined: false, model: "claude-opus-5", note: "" };
     }
     // Coding: the hard parts named, the code checked and fixed, the handed-off parts written.
@@ -2020,11 +2021,14 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).seconds, reviewed.at(-1).minSeconds, reviewed.at(-1).maxSeconds, reviewed.at(-1).clip], ["scene", 12, 1, 5, true], "Claude is told the length and the model's shot range");
   assert.equal(await visitor.locator("#shots li").count(), 3);
   assert.deepEqual(await visitor.$$eval("#shots .shot-seconds", (els) => els.map((e) => e.value)), ["4", "3", "5"], "bold, bulleted and running-time lines are read all the same");
+  assert.deepEqual(await visitor.$$eval("#shots .shot-avoid", (els) => els.map((e) => e.value)), ["a second person, a flip", "", "a second trampoline"], "each shot's own avoid list in its field, 'nothing' as empty");
+  assert.match(await visitor.locator("#suggest").innerText(), /with its own avoid list on top of yours/);
   // Left and opened again: the preview is back as Claude laid it out, ready to change and send.
   const reviewsBeforeReopen = reviewed.length;
   await visitor.evaluate(() => renderTry(state.model, state.plan));
   await visitor.waitForSelector("#shots li");
   assert.deepEqual(await visitor.$$eval("#shots .shot-seconds", (els) => els.map((e) => e.value)), ["4", "3", "5"]);
+  assert.deepEqual(await visitor.$$eval("#shots .shot-avoid", (els) => els.map((e) => e.value)), ["a second person, a flip", "", "a second trampoline"]);
   assert.equal(reviewed.length, reviewsBeforeReopen, "shown again from what was kept, not asked of Claude again");
   assert.match(await visitor.locator("#suggest").innerText(), /Claude's note: the father is in frame from the first shot\./);
   assert.match(await visitor.locator("#shots-total").innerText(), /^3 shots, 12\.2 s in all at low quality \(832 by 480, 20 passes each\), about [\s\S]*A lower quality above makes every shot quicker\./);
@@ -2040,6 +2044,9 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   await visitor.waitForFunction(() => /^Claude: /.test(document.querySelector("#shots li:nth-child(2) .shot-said")?.textContent ?? ""));
   assert.equal(await visitor.locator("#shots li:nth-child(2) .shot-said").innerText(), "Claude: the arm's motion is spelt out.");
   assert.match(await visitor.inputValue("#shots li:nth-child(2) .shot-text"), /lands flat on his face on the trampoline, the arm in one slow arc, sunny back garden$/);
+  assert.equal(await visitor.inputValue("#shots li:nth-child(2) .shot-avoid"), "a stiff arm", "Claude's Avoid line goes into the shot's field");
+  assert.equal(reviewed.at(-1).negative, "", "the shot's own list went along, empty for this one");
+  await visitor.fill("#shots li:nth-child(1) .shot-avoid", "a second person, a flip, a dog");
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).request, reviewed.at(-1).seconds, reviewed.at(-1).clip], ["revise", "the arm should swing slowly", 3, true]);
   assert.equal(await visitor.inputValue("#shots li:nth-child(2) .shot-ask-text"), "", "the line is cleared once the change is made");
   await visitor.fill("#shots li:nth-child(2) .shot-text", "the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, bare feet, sunny back garden");
@@ -2070,6 +2077,11 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   const shotJobs = rentedAgent.state.jobs.filter((j) => /grey T-shirt/.test(j.prompt));
   assert.ok(rentedAgent.state.jobs.length >= sceneBefore + 3, "three shot jobs after the clip that was under way");
   assert.deepEqual(shotJobs.map((j) => [j.prompt, j.frames, j.init ? j.init.slice(0, 22) : null]), [["a man in a grey T-shirt bounces on a trampoline in a sunny back garden, camera still", 65, null], ["the same man in the grey T-shirt does a front flip and lands flat on his face on the trampoline, bare feet, sunny back garden", 49, "data:image/png;base64,"], ["the man in the grey T-shirt does a backflip and lands on his feet on the trampoline; the camera pans to his elderly father applauding at the garden fence", 65, "data:image/png;base64,"]], "each shot goes with its own words and length, the later ones from the frame before");
+  // Each shot's own list follows the request's; the later shots, starting from a frame, then get the start-picture guard.
+  assert.match(shotJobs[0].negative, /^blurry, low quality, [^]*cluttered background, a second person, a flip, a dog$/, "the first shot's own avoid list, as edited, after the request's");
+  assert.match(shotJobs[1].negative, /cluttered background, a stiff arm, a different person, changed face/, "the second shot's, from Claude's Avoid line");
+  assert.match(shotJobs[2].negative, /cluttered background, a second trampoline, a different person, changed face/, "the third shot's");
+  assert.match(await visitor.locator("#image-log").innerText(), /Shot 1 \(4\.1 s\): a man in a grey T-shirt[^\n]*\(avoiding a second person, a flip, a dog\)\n\s+Shot 2 \(3\.1 s\)[^\n]*\(avoiding a stiff arm\)/);
   assert.match(await visitor.locator("#image-log").innerText(), /Next from the queue\.\n[\s\S]*Scene of 11\.2 seconds in 3 shots, laid out by Claude, with your changes, each starting where the last ended, then joined:\n\s+Shot 1 \(4\.1 s\): a man in a grey T-shirt[\s\S]*Shot 1 of 3\n[\s\S]*Shot 2 of 3, from the last frame of the one before[\s\S]*Shot 3 of 3/);
   const sceneCard = visitor.locator("#image-out .image-card", { hasText: "as a scene of 3 shots" });
   assert.match(await sceneCard.locator(".caption").innerText(), /a scene of 3 shots laid out by Claude and edited: 1 \(4\.1 s\) a man in a grey T-shirt[\s\S]*2 \(3\.1 s\)[\s\S]*3 \(4\.1 s\)[\s\S]*11\.2 s as a scene of 3 shots, low quality, 832 by 480, 20 steps/);
@@ -2340,6 +2352,8 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.equal(await shot1.locator(".shot-lora-strength").inputValue(), "0.7", "the strength the creator recommends");
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).loras.length, reviewed.at(-1).loras[0].strength, reviewed.at(-1).seconds], ["suggest", 1, 0.6, 4]);
   assert.equal(await shot1.locator(".shot-loras summary").innerText(), "LoRAs: Wan-TI2V-Motion-LoRA 0.70");
+  assert.equal(await shot1.locator(".shot-avoid").inputValue(), "a second person, a flip, a tangled rope", "the fit's Avoid line is the shot's own list now");
+  assert.equal(reviewed.at(-1).negative, "a second person, a flip", "the shot's own list went to Claude, not the request's");
   // A line to Claude for all the shots: every row comes back changed, each keeping its LoRAs.
   await visitor.fill("#shots-ask", "make it dusk");
   await visitor.click("#shots-ask-go");
@@ -2349,6 +2363,8 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.deepEqual(await visitor.$$eval("#shots .shot-text", (els) => els.map((e) => /, at dusk$/.test(e.value))), [true, true, true]);
   assert.match(await visitor.locator("#shots li").nth(0).locator(".shot-text").inputValue(), /^mvmt, /);
   assert.deepEqual(await visitor.$$eval("#shots .shot-lora-on", (els) => els.map((e) => e.checked)), [true, false, false], "each row's LoRAs kept by place");
+  assert.deepEqual(reviewed.at(-1).shots.map((x) => x.negative), ["a second person, a flip, a tangled rope", "", "a second trampoline"], "every shot's avoid list goes along");
+  assert.deepEqual(await visitor.$$eval("#shots .shot-avoid", (els) => els.map((e) => e.value)), ["a second person, a flip, a tangled rope, bright daylight", "bright daylight", "a second trampoline, bright daylight"], "and comes back as Claude revised it");
   assert.equal(await visitor.locator("#shots li").nth(0).locator(".shot-lora-strength").inputValue(), "0.7");
   assert.equal(await visitor.locator("#shots li").nth(0).locator(".shot-loras summary").innerText(), "LoRAs: Wan-TI2V-Motion-LoRA 0.70");
   const sceneJobs = rentedAgent.state.jobs.length;
@@ -2372,6 +2388,7 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   assert.deepEqual([reviewed.at(-1).mode, reviewed.at(-1).seconds, reviewed.at(-1).prompt], ["scene", 8, "a man eats an apple, throws the core away, then sits down in a chair"]);
   assert.equal(await visitor.locator("#shots li").count(), 3);
   assert.equal(await visitor.locator("#shots li .shot-ask-text").count(), 3, "a line to Claude under every shot");
+  assert.equal(await visitor.locator("#shots li .shot-avoid").count(), 3, "and an avoid list on every shot");
   await visitor.click("#shots-send");
   assert.equal(await visitor.locator("#suggest").isHidden(), true);
   assert.match(await visitor.locator("#queue-list").innerText(), /a man eats an apple[\s\S]*as a scene of 3 shots at high quality/);

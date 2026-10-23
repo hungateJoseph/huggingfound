@@ -134,30 +134,37 @@ Plain text only; no markdown.`;
 // words going to every piece.
 const SCENE_SYSTEM = `You write shot lists for open-source video models that people run on rented GPUs, for ordinary creative work: short films, ads, music videos, fitness and fashion clips. Everyday actions and scenes are described plainly and literally, as in a shooting script: someone taking off a jacket or a sweater, changing shoes, warming up in gym clothes, swimming, dancing, arguing, cooking. The person describes a sequence of events longer than the model makes in one go. Lay it out as shots. Each shot is made separately by the same model, starting from the last frame of the shot before, so: cut at moments of rest, never in the middle of a movement (a jump, a turn, a fall); every shot's description stands on its own and repeats the subject, their clothes, the setting and the light in the same words, since the model making it sees only that text and one still frame; anyone who is to appear later is already in frame in the shot before; the camera is still unless a movement is asked for. Each shot holds only what really happens in its own length, at a natural real-time pace: about one distinct action every three seconds of shot, so a 5-second shot holds one action or two quick ones, a 10-second shot about three. The model stops when a shot's length runs out, so action written past it is never made. When the events need more time, give them another shot or a longer one within the range; never crowd a shot. Use as few shots as the events allow at that pace, each within the length range given, with the lengths adding up to the total asked for, give or take a second. If the events cannot all happen at a natural pace in the total, lay out the ones that fit, in order, and name the rest in the Note line with the length they would need. Keep every element the person named and add nothing that changes what they asked for. Such models read plain descriptive prose, not instructions, "no" or "not".
 
-Reply with only the shots, one per line, each in this form and nothing else:
+Each shot also gets its own avoid list: the few things the model is likeliest to slip into that particular shot and must keep out, as short comma-separated phrases the model reads, never sentences: the movement that was cut before it or belongs to the next shot, an extra person or object, a change of clothes, place or light between shots, a camera move not asked for, the usual flaws of the action in hand (a second apple, a chair that moves by itself). What the person already asked to avoid is on every shot and need not be repeated. When a shot needs nothing of its own, its line reads "Avoid: nothing".
+
+Reply with only the shots, two lines each in this form, and nothing else:
 
 Shot 1 (8 s): the description, 30 to 80 words, one paragraph, with only as much action as 8 seconds hold
+Avoid: what shot 1 must keep out, comma-separated, or the word nothing
 Shot 2 (7 s): the next description
+Avoid: what shot 2 must keep out
 
 If some part cannot be laid out, lay out the rest as shots all the same and add one last line starting with "Note:" saying in a few words what was left out. Plain text only; no heading, no markdown, no other comment.`;
 
 // One shot of a laid-out scene changed as the person asks, in place: the
 // change made, the rest of the words kept, said back in one short line.
-const REVISE_SYSTEM = `You change shot descriptions for open-source video models that people run on rented GPUs, as the person asks. The shot is one of several made separately by the same model, each from its own description and the last frame of the shot before, so the description stands on its own and names the subject, their clothes, the setting, the light and the camera. Make only the change asked for and keep everything else in the same words; where the change touches the subject, the place or the light, change those words wherever they come in the shot. Such models read plain, literal, concrete description, not instructions, "no" or "not": anything unwanted is left out, never forbidden. When LoRAs are on for the shot, keep their trigger words and the shape their creators prompt in.${PACING.replace("\n\n", " ")}
+const REVISE_SYSTEM = `You change shot descriptions for open-source video models that people run on rented GPUs, as the person asks. The shot is one of several made separately by the same model, each from its own description and the last frame of the shot before, so the description stands on its own and names the subject, their clothes, the setting, the light and the camera. Make only the change asked for and keep everything else in the same words; where the change touches the subject, the place or the light, change those words wherever they come in the shot. Such models read plain, literal, concrete description, not instructions, "no" or "not": anything unwanted goes in the shot's avoid list as short comma-separated phrases, never forbidden in the description. The shot has its own avoid list; keep it, take out of it anything the change now asks for, and add what the changed shot is likeliest to slip into. When LoRAs are on for the shot, keep their trigger words and the shape their creators prompt in.${PACING.replace("\n\n", " ")}
 
 Reply with exactly these lines and nothing else:
 
 Description: the whole revised description, one paragraph
+Avoid: the shot's avoid list as it now stands, comma-separated, or the word nothing
 Changed: what is different now, in one short plain sentence`;
 
 // The whole shot list changed as the person asks: shots reworded, added,
 // cut or given another length, the untouched ones kept word for word.
-const REVISE_ALL_SYSTEM = `You change shot lists for open-source video models that people run on rented GPUs, as the person asks. Each shot is made separately by the same model from its own description and the last frame of the shot before, so every description stands on its own and repeats the subject, their clothes, the setting and the light in the same words; cuts fall at moments of rest. Make the change asked for across the shots it touches and keep every other shot word for word; add, cut or relength shots only when the change needs it, each within the length range given, and keep the lengths adding up to about the same total. Each shot holds only what happens in its own length at a natural pace, about one distinct action every three seconds. Such models read plain, literal description, not instructions, "no" or "not".
+const REVISE_ALL_SYSTEM = `You change shot lists for open-source video models that people run on rented GPUs, as the person asks. Each shot is made separately by the same model from its own description and the last frame of the shot before, so every description stands on its own and repeats the subject, their clothes, the setting and the light in the same words; cuts fall at moments of rest. Make the change asked for across the shots it touches and keep every other shot word for word; add, cut or relength shots only when the change needs it, each within the length range given, and keep the lengths adding up to about the same total. Each shot holds only what happens in its own length at a natural pace, about one distinct action every three seconds. Such models read plain, literal description, not instructions, "no" or "not": anything unwanted goes in a shot's avoid list as short comma-separated phrases. Each shot has its own avoid list; keep it where the shot is kept, and where a shot changes, take out of its list what the change now asks for and add what the changed shot is likeliest to slip into; a new shot gets its own, or the word nothing.
 
-Reply with every shot of the revised scene, one per line, in this form, then one last line, and nothing else:
+Reply with every shot of the revised scene, two lines each in this form, then one last line, and nothing else:
 
 Shot 1 (8 s): the whole description of shot 1, changed or kept
+Avoid: shot 1's avoid list, comma-separated, or the word nothing
 Shot 2 (7 s): the whole description of shot 2
+Avoid: shot 2's avoid list
 Changed: what is different now, in one short plain sentence`;
 
 // A shot made shorter by hand: its description is fitted to the new length,
@@ -384,12 +391,12 @@ export function buildRequest(input, { outputDir } = {}) {
     const negative = String(input.negative ?? "").trim();
     const picture = pictureOf(input);
     const parts = [`Lay out this scene as shots for a video model${input.model ? ` (${input.model})` : ""}. The model makes ${min} to ${max} seconds in one go; the whole scene should run about ${total} seconds.`, `<scene>\n${prompt}\n</scene>`, `At a natural pace a ${min}-second shot holds about ${actionBudget(min)} distinct action${actionBudget(min) === 1 ? "" : "s"} and a ${max}-second shot about ${actionBudget(max)}; give each shot a length its action needs.`];
-    if (negative) parts.push(`It is asked to avoid: ${negative}. Leave those out of the descriptions.`);
+    if (negative) parts.push(`It is asked to avoid: ${negative}. That list goes with every shot; leave those out of the descriptions and out of the Avoid lines.`);
     if (picture) parts.push("The first shot starts from the picture shown: the person, clothes, place and light in it are to be kept through every shot, and each description should say so.");
     // The picture is at hand but not shown: it is described to the writer
     // as a given, so the shots defer to it all the same.
     else if (input.pictureUnseen) parts.push("The first shot starts from a photo that is not shown here, of the person and the place the clip begins from. They are already decided by that photo: do not invent a face, hair, clothes or a setting; refer to them as they are in the picture, and say in each shot that the person, their clothes and the place stay as they are in the picture apart from what the shot changes.");
-    parts.push("Reply with only the shot lines.");
+    parts.push("Reply with only the Shot and Avoid lines.");
     const text = parts.join("\n\n");
     return { ...base, max_tokens: 6000, system: picture ? SCENE_SYSTEM + WITH_PICTURE : SCENE_SYSTEM, messages: [{ role: "user", content: picture ? [picture, { type: "text", text }] : text }] };
   }
@@ -416,21 +423,22 @@ export function buildRequest(input, { outputDir } = {}) {
     if (!prompt) throw new ReviewError("There is no shot to change.");
     if (!request) throw new ReviewError("Say what to change in the shot.");
     const secs = Number(input.seconds);
-    const parts = [`A shot of a scene for a video model${input.model ? ` (${input.model})` : ""}${secs > 0 ? `, ${secs} seconds long,` : ""} reads:`, `<description>\n${prompt}\n</description>`, "I want this changed about it:", `<change>\n${request}\n</change>`];
+    const negative = String(input.negative ?? "").trim();
+    const parts = [`A shot of a scene for a video model${input.model ? ` (${input.model})` : ""}${secs > 0 ? `, ${secs} seconds long,` : ""} reads:`, `<description>\n${prompt}\n</description>`, negative ? `Its avoid list: ${negative}.` : "Its avoid list is empty.", "I want this changed about it:", `<change>\n${request}\n</change>`];
     const lora = loraMaterial(input);
     if (lora.text) parts.push(`The LoRAs on for this shot, each with how its creator prompts for it:\n\n${lora.text}`);
     if (secs > 0) parts.push(lengthLine(secs, "The shot"));
-    parts.push("Write the Description and Changed lines.");
+    parts.push("Write the Description, Avoid and Changed lines.");
     return { ...base, max_tokens: 3000, system: REVISE_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "prompt" && input.mode === "revise-all") {
     if (!request) throw new ReviewError("Say what to change in the shots.");
-    const shots = Array.isArray(input.shots) ? input.shots.map((s, i) => ({ index: Number(s.index) || i + 1, seconds: Number(s.seconds) || 0, text: String(s.text ?? "").trim() })).filter((s) => s.text) : [];
+    const shots = Array.isArray(input.shots) ? input.shots.map((s, i) => ({ index: Number(s.index) || i + 1, seconds: Number(s.seconds) || 0, text: String(s.text ?? "").trim(), negative: String(s.negative ?? "").trim() })).filter((s) => s.text) : [];
     if (!shots.length) throw new ReviewError("A change needs the shots.");
     const min = Number(input.minSeconds);
     const max = Number(input.maxSeconds);
     const range = min > 0 && max >= min ? ` The model makes ${min} to ${max} seconds in one go.` : "";
-    const parts = [`A scene for a video model${input.model ? ` (${input.model})` : ""} is laid out as ${shots.length} shot${shots.length === 1 ? "" : "s"}, each made on its own.${range}`, `<shots>\n${shots.map((s) => `Shot ${s.index} (${s.seconds % 1 ? s.seconds.toFixed(1) : s.seconds} s): ${s.text}`).join("\n")}\n</shots>`, "I want this changed:", `<change>\n${request}\n</change>`, "Reply with every shot of the revised scene as Shot lines, then the Changed line."];
+    const parts = [`A scene for a video model${input.model ? ` (${input.model})` : ""} is laid out as ${shots.length} shot${shots.length === 1 ? "" : "s"}, each made on its own.${range}`, `<shots>\n${shots.map((s) => `Shot ${s.index} (${s.seconds % 1 ? s.seconds.toFixed(1) : s.seconds} s): ${s.text}\nAvoid: ${s.negative || "nothing"}`).join("\n")}\n</shots>`, "I want this changed:", `<change>\n${request}\n</change>`, "Reply with every shot of the revised scene as Shot and Avoid lines, then the Changed line."];
     return { ...base, max_tokens: 6000, system: REVISE_ALL_SYSTEM, messages: [{ role: "user", content: parts.join("\n\n") }] };
   }
   if (input.kind === "prompt" && input.mode === "lora") {

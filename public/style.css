@@ -581,6 +581,8 @@ body[data-hosted="1"] .site-foot .hosted-only { display: inline; }
 .shot-cards .shot-head .shot-len { padding-top: 0; }
 .shot-cards .shot-head .shot-remove { margin: 0 0 0 auto; }
 .shot-cards .shot-text { width: 100%; }
+.shot-cards .shot-avoid-row { display: flex; align-items: center; gap: 8px; padding: 0; }
+.shot-cards .shot-avoid { flex: 1 1 200px; font: inherit; font-size: 13px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
 .shots.shot-cards .shot-loras { display: block; margin: 0; padding: 0; }
 .shot-cards .shot-loras summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .shot-cards .shot-loras[open] summary { margin-bottom: 4px; }

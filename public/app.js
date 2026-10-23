@@ -3860,18 +3860,18 @@ function renderImage(box, t) {
         return out;
       };
       const loraLine = shotLoraItems().length ? " Each shot can carry its own LoRAs." : "";
-      el.innerHTML = `<p class="muted small"><b>Claude's shots.</b> Each is made on its own from its row (${spec.minSeconds} to ${spec.maxSeconds} s), then joined. Change the words or length, or ask Claude for edits.${loraLine}</p>${remark}
+      el.innerHTML = `<p class="muted small"><b>Claude's shots.</b> Each is made on its own from its row (${spec.minSeconds} to ${spec.maxSeconds} s), then joined, with its own avoid list on top of yours. Change the words, length or avoid list, or ask Claude for edits.${loraLine}</p>${remark}
         <ol class="shots shot-cards" id="shots"></ol>
         <p class="tools-row"><button class="ghost" id="shot-add">Add a shot</button></p>
         <p class="muted small" id="shots-total"></p>
         ${claudeAvailable() ? `<div class="shots-ask"><input class="ask-text" id="shots-ask" placeholder="Ask Claude to change all the shots"><button class="ghost" id="shots-ask-go">Ask</button><span class="muted small ask-said" id="shots-ask-said"></span></div>` : ""}
         <p class="tools-row">${finals}</p>`;
       const list = el.querySelector("#shots");
-      const read = () => [...list.querySelectorAll("li")].map((li) => ({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds)), text: li.querySelector(".shot-text").value.trim(), ...(shotLoraItems().length ? { loras: shotLorasOf(li) } : {}) })).filter((s) => s.text);
+      const read = () => [...list.querySelectorAll("li")].map((li) => ({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds)), text: li.querySelector(".shot-text").value.trim(), negative: rowAvoid(li), ...(shotLoraItems().length ? { loras: shotLorasOf(li) } : {}) })).filter((s) => s.text);
       const total = () => {
         renumber();
         const shots = read();
-        if (pending) pending.got = { ...pending.got, shots: [...list.querySelectorAll("li")].map((li) => ({ seconds: Number(li.querySelector(".shot-seconds").value) || spec.minSeconds, text: li.querySelector(".shot-text").value, written: Number(li.dataset.written) || 0, ...(shotLoraItems().length ? { loras: shotLorasOf(li) } : {}) })) };
+        if (pending) pending.got = { ...pending.got, shots: [...list.querySelectorAll("li")].map((li) => ({ seconds: Number(li.querySelector(".shot-seconds").value) || spec.minSeconds, text: li.querySelector(".shot-text").value, negative: rowAvoid(li), written: Number(li.dataset.written) || 0, ...(shotLoraItems().length ? { loras: shotLorasOf(li) } : {}) })) };
         const secs = shots.reduce((a, s) => a + framesFor(s.seconds, spec) / spec.fps, 0);
         const est = shots.reduce((a, s) => a + clipEstimate(spec, level, s.seconds, t.repo).seconds, 0);
         const lv = spec.levels[level] ?? spec.levels.medium;
@@ -3938,6 +3938,13 @@ function renderImage(box, t) {
         });
       };
       const rowSeconds = (li) => Math.min(spec.maxSeconds, Math.max(spec.minSeconds, Number(li.querySelector(".shot-seconds").value) || spec.minSeconds));
+      const rowAvoid = (li) => joinAvoid(li.querySelector(".shot-avoid").value);
+      // Claude's Avoid line for a shot goes into its field; no line leaves
+      // the field as it was.
+      const setAvoid = (li, text) => {
+        const line = /^Avoid:\s*(.+)$/m.exec(text ?? "")?.[1];
+        if (line != null) li.querySelector(".shot-avoid").value = avoidWords(line);
+      };
       const addRow = (shot) => {
         const li = document.createElement("li");
         if (shot.written || shot.text) li.dataset.written = String(shot.written || Math.min(spec.maxSeconds, Math.max(spec.minSeconds, shot.seconds)));
@@ -3945,7 +3952,7 @@ function renderImage(box, t) {
         const chosen = shot.loras ?? loraBook(t.repo).on;
         const loraRows = items.length ? `<details class="shot-loras small"><summary>Add a LoRA</summary><div class="shot-lora-rows">${items.map(({ key, item }) => `<span class="shot-lora" data-key="${esc(key)}"><label class="check"><input type="checkbox" class="shot-lora-on" ${key in chosen ? "checked" : ""}> ${esc(item.name)}</label> <label class="lora-scale">at <input type="number" class="shot-lora-strength" min="0" max="1.5" step="0.05" value="${Number(chosen[key] ?? item.scale ?? 1)}"></label></span>`).join("")}${claudeAvailable() ? `<button class="ghost shot-fit-lora" title="Claude rewrites this shot's words in the shape its ticked LoRAs' creators prompt for, with their trigger words, and sets the strengths they recommend">Fit the words to the LoRAs</button>` : ""}<span class="shot-lora-note muted"></span></div></details>` : "";
         const askRow = claudeAvailable() ? `<div class="shot-ask"><input class="ask-text shot-ask-text" placeholder="Ask Claude to change this shot"><button class="ghost shot-ask-go">Ask</button></div><p class="shot-said muted small" hidden></p>` : "";
-        li.innerHTML = `<div class="shot-head"><span class="shot-n"></span><label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><button class="ghost shot-remove" title="Remove this shot">Remove</button></div><textarea class="shot-text" rows="3">${esc(shot.text)}</textarea>${loraRows}${askRow}`;
+        li.innerHTML = `<div class="shot-head"><span class="shot-n"></span><label class="shot-len"><input type="number" class="shot-seconds" min="${spec.minSeconds}" max="${spec.maxSeconds}" step="1" value="${shot.seconds}"> s</label><button class="ghost shot-remove" title="Remove this shot">Remove</button></div><textarea class="shot-text" rows="3">${esc(shot.text)}</textarea><label class="shot-avoid-row small"><span class="muted">Avoid</span><input class="shot-avoid" value="${esc(shot.negative ?? "")}" placeholder="what this shot must keep out, on top of the list above" title="What the model must keep out of this shot, comma-separated, on top of the avoid list of the whole request"></label>${loraRows}${askRow}`;
         li.querySelector(".shot-remove").addEventListener("click", () => {
           li.remove();
           total();
@@ -3955,6 +3962,7 @@ function renderImage(box, t) {
           fitHint(li);
         });
         li.querySelector(".shot-text").addEventListener("input", total);
+        li.querySelector(".shot-avoid").addEventListener("input", total);
         li.querySelectorAll(".shot-lora-on, .shot-lora-strength").forEach((inp) => inp.addEventListener("input", total));
         // A line to Claude for this shot alone: the change asked for is
         // made in the row's words, and said back in one short line.
@@ -3968,7 +3976,7 @@ function renderImage(box, t) {
           said.hidden = false;
           said.textContent = "Claude is changing it";
           const loras = await shotLoraMaterial(li);
-          const got = await claudeText({ kind: "prompt", mode: "revise", clip: true, model: t.repo, prompt: li.querySelector(".shot-text").value.trim(), request, seconds: rowSeconds(li), ...(loras ? { loras } : {}) });
+          const got = await claudeText({ kind: "prompt", mode: "revise", clip: true, model: t.repo, prompt: li.querySelector(".shot-text").value.trim(), negative: rowAvoid(li), request, seconds: rowSeconds(li), ...(loras ? { loras } : {}) });
           askGo.disabled = false;
           const description = (/^Description:\s*(.+)$/m.exec(got.text ?? "")?.[1] ?? "").trim();
           if (!description) {
@@ -3976,6 +3984,7 @@ function renderImage(box, t) {
             return;
           }
           li.querySelector(".shot-text").value = description;
+          setAvoid(li, got.text);
           li.dataset.written = String(rowSeconds(li));
           said.textContent = `Claude: ${(/^Changed:\s*(.+)$/m.exec(got.text)?.[1] ?? "").trim() || "changed as asked."}`;
           input.value = "";
@@ -4002,7 +4011,7 @@ function renderImage(box, t) {
           note.textContent = "Claude is reading how the LoRAs are prompted for";
           const loras = await shotLoraMaterial(li);
           const secs = rowSeconds(li);
-          const got = await claudeText({ kind: "prompt", mode: "suggest", clip: true, model: t.repo, prompt: li.querySelector(".shot-text").value.trim(), negative: $("#image-negative")?.value.trim() ?? "", seconds: secs, loras });
+          const got = await claudeText({ kind: "prompt", mode: "suggest", clip: true, model: t.repo, prompt: li.querySelector(".shot-text").value.trim(), negative: rowAvoid(li), seconds: secs, loras });
           b.disabled = false;
           const description = (/^Description:\s*(.+)$/m.exec(got.text ?? "")?.[1] ?? "").trim();
           if (!description) {
@@ -4010,6 +4019,7 @@ function renderImage(box, t) {
             return;
           }
           li.querySelector(".shot-text").value = description;
+          setAvoid(li, got.text);
           const changes = suggestedLoraChanges(got.text, loras);
           for (const x of changes.strengths) {
             const inp = li.querySelector(`.shot-lora[data-key="${CSS.escape(x.key)}"] .shot-lora-strength`);
@@ -4036,7 +4046,7 @@ function renderImage(box, t) {
         const go = el.querySelector("#shots-ask-go");
         const request = input.value.trim();
         const rows = [...list.querySelectorAll("li")];
-        const shots = rows.map((li, i) => ({ index: i + 1, seconds: rowSeconds(li), text: li.querySelector(".shot-text").value.trim() })).filter((x) => x.text);
+        const shots = rows.map((li, i) => ({ index: i + 1, seconds: rowSeconds(li), text: li.querySelector(".shot-text").value.trim(), negative: rowAvoid(li) })).filter((x) => x.text);
         if (!request || !shots.length) return;
         go.disabled = true;
         said.textContent = "Claude is changing the shots";
@@ -4048,8 +4058,10 @@ function renderImage(box, t) {
           return;
         }
         const picks = rows.map((li) => (shotLoraItems().length ? shotLorasOf(li) : null));
+        const avoids = rows.map(rowAvoid);
+        const wroteAvoid = /^Avoid:/im.test(got.text ?? "");
         list.innerHTML = "";
-        revised.forEach((x, i) => addRow({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, x.seconds)), text: x.text, ...(picks[i] ? { loras: picks[i] } : {}) }));
+        revised.forEach((x, i) => addRow({ seconds: Math.min(spec.maxSeconds, Math.max(spec.minSeconds, x.seconds)), text: x.text, negative: wroteAvoid ? x.negative : avoids[i] ?? "", ...(picks[i] ? { loras: picks[i] } : {}) }));
         said.textContent = `Claude: ${(/^Changed:\s*(.+)$/m.exec(got.text)?.[1] ?? "").trim() || "changed as asked."}`;
         input.value = "";
         total();
@@ -4065,8 +4077,8 @@ function renderImage(box, t) {
         const shots = read();
         if (!shots.length) return null;
         if (unseen) item.notes = [...(item.notes ?? []), "The shots were laid out with the starting picture described to Claude, not shown: with it in front of Claude, no shots came."];
-        item.shots = shots.map((s) => ({ seconds: framesFor(s.seconds, spec) / spec.fps, frames: framesFor(s.seconds, spec), text: s.text, ...(s.loras ? { loras: s.loras } : {}) }));
-        item.shotsEdited = shots.length !== got.shots.length || shots.some((s, i) => s.text !== got.shots[i].text || s.seconds !== Math.min(spec.maxSeconds, Math.max(spec.minSeconds, got.shots[i].seconds)));
+        item.shots = shots.map((s) => ({ seconds: framesFor(s.seconds, spec) / spec.fps, frames: framesFor(s.seconds, spec), text: s.text, negative: s.negative, ...(s.loras ? { loras: s.loras } : {}) }));
+        item.shotsEdited = shots.length !== got.shots.length || shots.some((s, i) => s.text !== got.shots[i].text || s.negative !== (got.shots[i].negative ?? "") || s.seconds !== Math.min(spec.maxSeconds, Math.max(spec.minSeconds, got.shots[i].seconds)));
         item.pieces = item.shots.length;
         const lv = spec.levels[level] ?? spec.levels.medium;
         const sum = item.shots.reduce((a, s) => a + s.frames, 0) / spec.fps;
@@ -4224,7 +4236,7 @@ function renderImage(box, t) {
     const level = entry.level ?? old[0].level ?? "medium";
     const lv = spec.levels[level] ?? spec.levels.medium;
     const word = entry.shots ? "shot" : "piece";
-    const shots = old.map((e, i) => ({ index: i + 1, seconds: (e.q?.frames ?? 0) / spec.fps, frames: e.q?.frames ?? framesFor(spec.minSeconds, spec), text: e.prompt, seed: e.seed, keep: e.id, loras: e.loras ?? null }));
+    const shots = old.map((e, i) => ({ index: i + 1, seconds: (e.q?.frames ?? 0) / spec.fps, frames: e.q?.frames ?? framesFor(spec.minSeconds, spec), text: e.prompt, negative: e.negative ?? "", seed: e.seed, keep: e.id, loras: e.loras ?? null }));
     foot.textContent = claudeAvailable() ? "Claude is working out which shots to make again" : "Reading which shot to make again";
     const plan = await fixPlan(entry, shots, text, t.repo);
     foot.textContent = "";
@@ -4311,7 +4323,7 @@ function renderImage(box, t) {
     el.querySelector(".fix-go").addEventListener("click", () => {
       const going = redo();
       if (!going.some(Boolean)) return;
-      const planned = shots.map((s, i) => ({ seconds: s.seconds, frames: s.frames, text: going[i] ? rows[i].querySelector(".shot-text").value.trim() || s.text : s.text, seed: s.seed, keep: s.keep, redo: going[i] }));
+      const planned = shots.map((s, i) => ({ seconds: s.seconds, frames: s.frames, text: going[i] ? rows[i].querySelector(".shot-text").value.trim() || s.text : s.text, negative: s.negative ?? "", seed: s.seed, keep: s.keep, redo: going[i] }));
       const made = planned.filter((s) => s.redo);
       const ests = made.map((s) => clipEstimate(spec, level, s.seconds, t.repo));
       const sum = planned.reduce((a, s) => a + s.frames, 0) / spec.fps;
@@ -4516,7 +4528,7 @@ function renderImage(box, t) {
       shots.forEach((s, i) => say(`  ${word} ${i + 1} (${s.seconds.toFixed(1)} s): ${s.redo ? s.text : "kept"}`));
     } else if (shots) {
       say(`Scene of ${(shots.reduce((a, s) => a + s.frames, 0) / spec.fps).toFixed(1)} seconds in ${shots.length} shots, laid out by Claude${item.shotsEdited ? ", with your changes" : ""}, each starting where the last ended, then joined:`);
-      shots.forEach((s, i) => say(`  Shot ${i + 1} (${s.seconds.toFixed(1)} s): ${s.text}`));
+      shots.forEach((s, i) => say(`  Shot ${i + 1} (${s.seconds.toFixed(1)} s): ${s.text}${s.negative ? ` (avoiding ${s.negative})` : ""}`));
     } else say(`A ${((item.q.frames * item.pieces) / spec.fps).toFixed(1)}-second clip, made as ${item.pieces} pieces of ${(item.q.frames / spec.fps).toFixed(1)} s, each starting where the last ended, then joined.`);
     const entries = [];
     const fresh = new Set();
@@ -4537,7 +4549,7 @@ function renderImage(box, t) {
       const first = fix && k === 1 ? (await keptResults(t.repo)).find((e) => e.id === shot.keep) : null;
       if (fix && k === 1 && !first?.startPicture && t.startPicture === "required") throw new Error("the first shot began from a photo that is not kept here; pick it again and ask for the clip as a new request");
       const piece = shot
-        ? { ...item, prompt: shot.text, q: { ...item.q, frames: shot.frames }, scene: false, shots: null, fix: null, pieces: 1, shotLoras: shot.loras ?? null, piece: { group, index: k, of: item.pieces, shot: !fix || fix.scene, ...(fix ? { fixes: shot.keep } : {}) }, seed: fix && Number.isInteger(shot.seed) ? shot.seed : (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, startInit: first?.startPicture ?? null, replyTo: null, expand: false, expanded: null, expandSaid: true, estimate: { base: clipEstimate(spec, item.level, shot.seconds, t.repo).base, seconds: clipEstimate(spec, item.level, shot.seconds, t.repo).seconds }, settings: `${word.toLowerCase()} ${k} of ${item.pieces}${fix ? ", made again" : ""}, ${shot.seconds.toFixed(1)} s at ${item.level} quality, ${lv.width} by ${lv.height}, ${shot.frames} frames, ${lv.steps} steps` }
+        ? { ...item, prompt: shot.text, negative: joinAvoid(item.negative, shot.negative), q: { ...item.q, frames: shot.frames }, scene: false, shots: null, fix: null, pieces: 1, shotLoras: shot.loras ?? null, piece: { group, index: k, of: item.pieces, shot: !fix || fix.scene, ...(fix ? { fixes: shot.keep } : {}) }, seed: fix && Number.isInteger(shot.seed) ? shot.seed : (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, startInit: first?.startPicture ?? null, replyTo: null, expand: false, expanded: null, expandSaid: true, estimate: { base: clipEstimate(spec, item.level, shot.seconds, t.repo).base, seconds: clipEstimate(spec, item.level, shot.seconds, t.repo).seconds }, settings: `${word.toLowerCase()} ${k} of ${item.pieces}${fix ? ", made again" : ""}, ${shot.seconds.toFixed(1)} s at ${item.level} quality, ${lv.width} by ${lv.height}, ${shot.frames} frames, ${lv.steps} steps` }
         : { ...item, pieces: 1, piece: { group, index: k, of: item.pieces }, seed: (item.seed + k - 1) % 2 ** 31, startFrom: prev?.id ?? null, after: prev?.id ?? null, startFile: k === 1 ? item.startFile : null, expand: k === 1 ? item.expand : false, expanded: item.expanded ?? null, expandSaid: k > 1 ? true : item.expandSaid, estimate: item.estimate ? { base: item.estimate.base, seconds: Math.round(item.estimate.seconds / item.pieces) } : null, settings: `piece ${k} of ${item.pieces}, ${item.each ?? item.settings}` };
       say(`${shot ? word : "Piece"} ${k} of ${item.pieces}${fix ? ", made again" : ""}${prev ? ", from the last frame of the one before" : piece.startInit ? ", from the photo the clip began from" : ""}`);
       const req = { item: piece, args: await requestArgs(piece, say) };
@@ -7259,7 +7271,7 @@ function forgetPictures(id) {
 // What a result is, in a line: what it answers, the words asked, what
 // Claude expanded them into, and the settings.
 function captionText(e) {
-  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.fix ? `${e.fix.scene ? "shot" : "piece"}${e.fix.redo.length === 1 ? "" : "s"} ${listText(e.fix.redo)} made again for it, the rest kept` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.refs ? `from ${e.refs} reference picture${e.refs === 1 ? "" : "s"}` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.shots ? `a scene of ${e.shots.length} shots laid out by Claude${e.shotsEdited ? " and edited" : ""}: ${e.shots.map((s, i) => `${i + 1} (${Number(s.seconds).toFixed(1)} s) ${s.text}`).join(" / ")}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
+  return [e.replyTo ? `In reply to an earlier ${e.kind === "video" ? "clip" : "picture"} ("${e.replyTo.text}")` : "", e.fix ? `${e.fix.scene ? "shot" : "piece"}${e.fix.redo.length === 1 ? "" : "s"} ${listText(e.fix.redo)} made again for it, the rest kept` : "", e.continues ? `Continues an earlier clip ("${e.continues.text}")` : "", e.refs ? `from ${e.refs} reference picture${e.refs === 1 ? "" : "s"}` : "", e.prompt, e.expanded ? `expanded by Claude${e.expandedEdited ? " and edited" : ""}: ${e.expanded}` : "", e.shots ? `a scene of ${e.shots.length} shots laid out by Claude${e.shotsEdited ? " and edited" : ""}: ${e.shots.map((s, i) => `${i + 1} (${Number(s.seconds).toFixed(1)} s) ${s.text}${s.negative ? ` (avoiding ${s.negative})` : ""}`).join(" / ")}` : "", e.settings ?? ""].filter(Boolean).join(" · ");
 }
 
 // The settings of a result kept before they were kept with it, read back
@@ -7360,13 +7372,36 @@ function parseShots(text) {
       note = n[1].trim();
       continue;
     }
+    const av = line.match(/^(?:[-\u2022]\s*)?avoid(?:\s*\d+)?\s*[:\u2013-]\s*(.+)$/i);
+    if (av) {
+      if (shots.length) shots.at(-1).negative = avoidWords(av[1]);
+      continue;
+    }
     const m = line.match(/^(?:[-\u2022]\s*)?(?:\d+[.)]\s*)?shot\s*\d+\s*[(\[]?\s*(?:about\s*|~\s*)?(\d+(?:\.\d+)?)\s*(?:\s*(?:s|sec|secs|seconds?)?\s*[\u2013-]\s*(\d+(?:\.\d+)?))?\s*(?:s|sec|secs|seconds?)?\s*[)\]]?\s*[:.\u2013-]\s*(.+)$/i);
     if (!m) continue;
     const a = Number(m[1]);
     const b = m[2] != null ? Number(m[2]) : null;
-    shots.push({ seconds: b != null && b > a ? b - a : a, text: m[3].trim() });
+    shots.push({ seconds: b != null && b > a ? b - a : a, text: m[3].trim(), negative: "" });
   }
   return { shots, note };
+}
+// An avoid list as written, or nothing: "nothing", "none" and "-" are empty.
+function avoidWords(text) {
+  const t = String(text ?? "").replace(/[*_`]/g, "").trim().replace(/\.$/, "");
+  return /^(nothing|none|n\/a|-|—)$/i.test(t) ? "" : t;
+}
+// Two avoid lists as one, each phrase once: the request's list for every
+// shot, then what the shot itself must keep out.
+function joinAvoid(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) for (const raw of String(list ?? "").split(/\s*,\s*/)) {
+    const phrase = raw.trim();
+    if (!phrase || seen.has(phrase.toLowerCase())) continue;
+    seen.add(phrase.toLowerCase());
+    out.push(phrase);
+  }
+  return out.join(", ");
 }
 
 // A clip's length in seconds from its settings, for Claude to write only

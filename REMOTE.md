@@ -782,6 +782,24 @@ Changed line; the rows are rebuilt and each row's LoRAs kept by place).
 What Claude changed is said in one line under the shot or the list. The
 rows go to the machine as they stand, unreviewed, as before.
 
+Each shot has its own avoid list as well (2026-10-22, later). The scene
+mode asks Claude for an "Avoid:" line under every Shot line: the few
+things the model is likeliest to slip into that shot (the movement cut
+before it, an extra person, a change of clothes or light between shots,
+a camera move), or the word nothing; the request's own avoid list is
+said to go with every shot and is not repeated. `parseShots` attaches
+the line to the shot before it (`negative`, "nothing" as empty). Each
+card shows it in an Avoid field under the words; `revise` takes the
+shot's list in and gives it back revised (an Avoid line between
+Description and Changed), `revise-all` the same per shot, and Fit the
+words to the LoRAs sends the shot's own list rather than the request's.
+A shot goes to the machine with `joinAvoid(item.negative, shot.negative)`:
+the request's list (the typed one, or the family's standard list above
+Low), then the shot's, each phrase once. The lists are kept with the
+preview (`pending.got.shots`), with the queued item (`item.shots`) and
+with the made clip (each piece's `negative` is the joined list), so a
+fix re-makes a shot with the list it had. Page only: a reload.
+
 ## LoRAs and fine-tunes for video models (2026-10-20, image 25)
 
 Every video model on the GPU has an optional "LoRAs and fine-tunes" fold
