@@ -299,10 +299,22 @@ body[data-mode="results"] .trait-search.big, body[data-mode="browse"] .trait-sea
 .reason.lead-reason h3 { font-size: 18px; color: var(--accent-ink); }
 .reason.lead-reason p { color: var(--ink); font-size: 15px; }
 .reason-note { margin: 14px auto 0; max-width: 640px; }
-body[data-mode="results"] #why, body[data-mode="browse"] #why, body[data-mode="results"] .flow, body[data-mode="browse"] .flow { display: none; }
+body[data-mode="results"] #why, body[data-mode="browse"] #why, body[data-mode="results"] .flow, body[data-mode="browse"] .flow, body[data-mode="results"] #cost, body[data-mode="browse"] #cost { display: none; }
+/* What paid assistants cost their makers, in public figures, between the search and the flowcharts. */
+.cost { text-align: center; padding: 10px 0 8px; margin: 6px 0 18px; }
+.cost h2 { margin: 0 0 8px; font-size: 26px; }
+.cost .lead { margin: 0 auto 18px; max-width: 640px; }
+.cost-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; text-align: left; }
+.cost-card { padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
+.cost-card .cost-figure { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.02em; color: var(--accent-ink); }
+.cost-card h3 { margin: 0; font-size: 15px; }
+.cost-card p { margin: 0; font-size: 14px; color: var(--muted); line-height: 1.5; }
+.cost-card a { margin-top: auto; font-size: 13px; }
+.cost-note { margin: 14px auto 0; max-width: 760px; font-size: 15px; line-height: 1.55; color: var(--muted); }
+.cost-note b { color: var(--ink); }
 
-/* The two flowcharts under the search: nodes on a dotted field, wired left to right. */
-.flow { text-align: center; padding: 26px 20px 14px; margin: 6px 0 18px; border: 1px solid var(--line); border-radius: var(--radius); background-color: var(--surface); background-image: radial-gradient(#d6dce5 1.2px, transparent 1.3px); background-size: 20px 20px; }
+/* The two flowcharts under the search: nodes on a plain card, wired left to right. */
+.flow { text-align: center; padding: 26px 20px 14px; margin: 6px 0 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .flow h2 { margin: 0 0 8px; font-size: 26px; }
 .flow .lead { margin: 0 auto 10px; max-width: 680px; }
 .flow-art { display: block; width: 100%; max-width: 1000px; height: auto; margin: 0 auto; overflow: visible; }

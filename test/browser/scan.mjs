@@ -232,8 +232,14 @@ await step("the page opens on a single search box", async () => {
   // Under the search, why to use it: the outage case first, then the rest; gone once a search is up.
   // The examples are the kinds of work a team would own up to.
   assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["coding help", "summarize documents", "transcribe meetings", "product photos", "video clips", "math and reasoning", "creative writing"]);
+  // Between the search and the flowcharts: what paid assistants cost their makers, each figure with its article.
+  assert.equal(await page.locator("#cost-title").innerText(), "The bill behind the chat window");
+  assert.deepEqual(await page.$$eval("#cost .cost-figure", (els) => els.map((e) => e.textContent)), ["$115 billion", "$8.7 billion", "$14 billion", "$9 billion"]);
+  assert.deepEqual(await page.$$eval("#cost .cost-card a", (els) => els.map((e) => [e.target, e.rel, /^https:\/\//.test(e.href)])), Array(4).fill(["_blank", "noopener", true]), "every figure links to its article");
+  assert.match(await page.locator("#cost .cost-note").innerText(), /it will be the user[\s\S]*The Boston Globe, April 2026[\s\S]*the only bill is for the computer or the rented GPU/);
   // Two flowcharts under the search: a day's work handed from model to model, and where it runs.
   assert.equal(await page.locator("#flow").isVisible(), true);
+  assert.equal(await page.$eval("#flow", (e) => getComputedStyle(e).backgroundImage), "none", "a plain card, no dotted field");
   assert.equal(await page.locator("#flow-title").innerText(), "A day's work, on open models");
   assert.deepEqual(await page.$$eval("#flow .node .label:not(.sub)", (els) => els.map((e) => e.textContent)), ["Hugging Face", "Notes model", "Coding model", "Video model"]);
   assert.equal(await page.$eval("#flow .pill text", (e) => e.textContent), "Assigned: the export script, with tests");
@@ -249,6 +255,7 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#results").isVisible(), true);
   assert.equal(await page.locator("#why").isVisible(), false, "the reasons step aside for the results");
   assert.equal(await page.locator("#flow").isVisible(), false, "and so do the flowcharts");
+  assert.equal(await page.locator("#cost").isVisible(), false, "and the cost figures");
   assert.match(await page.locator("#found-title").innerText(), /coding help/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");
