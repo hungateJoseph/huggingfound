@@ -658,7 +658,7 @@ function pickCard(p) {
   return `<div class="model" role="button" tabindex="0" data-id="${esc(p.id)}">
     <div class="name" title="${esc(p.id.split("/").pop())}">${esc(p.id.split("/").pop())}</div>
     <div class="summary">${esc(p.why)}</div>
-    ${p.speed ? `<div class="speed">${esc(p.speed)}</div>` : ""}
+    ${p.speed ? `<div class="speed" title="${esc(p.speed)}">${esc(p.speedWord || p.speed)}</div>` : ""}
     <div class="meta"><span class="pill makes">${esc(makes.text)}</span>${readsTag(p)}<span class="pill ${f.level}">${esc(f.text)}</span>${p.fast ? '<span class="pill fast">Fast, 4 steps</span>' : ""}${state.hidden.has(p.id) ? '<span class="pill hidden-by">Hidden by you</span>' : ""}</div>
   </div>`;
 }
@@ -723,7 +723,7 @@ function modelCard(m, wants = null) {
   return `<div class="model" role="button" tabindex="0" data-id="${esc(m.id)}">
     <div class="name" title="${esc(m.name)}">${esc(m.name)}</div>
     ${saidHtml(m)}
-    ${m.speed ? `<div class="speed">${esc(m.speed)}</div>` : ""}
+    ${m.speed ? `<div class="speed" title="${esc(m.speed)}">${esc(m.speedWord || m.speed)}</div>` : ""}
     <div class="meta">
       ${makesTag}
       ${readsTag(m)}
@@ -888,41 +888,72 @@ function renderModel(model, plan, choice = null) {
     return;
   }
 
-  // A chat model runs here or on a rented GPU; the two buttons switch the
-  // plan, and asking for a GPU without one leads to renting it.
-  if (choice) parts.push(whereHtml(choice));
-  if (choice && state.rentAsk === model.id && choice.where === "local") {
-    parts.push(rentAskHtml(choice, plan));
-  }
-  // The facts in one row: what it makes, the file, the fit, the speed.
-  const onMachine = plan.remote && (plan.runner === "ollama" || plan.tryWith?.agent);
-  parts.push(`<div class="facts">
-    <span class="pill makes">${esc(makesOf(model).text)}</span>
-    <span class="pill ${plan.fit.level}">${esc(plan.fit.text)}</span>
-    <span class="fact" title="${esc(plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : plan.file.repo ? `${plan.file.files.length} files, loaded as a folder by the diffusers library` : plan.file.name)}">${plan.file.folder ? `${plan.file.parts.length} files` : plan.file.repo ? `${plan.file.files.length} files` : esc(plan.file.name)}${plan.file.gb ? `, ${plan.file.gb.toFixed(plan.file.gb < 1 ? 2 : 1)} GB` : ""}</span>
-    <span class="fact">${plan.measured ? esc(plan.measured) : esc(plan.speed?.text ?? "")}</span>
-  </div>
-  ${onMachine ? `<p class="muted small">Runs on your rented GPU; your browser talks to the machine directly and nothing passes through ${state.hosted ? "this site" : "the app"}.</p>` : plan.measured ? "" : `<p class="muted small">${state.hosted ? "Speed is a guess for a typical laptop without a separate GPU." : "Speed is a guess for this computer until a real run measures it."}</p>`}`);
-  if (plan.fit.level === "no") parts.push(`<div class="notice warn">${state.hosted ? "Larger than a typical laptop has to spare." : "Larger than this computer has to spare; it may load slowly or not at all."}${choice && !choice.rented ? " A rented GPU holds it: pick On a rented GPU above." : choice ? " Pick On a rented GPU above." : ""}</div>`);
+  // The window in screens, one at a time: Fit (how big, whether it fits,
+  // how fast), Set up (the steps), Use (the try box) and What people say.
+  // "All at once" shows the lot in a column, as before, and is remembered.
   const onSite = state.hosted && !plan.remote;
-  if (onSite) parts.push(`<h3>How to run it</h3>`);
-  // One step on show at a time: the first one not done, with the done ones
-  // as a line each above it. Later steps wait until it is done, and an
-  // optional one is offered where it is used (the clip window's reference
-  // pictures), shown here only while it runs.
+  const onMachine = plan.remote && (plan.runner === "ollama" || plan.tryWith?.agent);
+  const ready = plan.steps.every((s) => s.done || s.optional);
+  const running = plan.steps.some((s) => s.running);
+  const hasTry = !onSite;
+  const panes = [["fit", "Fit"], ["setup", onSite ? "How to run it" : "Set up"], ...(hasTry ? [["use", "Use"]] : []), ["say", "What people say"]];
+  parts.push(`<nav class="panes-nav" id="panes-nav" aria-label="Parts of this window">${panes.map(([id, name], i) => `<button class="pane-tab" data-pane="${id}">${i < 3 && id !== "say" ? `<span class="pane-n">${i + 1}</span>` : ""}${esc(name)}</button>`).join("")}<button class="ghost pane-all" id="pane-all">${panesAll() ? "One at a time" : "All at once"}</button></nav>`);
+
+  // Fit: the size, the fit and the speed, each in a few words, and where to run it.
+  const fitLine = fitSentence(plan, choice);
+  const sizeText = plan.file.gb ? `${plan.file.gb.toFixed(plan.file.gb < 1 ? 2 : 1)} GB` : plan.file.folder ? `${plan.file.parts.length} files` : plan.file.repo ? `${plan.file.files.length} files` : "";
+  const fileText = plan.file.folder ? `${plan.file.parts.length} parts, merged into one file` : plan.file.repo ? `${plan.file.files.length} files, loaded as a folder` : plan.file.name;
+  const speedText = plan.measured ? esc(plan.measured) : `<span title="${esc(plan.speed?.text ?? "")}">${esc(plan.speed?.word || plan.speed?.text || "")}</span>`;
+  const fitPane = [];
+  if (choice) fitPane.push(whereHtml(choice));
+  if (choice && state.rentAsk === model.id && choice.where === "local") fitPane.push(rentAskHtml(choice, plan));
+  fitPane.push(`<div class="fit-card">
+    <div class="fit-size">${esc(sizeText)}</div>
+    <div class="fit-body">
+      <p class="fit-line ${plan.fit.level}">${esc(fitLine)}</p>
+      <p class="fit-speed"><span class="pill makes">${esc(makesOf(model).text)}</span><span class="fit-word">${speedText}</span></p>
+      <p class="muted small fit-file" title="${esc(fileText)}">${esc(fileText)}</p>
+    </div>
+  </div>`);
+  if (onMachine) fitPane.push(`<p class="muted small">Runs on your rented GPU; your browser talks to the machine directly and nothing passes through ${state.hosted ? "this site" : "the app"}.</p>`);
+  if (plan.fit.level === "no") fitPane.push(`<div class="notice warn">${state.hosted ? "Larger than a typical laptop has to spare." : "Larger than this computer has to spare; it may load slowly or not at all."}${choice && !choice.rented ? " A rented GPU holds it: pick On a rented GPU above." : choice ? " Pick On a rented GPU above." : ""}</div>`);
+  fitPane.push(`<div class="actions pane-actions"><button class="primary" id="pane-next" data-pane="${ready && hasTry ? "use" : "setup"}">${ready && hasTry ? "Use it" : onSite ? "How to run it" : running ? "See the set-up" : "Set it up"}</button><button class="ghost" data-pane="say">What people say</button></div>`);
+  parts.push(`<section class="pane" data-pane="fit">${fitPane.join("")}</section>`);
+
+  // Set up: one step on show at a time: the first one not done, with the
+  // done ones as a line each above it. Later steps wait until it is done,
+  // and an optional one is offered where it is used (the clip window's
+  // reference pictures), shown here only while it runs.
+  const setupPane = [];
   const current = plan.steps.findIndex((s) => !s.done && !s.optional);
-  const waiting = (s, i) => !s.running && (s.optional || (current >= 0 && i > current));
+  // On the site nothing runs, so the steps are instructions and all of them show; in the app one is on show at a time.
+  const waiting = (s, i) => !onSite && !s.running && (s.optional || (current >= 0 && i > current));
   const later = plan.steps.filter((s, i) => waiting(s, i) && !s.optional).length;
-  parts.push(`<ol class="steps" id="steps">${plan.steps.map((s, i) => stepHtml(s, i, waiting(s, i))).join("")}${later ? `<li class="steps-later muted small">Then ${later} more step${later === 1 ? "" : "s"}, shown when this one is done.</li>` : ""}</ol>`);
+  const stepsHtml = `<ol class="steps${onSite ? " manual" : ""}" id="steps">${plan.steps.map((s, i) => stepHtml(s, i, waiting(s, i))).join("")}${later ? `<li class="steps-later muted small">Then ${later} more step${later === 1 ? "" : "s"}, shown when this one is done.</li>` : ""}</ol>`;
+  if (onSite) {
+    // Two ways: HuggingFound downloads it onto a GPU rented by the hour, or the person does it by hand.
+    setupPane.push(`<div class="setup-ways">
+      ${choice && !choice.gpuOnly ? `<button class="way" id="way-rented"><b>Let HuggingFound download it</b><span class="pill good">Recommended</span><span class="muted">Onto a GPU rented by the hour. It is ready in a few minutes and you use it right here.</span></button>` : ""}
+      <details class="way manual">
+        <summary><b>Download it yourself</b><span class="muted">From Hugging Face, to run with ${esc(plan.runner === "ollama" ? "Ollama" : "the runner named below")} on your computer.</span></summary>
+        ${stepsHtml}
+        <details class="get-app hosted-only"><summary>Or let HuggingFound on your computer do these steps with one click.</summary><code>git clone https://github.com/hungateJoseph/huggingfound.git
+cd huggingfound
+npm install
+npm start</code></details>
+      </details>
+    </div>`);
+  } else {
+    setupPane.push(stepsHtml);
+  }
   queueMicrotask(() => {
     for (const [i, s] of plan.steps.entries()) if (s.running && $(`#steps .step[data-index="${i}"]`)) followStep(model, plan, i, s.running);
   });
-  if (onSite) parts.push(`<div class="get-app hosted-only"><b>HuggingFound on your computer</b> does these steps with one click and opens a try box here. Needs Node 20 or newer.<code>git clone https://github.com/hungateJoseph/huggingfound.git
-cd huggingfound
-npm install
-npm start</code></div>`);
-  if (!onSite) parts.push(`<div class="try" id="try"></div>`);
-  parts.push(`<div class="voices" id="voices"><h3>What people say</h3><p class="muted small">Reading the model card and the community discussions</p></div>`);
+  if (hasTry && ready) setupPane.push(`<div class="actions pane-actions"><button class="primary" data-pane="use">Use it</button></div>`);
+  parts.push(`<section class="pane" data-pane="setup">${setupPane.join("")}</section>`);
+
+  if (hasTry) parts.push(`<section class="pane" data-pane="use"><div class="try" id="try"></div></section>`);
+  parts.push(`<section class="pane" data-pane="say"><div class="voices" id="voices"><h3>What people say</h3><p class="muted small">Reading the model card and the community discussions</p></div></section>`);
   body.innerHTML = parts.join("");
   loadVoices(model).catch((err) => {
     const box = $("#voices");
@@ -933,8 +964,59 @@ npm start</code></div>`);
     btn.addEventListener("click", () => runStep(model, plan, Number(btn.dataset.index)));
   }
   for (const btn of body.querySelectorAll("[data-where]")) btn.addEventListener("click", () => chooseWhere(model.id, btn.dataset.where));
+  body.querySelector("#way-rented")?.addEventListener("click", () => {
+    state.pane.set(model.id, "fit");
+    chooseWhere(model.id, "rented");
+  });
+  for (const btn of body.querySelectorAll("[data-pane]:not(.pane)")) btn.addEventListener("click", () => showPane(model.id, btn.dataset.pane, true));
+  $("#pane-all").addEventListener("click", () => {
+    setPanesAll(!panesAll());
+    renderModel(model, plan, choice);
+  });
   wireRentAsk(body, model, choice);
   renderTry(model, plan);
+  // Which screen: a step running or just finished keeps Set up, a model
+  // ready to use opens on Use, and a model opened for the first time on Fit.
+  const was = state.pane.get(model.id);
+  showPane(model.id, was === "setup" && ready && hasTry && !running ? "use" : was ?? (running ? "setup" : ready && hasTry ? "use" : "fit"));
+}
+
+// The screen on show for each model this session, and the all-at-once
+// choice kept in this browser.
+state.pane = new Map();
+function panesAll() {
+  try {
+    return localStorage.getItem("hf:window") === "all";
+  } catch {
+    return false;
+  }
+}
+function setPanesAll(all) {
+  try {
+    if (all) localStorage.setItem("hf:window", "all");
+    else localStorage.removeItem("hf:window");
+  } catch {}
+}
+function showPane(id, name, asked = false) {
+  const body = $("#modal-body");
+  if (!body.querySelector(`.pane[data-pane="${name}"]`)) name = "fit";
+  state.pane.set(id, name);
+  body.classList.toggle("staged", !panesAll());
+  for (const pane of body.querySelectorAll(".pane")) pane.classList.toggle("on", pane.dataset.pane === name);
+  for (const tab of body.querySelectorAll(".pane-tab")) tab.classList.toggle("on", tab.dataset.pane === name);
+  if (!asked) return;
+  if (panesAll()) body.querySelector(`.pane[data-pane="${name}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  else $("#modal").scrollTop = 0;
+}
+
+// How big it is and whether it fits, in one sentence for this machine.
+function fitSentence(plan, choice) {
+  const level = plan.fit.level;
+  if (level === "unknown") return "Size known after a scan.";
+  if (plan.remote) return { good: "Fits your rented GPU.", tight: "Fits your rented GPU, just.", no: "Too big for your rented GPU." }[level];
+  if (state.hosted) return { good: "Runs on a 16 GB laptop.", tight: "Runs on a 16 GB laptop with other apps closed.", no: "Needs 32 GB of memory or a big GPU." }[level];
+  const here = /mac/i.test(state.machine?.os ?? "") ? "this Mac" : "this computer";
+  return { good: `Fits ${here} with room to spare.`, tight: `Fits ${here} if other apps are closed.`, no: `Too big for ${here}.` }[level];
 }
 
 // ---- where a chat model runs -------------------------------------------------
@@ -1152,10 +1234,16 @@ async function loadVoices(model) {
   const threads = v.discussions.length
     ? `<ul>${v.discussions.slice(0, 12).map((d) => `<li><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a> <span class="who">${d.comments} comment${d.comments === 1 ? "" : "s"}${d.status === "closed" ? ", closed" : ""}</span>${(d.comments_text ?? []).map((c) => `<p>${esc(c.author ? c.author + ": " : "")}${esc(c.text)}</p>`).join("")}</li>`).join("")}</ul>`
     : `<p class="muted small">No community discussions on this repository yet.</p>`;
+  // What users say, as one list under one label; the author's words stay in
+  // the sources, and settings advice goes to the try box, where it is used.
   const lines = v.summary?.long ?? [];
-  const first = lines.slice(0, 3);
-  const rest = lines.slice(3);
-  const summary = lines.length ? `<div class="said">${first.map(lineHtml).join("")}${rest.length ? `<details class="more-said"><summary>${rest.length} more</summary>${rest.map(lineHtml).join("")}</details>` : ""}</div>` : `<p class="muted small">Nothing said about this model yet.</p>`;
+  const reviews = lines.filter((l) => !/^(Author|In HuggingFound|Not here yet):/.test(l)).map((l) => l.replace(/^Users:\s*/, ""));
+  state.advice.set(model.id, lines.filter((l) => /^(In HuggingFound|Not here yet):/.test(l)));
+  renderAdvice($("#try"), model.id);
+  const first = reviews.slice(0, 3);
+  const rest = reviews.slice(3);
+  const item = (l) => `<li>${esc(l)}</li>`;
+  const summary = reviews.length ? `<div class="reviews"><b class="reviews-label">User reviews</b><ul>${first.map(item).join("")}</ul>${rest.length ? `<details class="more-said"><summary>${rest.length} more</summary><ul>${rest.map(item).join("")}</ul></details>` : ""}</div>` : `<p class="muted small">No user reviews yet.</p>`;
   box.innerHTML = `<h3>What people say</h3>${summary}<details><summary>Sources on Hugging Face</summary>${card}${threads}<p class="muted small">From the community tab on Hugging Face; these are other users' words, not a review.</p></details><details open><summary>Elsewhere</summary><div class="web" id="voices-web"><p class="muted small">Looking on Civitai, GitHub, Hacker News, Lemmy, YouTube and Reddit</p></div></details>`;
   const isImage = state.plan?.runner === "sd" || (model.categories ?? []).includes("images");
   const web = await api.get(`/api/voices/web?id=${encodeURIComponent(model.id)}${isImage ? "&images=1" : ""}`);
@@ -1163,21 +1251,42 @@ async function loadVoices(model) {
   if (!webBox || state.open !== model.id) return;
   const civ = web.civitai.length
     ? `<h4>On Civitai</h4><p class="muted small">Pages whose name matches this model; merges and re-uploads share names, so check the link.</p>` + web.civitai.map((c) => `<div class="civ"><div class="name"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.nsfw ? ' <span class="pill adult">18+</span>' : ""}</div><div class="stats">${fmt(c.thumbsUp)} thumbs up, ${fmt(c.thumbsDown)} down, ${fmt(c.comments)} comments, ${fmt(c.downloads)} downloads${c.creator ? `, by ${esc(c.creator)}` : ""}</div>${c.description ? `<div class="desc">${esc(c.description)}</div>` : ""}</div>`).join("")
-    : web.civitaiError ? `<p class="muted small">Civitai did not answer: ${esc(web.civitaiError)}</p>` : isImage ? `<p class="muted small">No matching page on Civitai.</p>` : "";
+    : "";
   const prompts = web.civitaiPrompts?.length
     ? `<h4>What people make with it on Civitai</h4><p class="muted small">The most liked pictures posted under the matching page, with the prompts their makers used.</p><ul class="posts">${web.civitaiPrompts.slice(0, 6).map((i) => `<li><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.prompt)}</a><div class="who">${fmt(i.reactions)} reactions, ${fmt(i.comments)} comments${i.user ? `, by ${esc(i.user)}` : ""}${i.nsfw ? ", 18+" : ""}</div></li>`).join("")}</ul>`
     : "";
-  const section = (title, items, err, configured, who, setup) => configured === false
-    ? `<p class="muted small">${esc(setup)}</p>`
-    : err ? `<p class="muted small">${esc(title)} did not answer: ${esc(err)}</p>`
-    : items.length ? `<h4>On ${esc(title)}</h4><ul class="posts">${items.slice(0, 8).map((p) => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a><div class="who">${esc(who(p))}</div>${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ""}</li>`).join("")}</ul>`
-    : `<p class="muted small">Nothing on ${esc(title)} names this model.</p>`;
+  const section = (title, items, err, configured, who) => (configured === false || err || !items.length
+    ? ""
+    : `<h4>On ${esc(title)}</h4><ul class="posts">${items.slice(0, 8).map((p) => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a><div class="who">${esc(who(p))}</div>${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ""}</li>`).join("")}</ul>`);
   const gh = section("GitHub", web.github ?? [], web.githubError, true, (p) => `${p.repo}, ${p.kind}, ${p.state}, ${fmt(p.comments)} comments`);
   const hn = section("Hacker News", web.hn ?? [], web.hnError, true, (p) => `${p.kind}, ${fmt(p.points)} points, ${fmt(p.comments)} comments`);
   const lem = section("Lemmy", web.lemmy ?? [], web.lemmyError, true, (p) => `${p.community}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`);
-  const yt = section("YouTube", web.youtube ?? [], web.youtubeError, web.youtubeConfigured, (v) => `${v.channel}${v.views != null ? `, ${fmt(v.views)} views` : ""}`, "YouTube videos need a free API key in Settings.");
-  const red = section("Reddit", web.reddit ?? [], web.redditError, web.redditConfigured, (p) => `r/${p.subreddit}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`, "Reddit posts need a free app id in Settings.");
-  webBox.innerHTML = civ + prompts + gh + hn + lem + yt + red + (web.took != null ? `<p class="muted small">Outside sources answered in ${(web.took / 1000).toFixed(1)} s${web.cached ? "" : "; kept for a week"}.</p>` : `<p class="muted small">From the copy kept this week.</p>`);
+  const yt = section("YouTube", web.youtube ?? [], web.youtubeError, web.youtubeConfigured, (v) => `${v.channel}${v.views != null ? `, ${fmt(v.views)} views` : ""}`);
+  const red = section("Reddit", web.reddit ?? [], web.redditError, web.redditConfigured, (p) => `r/${p.subreddit}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`);
+  const found = civ + prompts + gh + hn + lem + yt + red;
+  // Nothing found elsewhere: the fold goes, rather than a list of places that had nothing.
+  webBox.innerHTML = found;
+  webBox.closest("details").hidden = !found;
+}
+
+// Settings people suggest for a model, shown in its try box once there is
+// one: "In HuggingFound" lines say where the setting goes here, "Not here
+// yet" lines name the ones HuggingFound cannot set.
+state.advice = new Map();
+function renderAdvice(box, id) {
+  if (!box || !id || state.open !== id) return;
+  box.querySelector(".advice")?.remove();
+  const lines = state.advice.get(id) ?? [];
+  if (!lines.length) return;
+  const el = document.createElement("div");
+  el.className = "advice";
+  el.innerHTML = lines.map((l) => {
+    const m = /^(In HuggingFound|Not here yet):\s*(.*)$/.exec(l);
+    return `<p class="small ${m[1] === "Not here yet" ? "muted" : ""}"><b>${m[1] === "Not here yet" ? "Not here yet" : "Tip"}</b> ${esc(m[2])}</p>`;
+  }).join("");
+  const after = box.querySelector(".instructions") ?? box.querySelector("h3") ?? box.querySelector(".try-head");
+  if (after) after.after(el);
+  else box.prepend(el);
 }
 
 function stepHtml(s, i, hidden = false) {
@@ -1450,7 +1559,7 @@ function renderTry(model, plan) {
     const left = plan.steps.filter((s) => !s.done && !s.optional).length;
     // What was made with the model before stays on show here, whatever
     // the machine is doing now.
-    box.innerHTML = `<p class="muted small">${left === plan.steps.length ? "Run the steps above and a try box appears here." : `${left} step${left === 1 ? "" : "s"} left before you can try it.`}</p><div id="kept"></div>`;
+    box.innerHTML = `<p class="muted small">${left === plan.steps.length ? "Run the set-up steps and a try box appears here." : `${left} step${left === 1 ? "" : "s"} left before you can try it.`}</p><div id="kept"></div>`;
     renderKept(box, model.id);
     return;
   }
@@ -1458,6 +1567,7 @@ function renderTry(model, plan) {
   if (plan.tryWith.kind === "image" || plan.tryWith.kind === "video") renderImage(box, plan.tryWith);
   if (plan.tryWith.kind === "transcribe") renderTranscribe(box, plan.tryWith);
   renderRemove(box, model, plan);
+  renderAdvice(box, model.id);
 }
 
 // Models are gigabytes each; once tried, one click takes them off the disk.

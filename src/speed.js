@@ -38,14 +38,18 @@ export function guessSizeGb({ id, runnerId, gb }) {
   return null;
 }
 
+// One word for a speed, for the card and the model window; the full
+// estimate stays behind it as a tooltip.
+const word = (value, [fast, quick, slow]) => (value <= fast ? "Fast" : value <= quick ? "Quick" : value <= slow ? "Slow" : "Very slow");
+
 export function estimate({ runnerId, sizeGb, fileName = "", machine, xl = false, steps = null }) {
   const tier = speedTier(machine);
-  if (!sizeGb) return { text: "Speed unknown until the file size is known", seconds: null };
+  if (!sizeGb) return { text: "Speed unknown until the file size is known", word: "", seconds: null };
   if (runnerId === "ollama") {
     const tokensPerSecond = Math.max(0.5, (tier * 100 * 0.6) / sizeGb);
     const short = Math.round(200 / tokensPerSecond);
     const words = Math.max(1, Math.round(tokensPerSecond * 0.75));
-    return { text: `About ${words} word${words === 1 ? "" : "s"} a second; a short answer in ${duration(short)}`, seconds: short, tokensPerSecond };
+    return { text: `About ${words} word${words === 1 ? "" : "s"} a second; a short answer in ${duration(short)}`, word: word(short, [10, 25, 60]), seconds: short, tokensPerSecond };
   }
   if (runnerId === "sd") {
     const turbo = /turbo|lightning|lcm|hyper/i.test(fileName);
@@ -56,13 +60,13 @@ export function estimate({ runnerId, sizeGb, fileName = "", machine, xl = false,
     const perStep = (isXl && !turbo ? 7.4 : 5.4) / tier;
     const seconds = Math.round(n * perStep + 10);
     const side = isXl && !turbo ? 768 : 512;
-    return { text: `About ${duration(seconds)} per ${side} by ${side} image${turbo ? " (a fast model: 4 steps)" : ""}, longer the first time`, seconds };
+    return { text: `About ${duration(seconds)} per ${side} by ${side} image${turbo ? " (a fast model: 4 steps)" : ""}, longer the first time`, word: word(seconds, [25, 75, 240]), seconds };
   }
   if (runnerId === "whisper") {
     const perMinute = Math.max(1, Math.round((4 * (sizeGb / 0.14)) / Math.max(1, tier)));
-    return { text: `About ${duration(perMinute)} per minute of audio`, seconds: perMinute };
+    return { text: `About ${duration(perMinute)} per minute of audio`, word: word(perMinute, [15, 45, 120]), seconds: perMinute };
   }
-  return { text: "", seconds: null };
+  return { text: "", word: "", seconds: null };
 }
 
 export function duration(seconds) {

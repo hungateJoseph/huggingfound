@@ -174,6 +174,8 @@ const base = `http://127.0.0.1:${server.address().port}`;
 
 const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+// The model window's screens are shown all at once in these steps; the staged window has a step of its own.
+await page.addInitScript(() => localStorage.setItem("hf:window", "all"));
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 // Deliberate 400s (a rejected setting) log as resource errors; those are not page bugs.
@@ -320,7 +322,8 @@ await step("a scan fills the categories from the hub", async () => {
   await page.click("#scan");
   await page.waitForSelector("#scan-title:not([hidden])");
   assert.match(await page.locator("#scan-status").innerText(), new RegExp(`${MODELS.length} models`));
-  assert.match(await page.locator("#models .model .speed").first().innerText(), /About/);
+  assert.match(await page.locator("#models .model .speed").first().innerText(), /^(Fast|Quick|Slow|Very slow)$/);
+  assert.match(await page.$eval("#models .model .speed", (e) => e.title), /^About/);
   const names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Llama-3.2-3B-Instruct-GGUF"));
   assert.ok(!names.includes("Llama-3.1-8B-Instruct"), "python-only models stay hidden while the runnable filter is on");
@@ -446,12 +449,54 @@ await step("opening a model shows its plan with the install, start and pull step
   // One step on show at a time: the rest wait until it is done.
   assert.deepEqual(await page.$$eval("#steps .step", (els) => els.map((e) => e.hidden)), [false, true, true]);
   assert.equal(await page.locator("#steps .steps-later").innerText(), "Then 2 more steps, shown when this one is done.");
-  assert.match(await page.locator("#modal-body .facts").innerText(), /Q4_K_M\.gguf/);
-  assert.match(await page.locator("#modal-body .facts").innerText(), /words a second/i);
+  assert.match(await page.locator("#modal-body .fit-card").innerText(), /Q4_K_M\.gguf/);
+  assert.equal(await page.locator("#modal-body .fit-size").innerText(), "2.0 GB");
+  assert.equal(await page.locator("#modal-body .fit-line").innerText(), "Fits this Mac with room to spare.");
+  assert.match(await page.locator("#modal-body .fit-word").innerText(), /^(Fast|Quick|Slow|Very slow)$/, "the speed in a word");
+  assert.match(await page.$eval("#modal-body .fit-word span", (e) => e.title), /words a second/, "the sentence behind it");
   assert.match(await page.locator("#steps .step code").first().innerText(), /ollama/);
-  assert.match(await page.locator("#try").innerText(), /Run the steps above/);
+  assert.match(await page.locator("#try").innerText(), /Run the set-up steps/);
   await page.waitForFunction(() => /roleplay and story writing/.test(document.querySelector("#voices")?.textContent ?? ""));
   assert.match(await page.locator("#voices").innerText(), /keeps characters straight/);
+  // One label over the users' lines, and the author's words kept to the sources.
+  assert.equal(await page.$eval("#voices .reviews-label", (e) => e.textContent), "User reviews");
+  assert.equal(await page.locator("#voices .line.author").count(), 0);
+  assert.doesNotMatch(await page.locator("#voices .reviews").innerText(), /^Users\b/m);
+});
+
+await step("opened for the first time, a model's window shows one screen at a time: how big it is and whether it fits, then the steps, then the try box", async () => {
+  const fresh = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await fresh.goto(base);
+  await fresh.click("#nav-browse");
+  await fresh.click("#home-categories [data-cat=easy]");
+  await fresh.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
+  await fresh.waitForSelector("#modal-body .fit-card");
+  assert.deepEqual(await fresh.$$eval("#panes-nav .pane-tab", (els) => els.map((e) => [e.textContent.replace(/^\d/, ""), e.classList.contains("on")])), [["Fit", true], ["Set up", false], ["Use", false], ["What people say", false]]);
+  assert.equal(await fresh.locator(".pane[data-pane=fit]").isVisible(), true);
+  assert.equal(await fresh.locator("#steps").isVisible(), false, "the steps wait for the next screen");
+  assert.equal(await fresh.locator("#voices").isVisible(), false);
+  assert.equal(await fresh.locator("#modal-body .fit-size").innerText(), "2.0 GB");
+  assert.equal(await fresh.locator("#modal-body .fit-line").innerText(), "Fits this Mac with room to spare.");
+  assert.equal(await fresh.locator("#pane-next").innerText(), "Set it up");
+  await fresh.click("#pane-next");
+  assert.equal(await fresh.locator("#steps").isVisible(), true);
+  assert.equal(await fresh.locator(".pane[data-pane=fit]").isVisible(), false);
+  assert.equal(await fresh.$$eval("#steps .step:not([hidden])", (els) => els.length), 1, "one step on show");
+  await fresh.click(".pane-tab[data-pane=say]");
+  await fresh.waitForFunction(() => /roleplay and story writing/.test(document.querySelector("#voices")?.textContent ?? ""));
+  assert.equal(await fresh.locator("#steps").isVisible(), false);
+  // Closed and opened again, the window comes back on the screen it was left on.
+  await fresh.click("#close-modal");
+  await fresh.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
+  await fresh.waitForSelector("#modal-body .pane-tab.on");
+  assert.equal(await fresh.locator(".pane-tab.on").innerText(), "What people say");
+  assert.equal(await fresh.locator("#modal-body .fit-card").isVisible(), false, "the fit screen stays behind");
+  // "All at once" lays the screens out in a column, and is remembered.
+  await fresh.click("#pane-all");
+  assert.equal(await fresh.locator("#steps").isVisible(), true);
+  assert.equal(await fresh.locator("#voices").isVisible(), true);
+  assert.equal(await fresh.evaluate(() => localStorage.getItem("hf:window")), "all");
+  await fresh.close();
 });
 
 await step("running a step asks first, and a dismissed prompt runs nothing", async () => {
@@ -971,10 +1016,10 @@ await step("cards carry what users say and one tag for what the model makes; the
   await card.locator("button[data-more]").click();
   // The window still names the author and the runner, and keeps the facts to one row.
   await card.locator(".name").click();
-  await page.waitForSelector("#modal-body .facts");
+  await page.waitForSelector("#modal-body .fit-card");
   assert.match(await page.locator("#modal-sub").innerText(), /bartowski/);
   assert.equal(await page.locator("#modal-body .spec").count(), 0, "no grid of boxes");
-  assert.match(await page.locator("#modal-body .facts").innerText(), /Text only[\s\S]*GB/);
+  assert.match(await page.locator("#modal-body .fit-card").innerText(), /GB[\s\S]*Text only/);
   await page.keyboard.press("Escape");
 });
 
@@ -1053,7 +1098,7 @@ await step("renting from the model window preselects its size, and the bar shows
   let titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
   assert.deepEqual(titles, ["Download the model on the chat server (25.6 GB)"]);
   assert.match(await page.locator("#steps .step .text").innerText(), /rented GPU is still starting/);
-  assert.match(await page.locator("#modal-body .facts").innerText(), /Fits the server's 48 GB GPU/);
+  assert.equal(await page.locator("#modal-body .fit-line").innerText(), "Fits your rented GPU.");
   // The other button plans it for this computer again, machine or no machine.
   await page.click('.where-opt[data-where="local"]');
   await page.waitForFunction(() => document.querySelectorAll("#steps .step").length >= 3);
@@ -1348,6 +1393,7 @@ await new Promise((resolve) => hosted.listen(0, "127.0.0.1", resolve));
 const hostedBase = `http://127.0.0.1:${hosted.address().port}`;
 await hosted.refresh();
 const visitor = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+await visitor.addInitScript(() => localStorage.setItem("hf:window", "all"));
 visitor.on("pageerror", (e) => errors.push(`hosted: ${e.message}`));
 visitor.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(`hosted: ${m.text()}`));
 visitor.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));

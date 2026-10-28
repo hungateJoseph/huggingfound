@@ -874,3 +874,54 @@ details.levels-note summary { cursor: pointer; }
 .msg-files { display: grid; gap: 4px; margin-top: 8px; font-size: 13px; }
 .msg-file summary { cursor: pointer; color: var(--muted); }
 .msg-file pre { margin: 4px 0 0; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.4; padding: 8px; border-radius: 6px; background: var(--bg); white-space: pre; }
+
+/* The model window in screens: a row of tabs, one screen on show unless "All at once" is chosen. */
+.panes-nav { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 0 0 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.pane-tab { border: 0; background: transparent; padding: 6px 10px; border-radius: 999px; color: var(--muted); font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 7px; }
+.pane-tab .pane-n { width: 20px; height: 20px; border-radius: 50%; background: var(--chip); color: var(--muted); font-size: 11.5px; font-weight: 700; display: inline-grid; place-items: center; }
+.pane-tab.on { background: var(--ink); color: #fff; }
+.pane-tab.on .pane-n { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.pane-tab:hover:not(.on) { background: var(--chip); }
+.pane-all { margin-left: auto; font-size: 12.5px; padding: 4px 10px; }
+#modal-body.staged .pane:not(.on) { display: none; }
+#modal-body:not(.staged) .pane + .pane { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.pane-actions { margin-top: 16px; }
+/* All at once: the screens in a column, each with its own rule; the "next" buttons are not needed. */
+#modal-body:not(.staged) .pane-actions { display: none; }
+#modal-body:not(.staged) .try, #modal-body:not(.staged) .voices { border-top: 0; padding-top: 0; margin-top: 0; }
+.fit-card { display: grid; grid-template-columns: auto 1fr; gap: 6px 22px; align-items: center; padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); margin: 4px 0 12px; }
+.fit-size { font: 600 40px/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.fit-line { margin: 0; font: 600 17px/1.3 var(--display); }
+.fit-line.good { color: var(--ok); }
+.fit-line.tight { color: var(--warn); }
+.fit-line.no { color: var(--bad); }
+.fit-speed { margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.fit-word { font-weight: 600; }
+.fit-file { margin: 6px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 600px) { .fit-card { grid-template-columns: 1fr; } }
+
+/* On the site, Set up is a choice: HuggingFound downloads it onto a rented GPU, or the person does it by hand. */
+.setup-ways { display: grid; gap: 10px; }
+.way { display: grid; gap: 4px; text-align: left; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font: inherit; color: var(--ink); }
+.way b { font-size: 15px; }
+.way .pill { justify-self: start; }
+.way .muted { font-size: 14px; }
+button.way:hover { border-color: var(--ink); }
+details.way > summary { cursor: pointer; display: grid; gap: 4px; list-style: none; }
+details.way > summary::-webkit-details-marker { display: none; }
+details.way > summary::after { content: "Show how"; font-size: 13px; color: var(--accent-ink); }
+details.way[open] > summary::after { content: "Hide"; }
+details.way .steps { margin-top: 12px; }
+.steps.manual .step .text { display: none; }
+.steps.manual .step { grid-template-columns: 28px 1fr; }
+details.way .get-app { margin-top: 10px; }
+
+/* User reviews in the model window: one label, a plain list. Settings advice sits in the try box. */
+.reviews { margin: 0 0 10px; }
+.reviews-label { display: block; font: 600 11.5px/1.4 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.voices .reviews ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; list-style: disc; }
+.voices .reviews li { border: 0; border-radius: 0; padding: 0; font-size: 14px; }
+.reviews .more-said ul { margin-top: 6px; }
+.advice { margin: 8px 0 10px; padding: 8px 12px; border-left: 2px solid var(--accent); }
+.advice p { margin: 2px 0; }
+.advice b { color: var(--accent-ink); margin-right: 4px; }

@@ -305,6 +305,30 @@ The machine takes two to four minutes to start. Meanwhile:
   every heading. The scan's first step checks the hero, the font, the
   demo's finished state, the tiles, the figures and that it all steps
   aside for results.
+- The model window in screens (2026-10-28). `renderModel` lays the runnable
+  window out as panes with a tab row (`.panes-nav`): Fit (`.fit-card`:
+  the size large, one sentence from `fitSentence()` on whether it fits
+  this Mac, a 16 GB laptop or the rented GPU, what it makes, and the
+  speed as one word from `estimate().word`, Fast, Quick, Slow or Very
+  slow, with the sentence as its tooltip; the Where buttons; a Set it up
+  or Use it button), Set up (`#steps`), Use (`#try`) and What people say
+  (`#voices`). One pane shows at a time (`#modal-body.staged`); the
+  screen a model was left on is kept for the session (`state.pane`), a
+  running step keeps Set up, and a ready model opens on Use. "All at
+  once" (`hf:window` = all in localStorage) lays them out in a column,
+  as the window was before; the scan sets that for its pages and tests
+  the staged window in a step of its own. Cards show the same one word
+  (`speedWord` from the server) with the sentence as the title. On the
+  site, Set up is two ways: "Let HuggingFound download it", which picks
+  the rented GPU, and "Download it yourself", a fold with every step's
+  title and command (no step text, all steps shown, since nothing is
+  marked done there) and the app's install commands folded under it. In
+  What people say the users' lines sit under one "User reviews" label;
+  the author's line is gone (the card text stays under Sources); the
+  "In HuggingFound" and "Not here yet" settings advice is shown in the
+  try box instead (`renderAdvice`, `state.advice`), under the chat's
+  instructions, once the model is set up. Elsewhere shows only the
+  sources that had something; with nothing found the fold is hidden.
 - Placement: twice in a day a two-card and a one-card H200 pod in EUR-IS-4
   sat listed as running with no container for ten minutes and more (the
   proxy answering 404 on both ports), while a pod in US-NC-1 came up in

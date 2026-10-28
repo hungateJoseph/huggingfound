@@ -446,7 +446,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         scan: readScan(scanFile, { meta: true }),
         voices: voicesMeta(),
         summarizer: writtenSummaries ? await summarizerModel(fetchImpl) : null,
-        picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }).text })),
+        picks: PICKS.map((p) => ({ ...p, ...speedOf({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }) })),
         speedTier: speedTier(machine),
       });
     }
@@ -616,7 +616,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       hub = hubResult;
       if (!full && Array.isArray(asked.civitai)) asked.civitai = asked.civitai.filter((i) => !i.nsfw);
       const hideRefusing = url.searchParams.get("showRefusing") !== "1";
-      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, speed: estimate({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }).text })).filter((p) => full || forVisitors(p)), voices: index, hideRefusing });
+      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, ...speedOf({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }) })).filter((p) => full || forVisitors(p)), voices: index, hideRefusing });
       return send(res, 200, { q, ...ranked, models: ranked.models.slice(0, 60), hideRefusing, hubError, gathered: Object.keys(index).length, scanned: scan.models.length, took: Date.now() - started, ...asked });
     }
     if (req.method === "GET" && url.pathname === "/api/search") {
@@ -1459,7 +1459,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
     const quality = qualityScore(m);
     if (!m.runner?.easy) return { ...m, speed: "", quality };
     const sizeGb = guessSizeGb({ id: m.id, runnerId: m.runner.id });
-    return { ...m, quality, speed: sizeGb ? estimate({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine: ctx ? machineFor(m.runner.id, ctx) : machine }).text : "" };
+    return { ...m, quality, ...(sizeGb ? speedOf({ runnerId: m.runner.id, sizeGb, fileName: m.name, machine: ctx ? machineFor(m.runner.id, ctx) : machine }) : { speed: "", speedWord: "" }) };
   }
 
   // whisper.cpp is happiest with 16 kHz wav. Other formats go through
@@ -1517,6 +1517,12 @@ function stream(res, run) {
   };
   run.listeners.add(listener);
   res.on("close", () => run.listeners.delete(listener));
+}
+
+// A card's speed: the sentence, and the one word shown in its place.
+function speedOf(args) {
+  const e = estimate(args);
+  return { speed: e.text, speedWord: e.word ?? "" };
 }
 
 function serveFile(res, file, root) {

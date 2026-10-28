@@ -629,7 +629,7 @@ function serverDownNote(rented) {
 function installNote(runner, machine, detected) {
   // The hosted site does not know the visitor's system, so it names every one.
   if (machine.hosted) {
-    if (runner === "ollama") return "HuggingFound downloads the official build for your system into ~/HuggingFound/bin; by hand, get it from ollama.com/download.";
+    if (runner === "ollama") return "Get it from ollama.com/download.";
     return "HuggingFound builds it into ~/HuggingFound/bin on a Mac or Linux (needs git and a C compiler) and downloads a ready-made build on Windows.";
   }
   if (runner === "ollama") {
