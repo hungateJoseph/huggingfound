@@ -292,9 +292,11 @@ The machine takes two to four minutes to start. Meanwhile:
   outage story beside four one-line reasons on rules (`#why`). In results
   and browse modes the band shrinks to the search and the category line
   and the rest of the home sections are hidden by `body[data-mode]`.
-  Palette: warm paper, near-black ink, one vermilion (`--accent`) for
-  links, live marks and sparks; primary buttons are ink; the rent bar is
-  dark. The things the "vibe coded" write-ups name were taken out on
+  Palette: paper, a deep blue-black (`--dark`, the bar and the band run
+  into each other, with a faint coral glow top right), and one coral
+  (`--accent`) for primary buttons, links, live marks and sparks. The bar
+  holds only the name (a link home) and Sign in or the account; Settings
+  and Check an answer sit at the end of the category line, on every view. The things the "vibe coded" write-ups name were taken out on
   purpose: the Tailwind slate-and-blue defaults, emoji as icons, feature
   cards in a grid, cards around every section, all-caps section titles,
   the headline-then-softer-subheadline hero, and the paragraph under

@@ -16,17 +16,11 @@
 <body>
   <header class="top">
     <div class="wrap">
-      <a class="brand" href="/">
+      <a class="brand" id="nav-home" href="/">
         <img src="icon.svg" alt="" width="28" height="28">
         <span>HuggingFound</span>
       </a>
-      <nav class="views">
-        <button class="view-link on" id="nav-home">Search</button>
-        <a class="view-link" href="/about.html">About</a>
-      </nav>
       <div class="top-right">
-        <button class="ghost hosted-only" id="open-checker">Check an answer</button>
-        <button class="ghost" id="open-settings">Settings</button>
         <button class="primary" id="sign-in" hidden>Sign in</button>
         <div class="account" id="account" hidden></div>
       </div>
@@ -73,6 +67,10 @@
       <span class="eyebrow">Browse</span>
       <span id="home-categories"></span>
       <button class="chip strong" id="nav-browse">Everything</button>
+      <span class="utility">
+        <button class="ghost hosted-only" id="open-checker">Check an answer</button>
+        <button class="ghost" id="open-settings">Settings</button>
+      </span>
     </div>
   </section>
 

@@ -12,15 +12,15 @@
 :root {
   /* Warm paper, near-black ink and one vermilion. Colour goes only where
      it means something: a link, a live mark, the primary action's focus. */
-  --bg: #f6f5f1;
+  --bg: #f4f5f2;
   --surface: #ffffff;
-  --ink: #121417;
-  --muted: #646a72;
-  --line: #e3e1da;
-  --chip: #edebe4;
-  --accent: #e8491d;
-  --accent-ink: #b8361a;
-  --accent-soft: #fbeae3;
+  --ink: #131a20;
+  --muted: #5f6b74;
+  --line: #e0e3e0;
+  --chip: #eaedea;
+  --accent: #ff5b36;
+  --accent-ink: #c8401f;
+  --accent-soft: #ffe9e2;
   --ok: #1f7a3f;
   --ok-soft: #e3f3e8;
   --warn: #9a5400;
@@ -29,11 +29,11 @@
   --bad-soft: #fbe4e2;
   --info-soft: #edebe4;
   --info: #121417;
-  --dark: #0f1114;
-  --dark-2: #171a1f;
-  --dark-line: #2a2e35;
-  --dark-ink: #f4f3ee;
-  --dark-muted: #a1a6ad;
+  --dark: #10191f;
+  --dark-2: #182329;
+  --dark-line: #27343c;
+  --dark-ink: #f1f3f0;
+  --dark-muted: #98a6ae;
   --radius: 12px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --display: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -51,9 +51,11 @@ body {
 
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 
-.top { background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+/* The bar: the name, and sign-in. Dark, so it runs into the band below it. */
+.top { background: var(--dark); border-bottom: 1px solid var(--dark-line); position: sticky; top: 0; z-index: 5; }
 .top .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; gap: 12px; }
-.brand { display: inline-flex; align-items: center; gap: 10px; font: 700 18px/1 var(--display); letter-spacing: -0.01em; color: var(--ink); text-decoration: none; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font: 700 18px/1 var(--display); letter-spacing: -0.01em; color: var(--dark-ink); text-decoration: none; }
+.brand img { border-radius: 7px; }
 .top-right { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .top-right .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
 /* The buttons keep their shape; the machine line is what gives way. */
@@ -81,8 +83,8 @@ button {
 }
 button:hover { border-color: #c9c6bd; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-button.primary { background: var(--ink); border-color: var(--ink); color: #fff; font-weight: 600; }
-button.primary:hover { background: #2a2e35; border-color: #2a2e35; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.primary:hover { background: #e94f2c; border-color: #e94f2c; }
 button.primary:disabled, button:disabled { opacity: 0.55; cursor: default; }
 button.ghost { background: transparent; }
 
@@ -293,13 +295,10 @@ details#web-found summary { cursor: pointer; margin-top: 8px; }
 }
 
 /* views */
-.views { display: flex; gap: 4px; margin-left: 18px; }
-.view-link { border: 0; background: transparent; padding: 6px 10px; border-radius: 999px; color: var(--muted); font-weight: 600; }
-.view-link.on { background: var(--ink); color: #fff; }
 
 /* The hero: a dark band with the search on the left and the product,
    played through once, on the right. */
-.hero { background: var(--dark); color: var(--dark-ink); padding: 64px 0 56px; border-bottom: 1px solid var(--dark-line); }
+.hero { background: var(--dark) radial-gradient(ellipse 60% 70% at 85% 0%, rgba(255, 91, 54, 0.16), transparent 70%); color: var(--dark-ink); padding: 64px 0 56px; border-bottom: 1px solid var(--dark-line); }
 .hero-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 48px; align-items: center; }
 .hero .eyebrow { color: var(--accent); }
 .hero h1 { margin: 0 0 16px; font-size: clamp(38px, 5.2vw, 60px); font-weight: 600; line-height: 1.02; letter-spacing: -0.03em; color: var(--dark-ink); }
@@ -314,6 +313,11 @@ details#web-found summary { cursor: pointer; margin-top: 8px; }
 .hero .chip { background: transparent; border-color: var(--dark-line); color: var(--dark-muted); font: 600 11.5px/1.6 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 11px; }
 .hero .chip:hover { border-color: var(--dark-muted); color: var(--dark-ink); }
 .hero .chip.strong { background: var(--dark-ink); color: var(--dark); border-color: var(--dark-ink); }
+/* Settings and the answer check sit at the end of the category line, out of the bar. */
+.browse-invite .utility { margin-left: auto; display: flex; gap: 6px; }
+.browse-invite .utility button { background: transparent; color: var(--dark-muted); border-color: var(--dark-line); font-size: 13px; padding: 5px 11px; }
+.browse-invite .utility button:hover { color: var(--dark-ink); border-color: var(--dark-muted); }
+body[data-hosted="1"] .browse-invite .utility button.hosted-only { display: inline-block; }
 .hero .chip.strong.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Under the hero, one quiet line: the categories, as a way in for someone who does not know what to type. */
 .browse-invite { display: flex; gap: 4px 2px; flex-wrap: wrap; align-items: center; margin: 40px auto 0; padding-top: 18px; border-top: 1px solid var(--dark-line); }
@@ -472,7 +476,7 @@ body[data-mode="results"] #cost, body[data-mode="browse"] #cost { display: none;
   .hero-grid { grid-template-columns: 1fr; gap: 32px; }
   .demo { max-width: 560px; }
 }
-@media (max-width: 600px) { .views { margin-left: 8px; } .hero { padding: 36px 0 32px; } .hero .trait-search.big { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .hero { padding: 36px 0 32px; } .hero .trait-search.big { grid-template-columns: 1fr; } .browse-invite .utility { margin-left: 0; flex-basis: 100%; margin-top: 6px; } }
 
 /* The hosted copy of the site: nothing runs there, so the controls that
    install, download, chat or change settings are not shown. */
@@ -531,12 +535,12 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 /* Elements hidden by script stay hidden whatever a display rule says. */
 [hidden] { display: none !important; }
 /* Accounts on the hosted site. */
-.account { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.account { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--dark-ink); }
+.account button { background: transparent; color: var(--dark-ink); border-color: #4a5a64; }
 .account .avatar { width: 26px; height: 26px; border-radius: 50%; }
 .account button { font-size: 13px; padding: 4px 10px; }
 .account-box { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
 #google-button { min-height: 44px; margin: 8px 0; }
-.view-link[href] { text-decoration: none; }
 /* Where a chat model runs: this computer or a rented GPU. */
 .where { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
 .where-opt { border-radius: 999px; padding: 7px 14px; }

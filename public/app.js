@@ -263,10 +263,8 @@ function setMode(mode) {
   document.body.dataset.mode = mode;
   $("#browse").hidden = mode !== "browse";
   $("#results").hidden = !(state.found && (mode === "results" || mode === "browse"));
-  $("#nav-home").classList.toggle("on", mode !== "browse");
   $("#nav-browse").classList.toggle("on", mode === "browse");
 }
-$("#nav-home").addEventListener("click", () => setMode(state.found ? "results" : "home"));
 $("#found-sort").addEventListener("change", render);
 $("#nav-browse").addEventListener("click", () => {
   setMode("browse");
