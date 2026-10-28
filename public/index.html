@@ -33,15 +33,15 @@
       <div class="hero-copy">
         <p class="eyebrow">Open models, found and run</p>
         <h1 id="home-title">Find an open model.<br>Run it anywhere.</h1>
-        <p class="lead" id="home-lead">Search Hugging Face in plain words. Run the one you pick on your laptop, or on a GPU rented by the hour.</p>
+        <p class="lead" id="home-lead">Coding help, product pictures, video clips. Say what you need, pick a model from Hugging Face, and run it on your laptop or on a GPU rented by the hour.</p>
         <form class="trait-search big" id="trait-form">
           <input type="search" id="trait" placeholder="coding help, meeting notes, product photos" autofocus>
           <button class="primary" type="submit" id="trait-go">Search</button>
         </form>
         <p class="examples" id="examples">
           <button class="chip" data-example="coding help">coding help</button>
-          <button class="chip" data-example="transcribe meetings">transcribe meetings</button>
           <button class="chip" data-example="product photos">product photos</button>
+          <button class="chip" data-example="edit a photo">edit a photo</button>
           <button class="chip" data-example="video clips">video clips</button>
           <button class="chip" data-example="creative writing">creative writing</button>
         </p>
@@ -50,16 +50,12 @@
       <div class="demo" id="demo" aria-hidden="true">
         <div class="demo-top"><i></i><i></i><i></i><span>huggingfound.com</span></div>
         <div class="demo-search"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span class="demo-typed"></span><span class="demo-caret"></span></div>
-        <ul class="demo-results">
-          <li><span class="demo-name">whisper-large-v3-turbo</span><span class="demo-where ok">Runs on your laptop</span><span class="demo-size">1.6 GB</span></li>
-          <li><span class="demo-name">Qwen2.5-7B-Instruct</span><span class="demo-where ok">Runs on your laptop</span><span class="demo-size">4.7 GB</span></li>
-          <li><span class="demo-name">Wan2.2 video</span><span class="demo-where gpu">Rented GPU, $0.44 an hour</span><span class="demo-size">28 GB</span></li>
-        </ul>
+        <ul class="demo-results"></ul>
         <div class="demo-run">
-          <div class="demo-run-head"><span class="demo-label">Running on this computer</span><span class="demo-pct">0%</span></div>
+          <div class="demo-run-head"><span class="demo-label"></span><span class="demo-pct">0%</span></div>
           <div class="demo-track"><i></i></div>
-          <p class="demo-out">Notes: the launch moves to Thursday; Sam owns the export script.</p>
-          <p class="demo-check"><span class="tick"></span>Checked by Claude, with your key</p>
+          <div class="demo-out"></div>
+          <p class="demo-check"><span class="tick"></span><span class="demo-check-text"></span></p>
         </div>
       </div>
     </div>
@@ -284,13 +280,13 @@
         <span class="muted small local-only" id="voices-status">Sums up each model's card and discussions in a line on its card.</span>
       </div>
       <pre class="log small local-only" id="voices-log" hidden></pre>
-      <div class="get-app hosted-only" id="get-app">
-        <b>To download and try a model, run HuggingFound on your computer.</b> Free, open source, Node 20 or newer:
+      <details class="get-app hosted-only" id="get-app">
+        <summary><b>To download and try a model, run HuggingFound on your computer.</b> <span class="muted">Free and open source; how</span></summary>
         <code>git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
 npm install
 npm start</code>
-      </div>
+      </details>
     </section>
 
     <nav class="tabs" id="tabs"></nav>

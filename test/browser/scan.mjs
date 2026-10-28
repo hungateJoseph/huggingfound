@@ -234,18 +234,20 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#home-title").innerText(), "Find an open model.\nRun it anywhere.");
   assert.match(await page.$eval("#home-title", (e) => getComputedStyle(e).fontFamily), /Bricolage Grotesque/);
   assert.equal(await page.$eval("#home-title", (e) => document.fonts.check(`600 40px "${getComputedStyle(e).fontFamily.split(",")[0].replace(/"/g, "")}"`)), true, "the heading face is loaded from this site");
-  assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["coding help", "transcribe meetings", "product photos", "video clips", "creative writing"]);
+  assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["coding help", "product photos", "edit a photo", "video clips", "creative writing"]);
   assert.equal(await page.locator("#demo").isVisible(), true);
   await page.waitForFunction(() => document.querySelector("#demo").classList.contains("checked"), null, { timeout: 15000 });
-  assert.equal(await page.locator("#demo .demo-typed").innerText(), "transcribe meetings");
+  assert.equal(await page.locator("#demo .demo-typed").innerText(), "fix the failing tests in my python project");
   assert.equal(await page.locator("#demo .demo-pct").innerText(), "100%");
-  assert.deepEqual(await page.$$eval("#demo .demo-name", (els) => els.map((e) => e.textContent)), ["whisper-large-v3-turbo", "Qwen2.5-7B-Instruct", "Wan2.2 video"]);
+  assert.deepEqual(await page.$$eval("#demo .demo-name", (els) => els.map((e) => e.textContent)), ["Qwen2.5-Coder-7B-Instruct", "Qwen3-Coder-30B-A3B", "DeepSeek-Coder-V2-Lite"]);
+  // The next search played is for pictures.
+  await page.waitForFunction(() => /product photos/.test(document.querySelector("#demo .demo-typed").textContent), null, { timeout: 20000 });
   // Under the band: the categories on one line, then the curated picks as tiles that open the model.
   assert.deepEqual(await page.$$eval("#home-categories .chip", (els) => els.map((e) => e.textContent)), ["Easy to set up", "Chat and writing", "Coding", "Math and reasoning", "Understands images", "Makes images", "Speech to text"]);
   assert.equal(await page.locator("#start-title").innerText(), "Start with one of these");
-  assert.deepEqual(await page.$$eval("#home-picks .tile .tile-kind", (els) => els.slice(0, 4).map((e) => e.textContent)), ["Chat and writing", "Chat and writing", "Coding", "Math and reasoning"]);
+  assert.deepEqual(await page.$$eval("#home-picks .tile .tile-kind", (els) => els.slice(0, 5).map((e) => e.textContent)), ["Coding", "Makes images", "Makes images", "Makes images", "Chat and writing"], "code and pictures first");
   assert.equal(await page.$$eval("#home-picks .tile", (els) => els.length), 9);
-  await page.click("#home-picks .tile:nth-child(3)");
+  await page.click("#home-picks .tile:nth-child(1)");
   await page.waitForFunction(() => /Qwen2\.5-Coder-7B-Instruct-GGUF/.test(document.querySelector("#modal-title").textContent));
   await page.keyboard.press("Escape");
   await page.waitForSelector("#modal", { state: "hidden" });
@@ -326,7 +328,7 @@ await step("a scan fills the categories from the hub", async () => {
 
 await step("turning the runnable filter off shows Python-only models with their runner", async () => {
   await page.uncheck("#only-runnable");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   const card = page.locator("#models .model", { hasText: "Llama-3.1-8B-Instruct" });
   await card.waitFor();
   assert.match(await card.innerText(), /Gated/);
@@ -335,10 +337,10 @@ await step("turning the runnable filter off shows Python-only models with their 
 });
 
 await step("categories and the name filter narrow the list", async () => {
-  await page.click(".tab[data-tab=speech]");
+  await page.click("#home-categories [data-cat=speech]");
   const names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.deepEqual(names, ["whisper.cpp"]);
-  await page.click(".tab[data-tab=images]");
+  await page.click("#home-categories [data-cat=images]");
   assert.ok((await page.locator("#models .model").count()) >= 1);
   await page.fill("#search", "zzzz");
   await page.waitForSelector("#empty:not([hidden])");
@@ -347,12 +349,12 @@ await step("categories and the name filter narrow the list", async () => {
 });
 
 await step("Browse has no adult tabs; adult models stay in their own category with an 18+ mark, and sorting and recency work", async () => {
-  const tabs = await page.$$eval("#tabs .tab", (els) => els.map((e) => e.dataset.tab));
+  const tabs = await page.$$eval("#home-categories .chip", (els) => els.map((e) => e.dataset.cat));
   assert.deepEqual(tabs, ["easy", "chat", "coding", "math", "vision", "images", "speech"]);
-  await page.click(".tab[data-tab=images]");
+  await page.click("#home-categories [data-cat=images]");
   let names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("pony-realism-v23-sdxl"), "still listed under Makes images");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Cydonia-24B-v2-GGUF"), "still listed under Chat and writing");
   assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.adult").innerText(), /18\+/);
@@ -391,7 +393,7 @@ await step("a trait search asks the hub and lists what it finds", async () => {
 await step("gathering what people say puts summary lines on cards, with More to expand", async () => {
   await page.click("#gather-voices");
   await page.waitForFunction(() => /Gathered for \d+ models/.test(document.querySelector("#voices-status").textContent));
-  await page.click(".tab[data-tab=easy]");
+  await page.click("#home-categories [data-cat=easy]");
   const card = page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" });
   assert.match(await card.locator(".said").innerText(), /roleplay/i);
   assert.match(await card.locator(".said .line").first().innerText(), /^Users/);
@@ -436,7 +438,7 @@ await step("one search box finds models by name and by what people say", async (
 });
 
 await step("opening a model shows its plan with the install, start and pull steps", async () => {
-  await page.click(".tab[data-tab=easy]");
+  await page.click("#home-categories [data-cat=easy]");
   await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
   await page.waitForSelector("#steps .step");
   const titles = await page.$$eval("#steps .step .title", (els) => els.map((e) => e.textContent));
@@ -463,7 +465,7 @@ await step("running a step asks first, and a dismissed prompt runs nothing", asy
 
 await step("a gated model explains the token and links to the model page", async () => {
   await page.uncheck("#only-runnable");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   await page.locator("#models .model", { hasText: "Llama-3.1-8B-Instruct" }).locator(".name").click();
   await page.waitForSelector("#modal-body .notice");
   assert.match(await page.locator("#modal-body .notice").innerText(), /gated/i);
@@ -488,7 +490,7 @@ await step("saving a token masks it and it lands in the env file", async () => {
 
 await step("with a token the gated model gets a real answer instead of the lock", async () => {
   await page.uncheck("#only-runnable");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   await page.locator("#models .model", { hasText: "Llama-3.1-8B-Instruct" }).locator(".name").click();
   await page.waitForSelector("#modal-body .notice");
   assert.match(await page.locator("#modal-body .notice").innerText(), /Python/);
@@ -549,7 +551,7 @@ await step("a set-up model offers to remove itself from the model window", async
   const dir = path.join(MODELS_DIR, "ggerganov", "whisper.cpp");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "ggml-base.en.bin"), Buffer.alloc(1024));
-  await page.click(".tab[data-tab=speech]");
+  await page.click("#home-categories [data-cat=speech]");
   await page.locator("#models .model", { hasText: "whisper.cpp" }).locator(".name").click();
   await page.waitForSelector("#steps .step");
   const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
@@ -569,7 +571,7 @@ await step("a set-up model offers to remove itself from the model window", async
 });
 
 await step("a chat model's try box has an instructions field", async () => {
-  await page.click(".tab[data-tab=easy]");
+  await page.click("#home-categories [data-cat=easy]");
   await page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
   await page.waitForSelector("#steps .step");
   const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
@@ -587,7 +589,7 @@ await step("an image model offers Fast, Default and Max with Default chosen", as
   const dir = path.join(MODELS_DIR, "second-state", "stable-diffusion-v1-5-GGUF");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf"), Buffer.alloc(1024));
-  await page.click(".tab[data-tab=images]");
+  await page.click("#home-categories [data-cat=images]");
   await page.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
   await page.waitForSelector("#steps .step");
   const done = await page.$$eval("#steps .step", (els) => els.map((e) => e.classList.contains("done")));
@@ -670,7 +672,7 @@ await step("a conversation survives re-renders, an outside click and closing the
     localStorage.setItem("chat:qwen-test", JSON.stringify(old));
   });
   await page.click("#nav-browse");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   // What each reads when files go with a message: every chat model reads
   // code, one trained on code says so, one trained on decompilation reads binaries too.
   const readsPill = async (name) => page.locator("#models .model", { hasText: name }).first().locator(".pill.reads").innerText();
@@ -872,7 +874,7 @@ await step("a conversation survives re-renders, an outside click and closing the
 
 await step("files go with a chat message: chosen as chips, sent under their names in fenced blocks with the window grown to hold them, and kept folded under the bubble", async () => {
   await page.click("#nav-browse");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#chat-send");
   await page.waitForFunction(() => !document.querySelector("#chat-send").disabled, null, { timeout: 15000 });
@@ -953,7 +955,7 @@ await step("files go with a chat message: chosen as chips, sent under their name
 
 await step("cards carry what users say and one tag for what the model makes; the author's text and the runner stay in the window", async () => {
   await page.click("#nav-browse");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   assert.equal(await page.locator("#models .model .summary").count(), 0, "no Hub blurb on cards");
   assert.equal(await page.locator("#models .model .said .line.author").count(), 0, "no author lines on cards");
   const card = page.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" });
@@ -978,7 +980,7 @@ await step("cards carry what users say and one tag for what the model makes; the
 
 await step("every chat model asks where to run it; picking a GPU without a key asks for the key", async () => {
   await page.click("#nav-browse");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#steps .step");
   const options = await page.$$eval(".where .where-opt", (els) => els.map((e) => [e.textContent, e.classList.contains("on")]));
@@ -1273,14 +1275,14 @@ await step("a Vast.ai key adds its cards to the same list, each marked Vast.ai, 
 
 await step("every card says what the model makes, and a search for pictures marks the text models that cannot", async () => {
   await page.click("#nav-browse");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.makes").innerText(), /Text only, no pictures/);
   assert.equal(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.reads").innerText(), "Reads code");
-  await page.click(".tab[data-tab=images]");
+  await page.click("#home-categories [data-cat=images]");
   assert.match(await page.locator("#models .model", { hasText: "pony-realism-v23-sdxl" }).locator(".pill.makes").innerText(), /Makes images/);
-  await page.click(".tab[data-tab=speech]");
+  await page.click("#home-categories [data-cat=speech]");
   assert.match(await page.locator("#models .model", { hasText: "whisper.cpp" }).locator(".pill.makes").innerText(), /Transcribes speech/);
-  await page.click(".tab[data-tab=vision]");
+  await page.click("#home-categories [data-cat=vision]");
   assert.match(await page.locator("#models .model").first().locator(".pill.makes").innerText(), /understands images/);
   await page.fill("#trait", "pictures of a chat");
   await page.click("#trait-go");
@@ -1298,7 +1300,7 @@ await step("every card says what the model makes, and a search for pictures mark
 
 await step("a model can be hidden from search and Browse, listed in Settings, and brought back", async () => {
   await page.click("#nav-browse");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#steps .step");
   assert.equal(await page.locator("#hide-model").innerText(), "Hide this model");
@@ -1331,7 +1333,7 @@ await step("a model can be hidden from search and Browse, listed in Settings, an
   assert.match(await page.locator("#hidden-note").innerText(), /Nothing hidden/);
   await page.click("#close-settings");
   await page.click("#nav-browse");
-  await page.click(".tab[data-tab=chat]");
+  await page.click("#home-categories [data-cat=chat]");
   await page.waitForSelector('#models .model[data-id="TheDrummer/Cydonia-24B-v2-GGUF"]');
   assert.doesNotMatch(fs.readFileSync(envFile, "utf8"), /HIDDEN_MODELS=\S/);
 });

@@ -104,8 +104,7 @@ async function load() {
 // The words that change when the site is a public copy rather than the app
 // on this computer: nothing runs here, so the page points at the app.
 function renderHostedCopy() {
-  $("#home-lead").textContent = "Search Hugging Face in plain words. Run the one you pick on your computer, or on a GPU rented by the hour.";
-  $("#browse .intro .lead").textContent = `Scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours. Fit and speed are for a 16 GB laptop, or for your rented GPU once you have one.`;
+  $("#browse .intro .lead").hidden = true;
   $("#only-runnable-text").textContent = "Only models that run with Ollama, whisper.cpp or stable-diffusion.cpp";
   $(".speed-note").textContent = "Speed lines are guesses for a laptop without a GPU; a GPU or Apple Silicon is several times faster.";
 }
@@ -113,7 +112,7 @@ function renderHostedCopy() {
 function renderScanStatus() {
   const el = $("#scan-status");
   if (state.hosted) {
-    el.textContent = state.scanAt ? `Scanned ${relative(state.scanAt)}: ${state.models.length} models.` : "The first scan is running; check back in a few minutes.";
+    el.textContent = state.scanAt ? `Scanned ${relative(state.scanAt)}: ${state.models.length} models, refreshed every ${state.refresh?.hours ?? 12} hours.` : "The first scan is running; check back in a few minutes.";
     return;
   }
   if (!state.scanAt) {
@@ -215,6 +214,14 @@ function renderTabs() {
       render();
     });
     tabs.appendChild(b);
+    // The same tab in the band's category line: lit when it is the one on show, with its count.
+    const chip = document.querySelector(`#home-categories [data-cat="${c.id}"]`);
+    if (chip) {
+      chip.classList.toggle("on", c.id === state.tab);
+      let n = chip.querySelector(".count");
+      if (!n) chip.append((n = Object.assign(document.createElement("span"), { className: "count" })));
+      n.textContent = count;
+    }
   }
 }
 
@@ -264,6 +271,7 @@ function setMode(mode) {
   $("#browse").hidden = mode !== "browse";
   $("#results").hidden = !(state.found && (mode === "results" || mode === "browse"));
   $("#nav-browse").classList.toggle("on", mode === "browse");
+  renderTabs();
 }
 $("#found-sort").addEventListener("change", render);
 $("#nav-browse").addEventListener("click", () => {
@@ -304,7 +312,8 @@ function renderHomeHint() {
 function renderHomePicks() {
   const rail = $("#home-picks");
   if (!rail) return;
-  const picks = (state.picks ?? []).filter((p) => !state.hidden.has(p.id));
+  const lead = (p) => (p.categories.includes("coding") ? 0 : p.categories.includes("images") ? 1 : 2);
+  const picks = (state.picks ?? []).filter((p) => !state.hidden.has(p.id)).sort((a, b) => lead(a) - lead(b));
   const key = picks.map((p) => p.id).join("|");
   if (rail.dataset.key === key) return;
   rail.dataset.key = key;
@@ -332,36 +341,72 @@ function renderHomePicks() {
   }
 }
 
-// The picture in the hero: one search played through, on a loop. Someone
-// who asks for less motion sees the finished state and nothing moves.
+// The picture in the hero: three searches played through in turn, for code,
+// for pictures and for a clip. Someone who asks for less motion sees the
+// first one finished and nothing moves.
+const DEMO_SCENES = [
+  {
+    q: "fix the failing tests in my python project",
+    results: [["Qwen2.5-Coder-7B-Instruct", "ok", "Runs on your laptop", "4.7 GB"], ["Qwen3-Coder-30B-A3B", "gpu", "Rented GPU, $0.44 an hour", "18 GB"], ["DeepSeek-Coder-V2-Lite", "ok", "Runs on your laptop", "8.9 GB"]],
+    label: "Running on this computer",
+    out: '<code>test_export.py</code>: two failures found and patched; 14 tests pass.',
+    check: "Checked by Claude, with your key",
+  },
+  {
+    q: "product photos on a white background",
+    results: [["SDXL-Lightning", "ok", "Runs on your laptop, four steps", "6.9 GB"], ["FLUX.1-schnell", "gpu", "Rented GPU, $0.44 an hour", "23 GB"], ["Qwen-Image-Edit", "gpu", "Rented GPU, edits a picture you give it", "20 GB"]],
+    label: "Making pictures on your rented GPU",
+    out: '<span class="demo-tiles"><i></i><i></i><i></i><i></i></span>Four pictures in 41 seconds, for about a cent.',
+    check: "Checked against the description by Claude",
+  },
+  {
+    q: "a ten second clip of the product turning",
+    results: [["Wan2.2-TI2V-5B", "gpu", "Rented GPU, $0.44 an hour", "28 GB"], ["LTX-2", "gpu", "Rented GPU, with sound", "40 GB"], ["MiniMax-H3", "gpu", "Rented GPU, long scenes in shots", "60 GB"]],
+    label: "Rendering shot 2 of 3 on an A40",
+    out: "Three shots joined, with sound. The machine stops itself when you are done.",
+    check: "Shot descriptions and avoid lists written by Claude",
+  },
+];
 function startDemo() {
   const demo = $("#demo");
   if (!demo) return;
   const typed = demo.querySelector(".demo-typed");
   const pct = demo.querySelector(".demo-pct");
   const fill = demo.querySelector(".demo-track i");
-  const words = "transcribe meetings";
   const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const timers = [];
   const at = (ms, fn) => timers.push(setTimeout(fn, ms));
-  const finish = () => {
-    typed.textContent = words;
+  const show = (scene) => {
+    demo.querySelector(".demo-results").innerHTML = scene.results.map(([name, where, says, size]) => `<li><span class="demo-name">${esc(name)}</span><span class="demo-where ${where}">${esc(says)}</span><span class="demo-size">${esc(size)}</span></li>`).join("");
+    demo.querySelector(".demo-label").textContent = scene.label;
+    demo.querySelector(".demo-out").innerHTML = scene.out;
+    demo.querySelector(".demo-check-text").textContent = scene.check;
+  };
+  if (still) {
+    show(DEMO_SCENES[0]);
+    typed.textContent = DEMO_SCENES[0].q;
     demo.classList.add("typed", "found", "running", "done", "checked");
     fill.style.width = "100%";
     pct.textContent = "100%";
-  };
-  if (still) return finish();
+    return;
+  }
+  let n = 0;
   const cycle = () => {
     for (const t of timers.splice(0)) clearTimeout(t);
+    const scene = DEMO_SCENES[n % DEMO_SCENES.length];
+    n += 1;
     demo.className = "demo";
     typed.textContent = "";
     fill.style.width = "0%";
     pct.textContent = "0%";
+    show(scene);
     // Typed a letter at a time, found, downloaded, run, checked.
-    for (let i = 1; i <= words.length; i++) at(300 + i * 55, () => { typed.textContent = words.slice(0, i); });
-    at(300 + words.length * 55 + 250, () => demo.classList.add("typed"));
-    at(1900, () => demo.classList.add("found"));
-    at(3300, () => {
+    const words = scene.q;
+    for (let i = 1; i <= words.length; i++) at(300 + i * 45, () => { typed.textContent = words.slice(0, i); });
+    const typedAt = 300 + words.length * 45 + 250;
+    at(typedAt, () => demo.classList.add("typed"));
+    at(typedAt + 500, () => demo.classList.add("found"));
+    at(typedAt + 1900, () => {
       demo.classList.add("running");
       const t0 = performance.now();
       const step = () => {
@@ -373,10 +418,10 @@ function startDemo() {
       };
       requestAnimationFrame(step);
     });
-    at(6700, () => demo.classList.add("done"));
-    at(8200, () => demo.classList.add("checked"));
-    at(12500, () => demo.classList.add("fade"));
-    at(13200, cycle);
+    at(typedAt + 5300, () => demo.classList.add("done"));
+    at(typedAt + 6800, () => demo.classList.add("checked"));
+    at(typedAt + 11000, () => demo.classList.add("fade"));
+    at(typedAt + 11700, cycle);
   };
   cycle();
   // Nothing plays in a tab nobody is looking at; it starts over when they return.
