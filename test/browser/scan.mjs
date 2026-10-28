@@ -233,7 +233,7 @@ await step("the page opens on a single search box", async () => {
   assert.match(await page.locator("#home-hint").innerText(), /No scan yet/);
   // Under the search, why to use it: the outage case first, then the rest; gone once a search is up.
   // The hero: a dark band, the headline in the display face, five short examples, and the demo playing through one search.
-  assert.equal(await page.locator("#home-title").innerText(), "Find an open model.\nRun it anywhere.");
+  assert.equal(await page.locator("#home-title").innerText(), "Find a free model.\nRun it anywhere.");
   assert.match(await page.$eval("#home-title", (e) => getComputedStyle(e).fontFamily), /Bricolage Grotesque/);
   assert.equal(await page.$eval("#home-title", (e) => document.fonts.check(`600 40px "${getComputedStyle(e).fontFamily.split(",")[0].replace(/"/g, "")}"`)), true, "the heading face is loaded from this site");
   assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["code", "video generation", "photo editing", "math and analysis"]);
@@ -242,6 +242,15 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#demo .demo-typed").innerText(), "fix the failing tests in my python project");
   assert.equal(await page.locator("#demo .demo-pct").innerText(), "100%");
   assert.deepEqual(await page.$$eval("#demo .demo-name", (els) => els.map((e) => e.textContent)), ["Qwen2.5-Coder-7B-Instruct", "Qwen3-Coder-30B-A3B", "DeepSeek-Coder-V2-Lite"]);
+  // The big one is the pick, with the GPU rental as the way to run it; nothing about a Claude key.
+  assert.equal(await page.$eval("#demo .demo-results li.pick .demo-name", (e) => e.textContent), "Qwen3-Coder-30B-A3B");
+  assert.match(await page.$eval("#demo .demo-results li.pick .demo-where", (e) => e.textContent), /^Too big for a laptop\. Rent a GPU here/);
+  assert.equal(await page.$eval("#demo", (e) => e.classList.contains("picked")), true);
+  assert.doesNotMatch(await page.locator("#demo").innerText(), /Claude|key/i);
+  // Settings sits on the category line's right, level with it, never over the chips.
+  const [cats, util] = await page.$$eval("#browse-invite .cats, #browse-invite .utility", (els) => els.map((e) => e.getBoundingClientRect()));
+  assert.ok(util.left >= cats.right - 1, "the buttons are to the right of the chips");
+  assert.ok(Math.abs((util.top + util.height / 2) - (cats.top + cats.height / 2)) < 20, "and level with them");
   // The next search played is for pictures.
   await page.waitForFunction(() => /product photos/.test(document.querySelector("#demo .demo-typed").textContent), null, { timeout: 20000 });
   // Under the band: the categories on one line, then the curated picks as tiles that open the model.

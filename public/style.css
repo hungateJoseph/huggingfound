@@ -318,18 +318,19 @@ details#web-found summary { cursor: pointer; margin-top: 8px; }
 .hero .chip:hover { border-color: var(--dark-muted); color: var(--dark-ink); }
 .hero .chip.strong { background: var(--dark-ink); color: var(--dark); border-color: var(--dark-ink); }
 /* Settings and the answer check sit at the end of the category line, out of the bar. */
-.browse-invite .utility { margin-left: auto; display: flex; gap: 6px; }
+.browse-invite .utility { margin-left: auto; display: flex; gap: 6px; flex: none; align-self: center; }
 .browse-invite .utility button { background: transparent; color: var(--dark-muted); border-color: var(--dark-line); font-size: 13px; padding: 5px 11px; }
 .browse-invite .utility button:hover { color: var(--dark-ink); border-color: var(--dark-muted); }
 body[data-hosted="1"] .browse-invite .utility button.hosted-only { display: inline-block; }
 .hero .chip.strong.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Under the hero, one quiet line: the categories, as a way in for someone who does not know what to type. */
-.browse-invite { display: flex; gap: 4px 2px; flex-wrap: wrap; align-items: center; margin: 40px auto 0; padding-top: 18px; border-top: 1px solid var(--dark-line); }
-.browse-invite .eyebrow { margin: 0 14px 0 0; }
+.browse-invite { display: flex; gap: 12px; align-items: center; margin: 40px auto 0; padding-top: 18px; border-top: 1px solid var(--dark-line); }
+.browse-invite .cats { display: flex; gap: 4px 2px; flex-wrap: wrap; align-items: center; flex: 1 1 auto; min-width: 0; }
+.browse-invite .eyebrow { margin: 0 10px 0 0; }
 .browse-invite #home-categories { display: contents; }
-.browse-invite .chip { border-color: transparent; text-transform: none; letter-spacing: 0; font: 500 13.5px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--dark-muted); padding: 3px 9px; }
+.browse-invite .chip { border-color: transparent; text-transform: none; letter-spacing: 0; font: 500 13px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--dark-muted); padding: 3px 8px; }
 .browse-invite .chip:hover { color: var(--dark-ink); background: var(--dark-2); }
-.browse-invite .chip.strong { margin-left: 6px; font-weight: 600; }
+.browse-invite .chip.strong { margin-left: 4px; font-weight: 600; }
 .browse-invite .chip .count { display: none; margin-left: 5px; font-size: 11.5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
 body[data-mode="browse"] .browse-invite .chip .count { display: inline; }
 body[data-mode="browse"] .browse-invite .chip.on { background: var(--dark-ink); color: var(--dark); }
@@ -368,13 +369,14 @@ body[data-mode="results"] #cost, body[data-mode="browse"] #cost { display: none;
 .demo.found .demo-results li { opacity: 1; transform: none; border-color: var(--dark-line); }
 .demo.found .demo-results li:nth-child(2) { transition-delay: 0.15s; }
 .demo.found .demo-results li:nth-child(3) { transition-delay: 0.3s; }
-.demo.running .demo-results li:first-child { background: #1f232a; border-color: #3a404a; }
+.demo.picked .demo-results li.pick { background: #1f232a; border-color: var(--accent); }
+.demo.picked .demo-results li.pick .demo-name::after { content: "Selected"; margin-left: 8px; font: 600 10px/1.6 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); vertical-align: middle; }
 .demo-name { grid-column: 1; grid-row: 1; font-weight: 600; font-size: 13.5px; }
 .demo-size { grid-column: 2; grid-row: 1 / span 2; align-self: center; font: 500 12px/1 var(--mono); color: var(--dark-muted); }
 .demo-where { grid-column: 1; grid-row: 2; font-size: 12px; color: var(--dark-muted); display: inline-flex; align-items: center; gap: 6px; }
 .demo-where::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--dark-muted); }
 .demo-where.ok::before { background: #3dd68c; }
-.demo-where.gpu::before { background: var(--accent); }
+.demo-where.gpu::before, .demo-where.big::before { background: var(--accent); }
 .demo-run { margin: 12px 14px 10px; padding: 10px 12px 8px; border-top: 1px solid var(--dark-line); opacity: 0; transition: opacity 0.4s; }
 .demo.running .demo-run { opacity: 1; }
 .demo-run-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
@@ -491,7 +493,7 @@ body[data-mode="results"] #cost, body[data-mode="browse"] #cost { display: none;
   .hero-grid { grid-template-columns: 1fr; gap: 32px; }
   .demo { max-width: 560px; }
 }
-@media (max-width: 600px) { .hero { padding: 36px 0 32px; } .hero .trait-search.big { grid-template-columns: 1fr; } .browse-invite .utility { margin-left: 0; flex-basis: 100%; margin-top: 6px; } }
+@media (max-width: 600px) { .hero { padding: 36px 0 32px; } .hero .trait-search.big { grid-template-columns: 1fr; } .browse-invite { flex-wrap: wrap; } .browse-invite .utility { margin-left: 0; flex-basis: 100%; margin-top: 6px; } }
 
 /* The hosted copy of the site: nothing runs there, so the controls that
    install, download, chat or change settings are not shown. */

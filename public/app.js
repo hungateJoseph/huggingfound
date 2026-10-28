@@ -343,27 +343,32 @@ function renderHomePicks() {
 // The picture in the hero: three searches played through in turn, for code,
 // for pictures and for a clip. Someone who asks for less motion sees the
 // first one finished and nothing moves.
+// Each scene: the search, three free models (one too big for a laptop, with
+// the GPU rental as the way to run it), the one picked, what runs, what came out.
 const DEMO_SCENES = [
   {
     q: "fix the failing tests in my python project",
-    results: [["Qwen2.5-Coder-7B-Instruct", "ok", "Runs on your laptop", "4.7 GB"], ["Qwen3-Coder-30B-A3B", "gpu", "Rented GPU, $0.44 an hour", "18 GB"], ["DeepSeek-Coder-V2-Lite", "ok", "Runs on your laptop", "8.9 GB"]],
-    label: "Running on this computer",
+    results: [["Qwen2.5-Coder-7B-Instruct", "ok", "Runs on your laptop", "4.7 GB"], ["Qwen3-Coder-30B-A3B", "big", "Too big for a laptop. Rent a GPU here, $0.44 an hour", "18 GB"], ["DeepSeek-Coder-V2-Lite", "ok", "Runs on your laptop", "8.9 GB"]],
+    pick: 1,
+    label: "Running on a rented GPU",
     out: '<code>test_export.py</code>: two failures found and patched; 14 tests pass.',
-    check: "Checked by Claude, with your key",
+    check: "Free model, GPU by the hour. It stops itself when you are done.",
   },
   {
     q: "product photos on a white background",
-    results: [["SDXL-Lightning", "ok", "Runs on your laptop, four steps", "6.9 GB"], ["FLUX.1-schnell", "gpu", "Rented GPU, $0.44 an hour", "23 GB"], ["Qwen-Image-Edit", "gpu", "Rented GPU, edits a picture you give it", "20 GB"]],
-    label: "Making pictures on your rented GPU",
+    results: [["SDXL-Lightning", "ok", "Runs on your laptop, four steps", "6.9 GB"], ["FLUX.1-schnell", "big", "Too big for a laptop. Rent a GPU here, $0.44 an hour", "23 GB"], ["Qwen-Image-Edit", "big", "Too big for a laptop. Rent a GPU here; edits a picture you give it", "20 GB"]],
+    pick: 1,
+    label: "Making pictures on a rented GPU",
     out: '<span class="demo-tiles"><i></i><i></i><i></i><i></i></span>Four pictures in 41 seconds, for about a cent.',
-    check: "Checked against the description by Claude",
+    check: "Nothing to install, nothing to pay for the model.",
   },
   {
     q: "a ten second clip of the product turning",
-    results: [["Wan2.2-TI2V-5B", "gpu", "Rented GPU, $0.44 an hour", "28 GB"], ["LTX-2", "gpu", "Rented GPU, with sound", "40 GB"], ["MiniMax-H3", "gpu", "Rented GPU, long scenes in shots", "60 GB"]],
-    label: "Rendering shot 2 of 3 on an A40",
-    out: "Three shots joined, with sound. The machine stops itself when you are done.",
-    check: "Shot descriptions and avoid lists written by Claude",
+    results: [["Wan2.2-TI2V-5B", "big", "Too big for a laptop. Rent a GPU here, $0.44 an hour", "28 GB"], ["LTX-2", "big", "Too big for a laptop. Rent a GPU here; with sound", "40 GB"], ["MiniMax-H3", "big", "Too big for a laptop. Rent a GPU here; long scenes in shots", "60 GB"]],
+    pick: 0,
+    label: "Rendering shot 2 of 3 on a rented A40",
+    out: "Three shots joined, with sound.",
+    check: "The GPU stops itself when you are done.",
   },
 ];
 function startDemo() {
@@ -376,7 +381,7 @@ function startDemo() {
   const timers = [];
   const at = (ms, fn) => timers.push(setTimeout(fn, ms));
   const show = (scene) => {
-    demo.querySelector(".demo-results").innerHTML = scene.results.map(([name, where, says, size]) => `<li><span class="demo-name">${esc(name)}</span><span class="demo-where ${where}">${esc(says)}</span><span class="demo-size">${esc(size)}</span></li>`).join("");
+    demo.querySelector(".demo-results").innerHTML = scene.results.map(([name, where, says, size], i) => `<li class="${i === scene.pick ? "pick" : ""}"><span class="demo-name">${esc(name)}</span><span class="demo-where ${where}">${esc(says)}</span><span class="demo-size">${esc(size)}</span></li>`).join("");
     demo.querySelector(".demo-label").textContent = scene.label;
     demo.querySelector(".demo-out").innerHTML = scene.out;
     demo.querySelector(".demo-check-text").textContent = scene.check;
@@ -384,7 +389,7 @@ function startDemo() {
   if (still) {
     show(DEMO_SCENES[0]);
     typed.textContent = DEMO_SCENES[0].q;
-    demo.classList.add("typed", "found", "running", "done", "checked");
+    demo.classList.add("typed", "found", "picked", "running", "done", "checked");
     fill.style.width = "100%";
     pct.textContent = "100%";
     return;
@@ -405,7 +410,9 @@ function startDemo() {
     const typedAt = 300 + words.length * 45 + 250;
     at(typedAt, () => demo.classList.add("typed"));
     at(typedAt + 500, () => demo.classList.add("found"));
-    at(typedAt + 1900, () => {
+    // The person picks the big one; the GPU rental is what makes that possible.
+    at(typedAt + 1700, () => demo.classList.add("picked"));
+    at(typedAt + 2500, () => {
       demo.classList.add("running");
       const t0 = performance.now();
       const step = () => {
@@ -417,10 +424,10 @@ function startDemo() {
       };
       requestAnimationFrame(step);
     });
-    at(typedAt + 5300, () => demo.classList.add("done"));
-    at(typedAt + 6800, () => demo.classList.add("checked"));
-    at(typedAt + 11000, () => demo.classList.add("fade"));
-    at(typedAt + 11700, cycle);
+    at(typedAt + 5900, () => demo.classList.add("done"));
+    at(typedAt + 7400, () => demo.classList.add("checked"));
+    at(typedAt + 11600, () => demo.classList.add("fade"));
+    at(typedAt + 12300, cycle);
   };
   cycle();
   // Nothing plays in a tab nobody is looking at; it starts over when they return.

@@ -6,7 +6,7 @@
   <title>HuggingFound</title>
   <meta name="description" content="Search Hugging Face in plain words, then run the model you pick on your own computer or on a GPU rented by the hour.">
   <meta property="og:title" content="HuggingFound">
-  <meta property="og:description" content="Find an open model. Run it anywhere: your laptop, or a GPU rented by the hour.">
+  <meta property="og:description" content="Find a free model. Run it anywhere: your laptop, or a GPU rented by the hour.">
   <meta property="og:type" content="website">
   <meta name="theme-color" content="#121417">
   <link rel="icon" href="icon.svg">
@@ -32,9 +32,9 @@
   <section id="home" class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <p class="eyebrow">Open models, found and run</p>
-        <h1 id="home-title">Find an open model.<br>Run it anywhere.</h1>
-        <p class="lead" id="home-lead">Coding help, product pictures, video clips. Say what you need, pick a model from Hugging Face, and run it on your laptop or on a GPU rented by the hour.</p>
+        <p class="eyebrow">Free, open models</p>
+        <h1 id="home-title">Find a free model.<br>Run it anywhere.</h1>
+        <p class="lead" id="home-lead">Coding help, product pictures, video clips. Say what you need and pick a free model from Hugging Face. Small ones run on your laptop; for the big ones, rent a GPU by the hour right here.</p>
         <form class="trait-search big" id="trait-form">
           <input type="search" id="trait" placeholder="coding help, meeting notes, product photos" autofocus>
           <button class="primary" type="submit" id="trait-go">Search</button>
@@ -60,9 +60,11 @@
       </div>
     </div>
     <div class="wrap browse-invite" id="browse-invite">
-      <span class="eyebrow">Browse</span>
-      <span id="home-categories"></span>
-      <button class="chip strong" id="nav-browse">Everything</button>
+      <div class="cats">
+        <span class="eyebrow">Browse</span>
+        <span id="home-categories"></span>
+        <button class="chip strong" id="nav-browse">Everything</button>
+      </div>
       <span class="utility">
         <button class="ghost hosted-only" id="open-checker">Check an answer</button>
         <button class="ghost" id="open-settings">Settings</button>
