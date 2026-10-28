@@ -234,7 +234,7 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#home-title").innerText(), "Find an open model.\nRun it anywhere.");
   assert.match(await page.$eval("#home-title", (e) => getComputedStyle(e).fontFamily), /Bricolage Grotesque/);
   assert.equal(await page.$eval("#home-title", (e) => document.fonts.check(`600 40px "${getComputedStyle(e).fontFamily.split(",")[0].replace(/"/g, "")}"`)), true, "the heading face is loaded from this site");
-  assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["coding help", "product photos", "edit a photo", "video clips", "creative writing"]);
+  assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["code", "video generation", "photo editing", "math and analysis"]);
   assert.equal(await page.locator("#demo").isVisible(), true);
   await page.waitForFunction(() => document.querySelector("#demo").classList.contains("checked"), null, { timeout: 15000 });
   assert.equal(await page.locator("#demo .demo-typed").innerText(), "fix the failing tests in my python project");
@@ -274,7 +274,7 @@ await step("the page opens on a single search box", async () => {
   // Little to read: no reason runs past two sentences, and no section wraps itself in a card.
   assert.ok((await page.$$eval("#why .reasons dd", (els) => els.map((e) => e.textContent.split(/\.\s/).length))).every((n) => n <= 2));
   assert.equal(await page.$eval("#cost", (e) => getComputedStyle(e).borderTopWidth), "0px");
-  await page.click("#examples [data-example='coding help']");
+  await page.click("#examples [data-example='code']");
   await page.waitForSelector("#found .model");
   assert.equal(await page.locator("#results").isVisible(), true);
   assert.equal(await page.locator("#why").isVisible(), false, "the reasons step aside for the results");
@@ -283,7 +283,7 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#start").isVisible(), false, "and the picks");
   assert.equal(await page.locator("#demo").isVisible(), false, "and the demo; the band keeps only the search and the categories");
   assert.equal(await page.locator("#home-categories").isVisible(), true);
-  assert.match(await page.locator("#found-title").innerText(), /coding help/i);
+  assert.match(await page.locator("#found-title").innerText(), /"code"/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");
   // A search for a kind of output leads with the models that make it,
@@ -1374,13 +1374,14 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 0);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false, "no Sign in button until Google is set up; guests need none");
   assert.equal(await visitor.locator("#create-account").isVisible(), false, "nor Create account");
+  assert.equal(await visitor.$eval("#open-checker", (e) => e.hidden), true, "no answer checker until a model has made something here");
   // The sign-in window is only the button; what an account keeps is said in the create-account window.
   assert.equal(await visitor.locator("#signin .modal-head p").count(), 0);
   assert.deepEqual(await visitor.$$eval("#signup .keeps dt", (els) => els.map((e) => e.textContent)), ["Kept", "Never kept", "Opens"]);
   assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
   // Unknown to the site, the visitor sees no adult or video models and no LoRAs: not in the examples, the search, Browse or a model window.
-  assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), true, "no video example for a visitor");
-  assert.match(await visitor.locator("#home-hint").innerText(), /Sign in, or add an Anthropic key as a guest, for video models and LoRAs\./);
+  assert.equal(await visitor.$eval('#examples [data-example="video generation"]', (e) => e.hidden), true, "no video example for a visitor");
+  assert.equal(await visitor.$eval("#home-hint", (e) => e.hidden), true, "nothing about signing in on the front page; it is said in the model window");
   await visitor.fill("#trait", "porn roleplay writing");
   await visitor.click("#trait-go");
   await visitor.waitForSelector("#found .model");
@@ -1395,6 +1396,8 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   assert.equal(await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).count(), 0, "the adult chat model is not in Browse either");
   assert.equal(await visitor.locator("#models .pill.adult").count(), 0);
   await visitor.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).first().locator(".name").click();
+  await visitor.waitForSelector("#modal-body .visitor-note");
+  assert.equal(await visitor.locator("#modal-body .visitor-note").innerText(), "Sign in, or add an Anthropic key as a guest, for video models and LoRAs.", "said where a model is about to be used");
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector(".rent-ask");
@@ -1417,7 +1420,7 @@ await step("hosted: a guest enters a key in the model window, rents, and sees wh
   await visitor.waitForSelector("#settings", { state: "hidden" });
   assert.equal((await (await visitor.request.get(`${hostedBase}/api/state`)).json()).access.full, true, "a guest with an Anthropic key");
   await visitor.waitForFunction(() => document.querySelector("#models .model .name")?.textContent);
-  assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), false, "the video example is back");
+  assert.equal(await visitor.$eval('#examples [data-example="video generation"]', (e) => e.hidden), false, "the video example is back");
   assert.equal(await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).count(), 1, "and the adult model, with its mark");
   await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
@@ -1452,8 +1455,8 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
   await visitor.reload();
   await visitor.waitForSelector("#account:not([hidden])");
   assert.match(await visitor.locator("#account").innerText(), /Ana/);
-  assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), false, "signed in: video models are on show");
-  assert.doesNotMatch(await visitor.locator("#home-hint").innerText(), /for video models and LoRAs/);
+  assert.equal(await visitor.$eval('#examples [data-example="video generation"]', (e) => e.hidden), false, "signed in: video models are on show");
+  assert.equal(await visitor.$eval("#home-hint", (e) => e.hidden), true);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false);
   assert.equal(await visitor.locator("#create-account").isVisible(), false, "signed in: no Create account either");
   assert.equal(await visitor.locator("#delete-account").innerText(), "Delete my account");
@@ -1525,6 +1528,7 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   await visitor.fill("#chat-text", "hello machine");
   await visitor.click("#chat-send");
   await visitor.waitForFunction(() => /from the machine's agent/.test(document.querySelector("#messages")?.textContent ?? ""));
+  assert.equal(await visitor.$eval("#open-checker", (e) => e.hidden), false, "a reply has been made here: the answer checker is offered from now on");
   assert.equal(rentedAgent.state.chats.length, before + 1, "the message reached the machine's agent");
   assert.equal(rentedAgent.state.chats.at(-1).messages.at(-1).content, "hello machine");
   assert.equal(rentedAgent.state.chats.at(-1).stream, true);

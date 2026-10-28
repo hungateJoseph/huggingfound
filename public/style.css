@@ -570,6 +570,7 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 .where { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
 .where-opt { border-radius: 999px; padding: 7px 14px; }
 .where-opt.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.visitor-note { margin: 0 0 10px; }
 .rent-ask { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; font-size: 14px; }
 .rent-ask p { margin: 0 0 6px; }
 /* Improving an output: handing it to Claude or to another model. */

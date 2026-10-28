@@ -37,7 +37,7 @@ async function load() {
   document.body.dataset.hosted = s.hosted ? "1" : "";
   state.claudeHosted = s.claudeHosted;
   // A visitor the hosted site does not know is shown no video models: the example goes too.
-  const videoExample = document.querySelector('#examples [data-example="video clips"]');
+  const videoExample = document.querySelector('#examples [data-example="video generation"]');
   if (videoExample) videoExample.hidden = !fullAccess();
   if (s.hosted) renderHostedCopy();
   if (s.hosted && !state.openChecker) setupChecker();
@@ -301,7 +301,6 @@ function renderHomeHint() {
   const parts = [];
   if (!state.scanAt && !state.hosted) parts.push("No scan yet: results come from Hugging Face's search and the picks below.");
   if (!v?.count && !state.hosted) parts.push("Gather what people say, in Browse, to rank by reviews.");
-  if (state.hosted && !fullAccess()) parts.push("Sign in, or add an Anthropic key as a guest, for video models and LoRAs.");
   $("#home-hint").textContent = parts.join(" ");
   $("#home-hint").hidden = !parts.length;
   renderHomePicks();
@@ -836,6 +835,8 @@ function renderModel(model, plan, choice = null) {
   renderHideButton(model.id);
   const body = $("#modal-body");
   const parts = [];
+  // A visitor the site does not know is told here, at the point of using a model, what signing in opens.
+  if (state.hosted && !fullAccess()) parts.push(`<p class="muted small visitor-note">Sign in, or add an Anthropic key as a guest, for video models and LoRAs.</p>`);
 
   if (!plan.runnable) {
     parts.push(`<div class="notice ${plan.gated || plan.needsGpu ? "info" : "warn"}">${esc(plan.reason)}${plan.link ? ` <a href="${esc(plan.link)}" target="_blank" rel="noopener">${plan.gated || plan.addon || plan.needsGpu ? "Open the model page" : "Search for a GGUF version"}</a>` : ""}</div>`);
@@ -2151,6 +2152,7 @@ function renderChat(box, modelName) {
     paintTimer = null;
     el.textContent = "";
     el.classList.remove("pending");
+    if (m.content) markMade();
     const body = document.createElement("div");
     renderRich(body, m.content);
     if (m.thinking) el.append(thinkingFold(m.thinking, false));
@@ -4985,6 +4987,7 @@ function showPicture(into, { file = null, data = null, prompt, negative, model, 
   card.className = "image-card";
   const src = file ? `/output/${file}` : `data:image/png;base64,${data}`;
   const name = file ?? `image-${Date.now()}.png`;
+  markMade();
   card.innerHTML = `<img class="result-image" src="${esc(src)}" alt="${esc(prompt)}">
     ${chain.length ? `<div class="chain">${esc(chainText(madeBy, chain))}</div>` : ""}
     <p class="muted small tools-row"><span>${file ? `Saved to ~/HuggingFound/output/${esc(file)}.` : "Made on the rented GPU; it lives in this page until you download it."}</span><a class="button" href="${esc(src)}" download="${esc(name)}">Download</a></p>`;
@@ -5978,6 +5981,7 @@ function showClip(into, { blob = null, data = null, prompt, name = `clip-${Date.
   const card = document.createElement("div");
   card.className = "image-card";
   const src = blob ? URL.createObjectURL(blob) : `data:video/mp4;base64,${data}`;
+  markMade();
   card.innerHTML = `<video class="result-image" src="${esc(src)}" controls autoplay loop muted playsinline title="${esc(prompt)}"></video>
     <p class="muted small tools-row"><span>Made on the rented GPU; kept in this browser under this model until removed.</span><a class="button" href="${esc(src)}" download="${esc(name)}">Download</a></p>`;
   into.appendChild(card);
@@ -6209,9 +6213,8 @@ function renderAccount() {
   $("#create-account").hidden = $("#sign-in").hidden;
   // Settings are open to everyone: a visitor who saves a key there becomes a guest.
   $("#open-settings").hidden = false;
-  // The paste-in checker is for visitors with nothing running here; with a
-  // machine, every answer has its own Improve or check.
-  $("#open-checker").hidden = Boolean(user);
+  // The paste-in checker shows once something has been made with a model in this browser.
+  $("#open-checker").hidden = !madeSomething();
   const box = $("#account");
   box.hidden = !user;
   const until = user?.expiresAt ? new Date(user.expiresAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
@@ -6234,6 +6237,22 @@ function renderAccount() {
     $("#settings").hidden = true;
     await load();
   });
+}
+
+// Whether a model has answered, drawn or filmed anything in this browser;
+// remembered here, so the answer checker is offered from then on.
+function madeSomething() {
+  try {
+    return localStorage.getItem("hf:made") === "1";
+  } catch {
+    return false;
+  }
+}
+function markMade() {
+  try {
+    localStorage.setItem("hf:made", "1");
+  } catch {}
+  if (state.hosted) $("#open-checker").hidden = false;
 }
 
 function openSignIn() {

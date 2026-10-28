@@ -296,7 +296,9 @@ The machine takes two to four minutes to start. Meanwhile:
   into each other, with a faint coral glow top right), and one coral
   (`--accent`) for primary buttons, links, live marks and sparks. The bar
   holds only the name (a link home) and Sign in or the account; Settings
-  and Check an answer sit at the end of the category line, on every view. The things the "vibe coded" write-ups name were taken out on
+  and Check an answer sit at the end of the category line, on every view;
+  Check an answer only once a model has made something in that browser
+  (`hf:made` in localStorage, set by a finished reply, a picture or a clip). The things the "vibe coded" write-ups name were taken out on
   purpose: the Tailwind slate-and-blue defaults, emoji as icons, feature
   cards in a grid, cards around every section, all-caps section titles,
   the headline-then-softer-subheadline hero, and the paragraph under
@@ -598,8 +600,10 @@ applied to `/api/find` (hub, scan and picks; Civitai hits marked nsfw
 dropped), `/api/search`, `/api/models` and `/api/voices/search`, and
 `/api/model` answers 403 for an adult or video model, as do the four
 `/api/loras` routes. `/api/state` carries `access.full`; the page hides
-the "video clips" example and the LoRA fold, and the home hint says
-what opens them. Nothing about adult content is advertised to a visitor.
+the "video generation" example and the LoRA fold, and a line at the top
+of a model's window (`.visitor-note`), where a model is about to be used,
+says what opens them (2026-10-28: moved there from the front page's
+hint). Nothing about adult content is advertised to a visitor.
 Page and server: a Render deploy, then a reload; no GPU change.
 
 ## HTTP 403 on a chat: the proxy's firewall, or Ollama's origins (2026-10-21, image 28)
