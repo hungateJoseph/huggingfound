@@ -1387,7 +1387,7 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   assert.equal((await visitor.request.get(`${hostedBase}/api/model?id=Wan-AI/Wan2.2-TI2V-5B-Diffusers`)).status(), 403);
   assert.equal((await visitor.request.get(`${hostedBase}/api/loras?id=Wan-AI/Wan2.2-TI2V-5B-Diffusers`)).status(), 403);
   await visitor.click("#nav-browse");
-  await visitor.click(".tab[data-tab=chat]");
+  await visitor.click("#home-categories [data-cat=chat]");
   assert.equal(await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).count(), 0, "the adult chat model is not in Browse either");
   assert.equal(await visitor.locator("#models .pill.adult").count(), 0);
   await visitor.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).first().locator(".name").click();
@@ -1474,7 +1474,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
 
 await step("hosted: the model window rents the GPU, the download runs on it, and the chat goes straight from the browser to the machine", async () => {
   await visitor.click("#nav-browse");
-  await visitor.click(".tab[data-tab=chat]");
+  await visitor.click("#home-categories [data-cat=chat]");
   await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
@@ -1559,7 +1559,7 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
 await step("hosted: an image model is downloaded onto the rented GPU and pictures are made there, straight from the browser", async () => {
   await visitor.keyboard.press("Escape");
   await visitor.click("#nav-browse");
-  await visitor.click(".tab[data-tab=images]");
+  await visitor.click("#home-categories [data-cat=images]");
   await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
   await visitor.waitForSelector(".where");
   assert.equal(await visitor.locator(".where-opt.on").innerText(), "On a rented GPU", "the machine is there, so it is the default");
