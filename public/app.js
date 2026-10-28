@@ -104,17 +104,16 @@ async function load() {
 // The words that change when the site is a public copy rather than the app
 // on this computer: nothing runs here, so the page points at the app.
 function renderHostedCopy() {
-  $("#home-lead").textContent = "Say it in plain words. HuggingFound searches Hugging Face and what people say about each model, then runs the one you pick on your computer or on a GPU rented by the hour.";
-  $("#browse .intro h1").textContent = "Open models, on your computer or on a rented GPU.";
-  $("#browse .intro .lead").textContent = `Scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours, with what people say summed up on each card. Fit and speed are for a typical 16 GB laptop, or for your rented GPU once you have one.`;
+  $("#home-lead").textContent = "Search Hugging Face in plain words. Run the one you pick on your computer, or on a GPU rented by the hour.";
+  $("#browse .intro .lead").textContent = `Scanned from Hugging Face every ${state.refresh?.hours ?? 12} hours. Fit and speed are for a 16 GB laptop, or for your rented GPU once you have one.`;
   $("#only-runnable-text").textContent = "Only models that run with Ollama, whisper.cpp or stable-diffusion.cpp";
-  $(".speed-note").textContent = "Speed lines are rough guesses for a typical laptop without a separate GPU, from the model's size. A GPU or Apple Silicon is several times faster, and the first run is slower while things load.";
+  $(".speed-note").textContent = "Speed lines are guesses for a laptop without a GPU; a GPU or Apple Silicon is several times faster.";
 }
 
 function renderScanStatus() {
   const el = $("#scan-status");
   if (state.hosted) {
-    el.textContent = state.scanAt ? `Catalogue scanned ${relative(state.scanAt)}: ${state.models.length} models. It refreshes every ${state.refresh?.hours ?? 12} hours.` : "The catalogue is being scanned for the first time; check back in a few minutes.";
+    el.textContent = state.scanAt ? `Scanned ${relative(state.scanAt)}: ${state.models.length} models.` : "The first scan is running; check back in a few minutes.";
     return;
   }
   if (!state.scanAt) {
@@ -294,20 +293,109 @@ function renderHomeHint() {
   renderHomeCategories();
   const v = state.voices;
   const parts = [];
-  if (!state.scanAt && !state.hosted) parts.push("No scan yet, so results come from Hugging Face's own search and the curated picks.");
-  if (!v?.count && !state.hosted) parts.push("Gather what people say (in Browse) to rank by reviews.");
-  if (state.hosted && !fullAccess()) parts.push("Video models and LoRAs open once you sign in or enter an Anthropic API key as a guest.");
+  if (!state.scanAt && !state.hosted) parts.push("No scan yet: results come from Hugging Face's search and the picks below.");
+  if (!v?.count && !state.hosted) parts.push("Gather what people say, in Browse, to rank by reviews.");
+  if (state.hosted && !fullAccess()) parts.push("Sign in, or add an Anthropic key as a guest, for video models and LoRAs.");
   $("#home-hint").textContent = parts.join(" ");
   $("#home-hint").hidden = !parts.length;
+  renderHomePicks();
 }
+
+// The curated picks as a row of tiles on the front page: real models to
+// open, in place of words about them. Hidden ones stay out.
+function renderHomePicks() {
+  const rail = $("#home-picks");
+  if (!rail) return;
+  const picks = (state.picks ?? []).filter((p) => !state.hidden.has(p.id));
+  const key = picks.map((p) => p.id).join("|");
+  if (rail.dataset.key === key) return;
+  rail.dataset.key = key;
+  const kindOf = (p) => state.categories.find((c) => c.id !== "easy" && p.categories.includes(c.id))?.name ?? makesOf(p).text;
+  rail.innerHTML = picks.map((p) => `<button class="tile" data-id="${esc(p.id)}" title="${esc(p.id)}">
+    <span class="tile-kind">${esc(kindOf(p))}</span>
+    <span class="tile-name">${esc(p.id.split("/").pop())}</span>
+    <span class="tile-why">${esc(p.why)}</span>
+    <span class="tile-meta">${esc(p.gb < 1 ? `${Math.round(p.gb * 1000)} MB` : `${p.gb.toFixed(1)} GB`)}${p.fast ? " · four steps" : ""}</span>
+  </button>`).join("");
+  for (const tile of rail.querySelectorAll(".tile")) tile.addEventListener("click", () => openModel(tile.dataset.id));
+  $("#start").hidden = picks.length === 0;
+  if (!rail.dataset.wired) {
+    rail.dataset.wired = "1";
+    const by = (dir) => rail.scrollBy({ left: dir * rail.clientWidth * 0.8, behavior: "smooth" });
+    $("#picks-back").addEventListener("click", () => by(-1));
+    $("#picks-forward").addEventListener("click", () => by(1));
+    const ends = () => {
+      $("#picks-back").disabled = rail.scrollLeft <= 2;
+      $("#picks-forward").disabled = rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 2;
+    };
+    rail.addEventListener("scroll", ends, { passive: true });
+    window.addEventListener("resize", ends);
+    queueMicrotask(ends);
+  }
+}
+
+// The picture in the hero: one search played through, on a loop. Someone
+// who asks for less motion sees the finished state and nothing moves.
+function startDemo() {
+  const demo = $("#demo");
+  if (!demo) return;
+  const typed = demo.querySelector(".demo-typed");
+  const pct = demo.querySelector(".demo-pct");
+  const fill = demo.querySelector(".demo-track i");
+  const words = "transcribe meetings";
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const timers = [];
+  const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+  const finish = () => {
+    typed.textContent = words;
+    demo.classList.add("typed", "found", "running", "done", "checked");
+    fill.style.width = "100%";
+    pct.textContent = "100%";
+  };
+  if (still) return finish();
+  const cycle = () => {
+    for (const t of timers.splice(0)) clearTimeout(t);
+    demo.className = "demo";
+    typed.textContent = "";
+    fill.style.width = "0%";
+    pct.textContent = "0%";
+    // Typed a letter at a time, found, downloaded, run, checked.
+    for (let i = 1; i <= words.length; i++) at(300 + i * 55, () => { typed.textContent = words.slice(0, i); });
+    at(300 + words.length * 55 + 250, () => demo.classList.add("typed"));
+    at(1900, () => demo.classList.add("found"));
+    at(3300, () => {
+      demo.classList.add("running");
+      const t0 = performance.now();
+      const step = () => {
+        const k = Math.min(1, (performance.now() - t0) / 3200);
+        const eased = 1 - Math.pow(1 - k, 2);
+        fill.style.width = `${(eased * 100).toFixed(1)}%`;
+        pct.textContent = `${Math.round(eased * 100)}%`;
+        if (k < 1 && demo.classList.contains("running")) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+    at(6700, () => demo.classList.add("done"));
+    at(8200, () => demo.classList.add("checked"));
+    at(12500, () => demo.classList.add("fade"));
+    at(13200, cycle);
+  };
+  cycle();
+  // Nothing plays in a tab nobody is looking at; it starts over when they return.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { for (const t of timers.splice(0)) clearTimeout(t); demo.classList.add("fade"); }
+    else cycle();
+  });
+}
+startDemo();
 
 function renderVoicesStatus() {
   const v = state.voices;
   $("#get-summarizer").hidden = Boolean(state.summarizer) || !state.runners?.ollama?.installed;
-  const writer = state.summarizer ? `${state.summarizer} writes the lines.` : "No chat model is installed in Ollama, so the lines are lifted from the comments rather than written.";
+  const writer = state.summarizer ? `${state.summarizer} writes the lines.` : "Without a chat model in Ollama, the lines are lifted from the comments.";
   $("#voices-status").textContent = v?.count
-    ? `Gathered for ${v.count} model${v.count === 1 ? "" : "s"} (last ${relative(v.at)}). Cards carry a summary; the search box also finds models by what people say. ${writer}`
-    : `Reads each scanned model's card and community discussions and sums them up in a line or two on every card. ${writer}`;
+    ? `Gathered for ${v.count} model${v.count === 1 ? "" : "s"} (last ${relative(v.at)}). ${writer}`
+    : `Sums up each model's card and discussions in a line on its card. ${writer}`;
 }
 
 $("#gather-voices").addEventListener("click", async () => {
@@ -466,7 +554,7 @@ function renderWebFound(web) {
   const box = $("#web-found");
   box.hidden = !web;
   if (!web) return;
-  $("#civitai-note").textContent = web.civitaiError ? `Civitai did not answer: ${web.civitaiError}` : web.civitai.length ? "Image models on Civitai matching these words, with their thumbs up and comment counts. Many are mirrored on Hugging Face; a chip opens the copy from the scan, or search the Hub for the name." : "Nothing on Civitai for these words.";
+  $("#civitai-note").textContent = web.civitaiError ? `Civitai did not answer: ${web.civitaiError}` : web.civitai.length ? "Image models on Civitai for these words. A chip opens the copy from the scan, or searches the Hub for the name." : "Nothing on Civitai for these words.";
   $("#civitai-found").innerHTML = web.civitai.map((m, i) => `<div class="civ">
     <div class="name"><a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.name)}</a> <span class="pill">${esc(m.type)}</span>${m.nsfw ? ' <span class="pill adult">18+</span>' : ""}</div>
     <div class="stats">${fmt(m.thumbsUp)} thumbs up, ${fmt(m.thumbsDown)} down, ${fmt(m.comments)} comments, ${fmt(m.downloads)} downloads${m.creator ? `, by ${esc(m.creator)}` : ""}</div>
@@ -480,18 +568,18 @@ function renderWebFound(web) {
     ${p.matched?.length ? `<div class="chips">${p.matched.map((id) => `<button class="chip" data-open="${esc(id)}">${esc(id.split("/").pop())}</button>`).join("")}</div>` : ""}
   </li>`).join("");
   const note = (name, list, err, configured, filled, empty, setup) => (configured === false ? setup : err ? `${name} did not answer: ${err}` : list.length ? filled : empty);
-  $("#github-note").textContent = note("GitHub", web.github, web.githubError, true, "Issues and pull requests on llama.cpp, Ollama, stable-diffusion.cpp, whisper.cpp, SillyTavern, ComfyUI and related projects. A chip opens a model from the scan that the thread names.", "No GitHub issues mention these words.");
+  $("#github-note").textContent = note("GitHub", web.github, web.githubError, true, "Issues and pull requests on llama.cpp, Ollama, ComfyUI and related projects.", "No GitHub issues mention these words.");
   $("#github-found").innerHTML = postList(web.github, (p) => `${p.repo}, ${p.kind}, ${p.state}, ${fmt(p.comments)} comments`);
   $("#hn-note").textContent = note("Hacker News", web.hn, web.hnError, true, "Stories and comments on Hacker News.", "Nothing on Hacker News for these words.");
   $("#hn-found").innerHTML = postList(web.hn, (p) => `${p.kind}, ${fmt(p.points)} points, ${fmt(p.comments)} comments`);
   $("#lemmy-note").textContent = note("Lemmy", web.lemmy, web.lemmyError, true, "Posts from Lemmy communities such as localllama, fosai and stable_diffusion.", "No Lemmy posts for these words.");
   $("#lemmy-found").innerHTML = postList(web.lemmy, (p) => `${p.community}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`);
-  $("#youtube-note").textContent = note("YouTube", web.youtube, web.youtubeError, web.youtubeConfigured, "Videos about these words; the title tells whether it is a review or a demonstration.", "No videos for these words.", "YouTube needs a free API key in Settings before videos can be searched.");
+  $("#youtube-note").textContent = note("YouTube", web.youtube, web.youtubeError, web.youtubeConfigured, "Videos about these words.", "No videos for these words.", "YouTube needs a free API key in Settings before videos can be searched.");
   $("#youtube-found").innerHTML = postList(web.youtube, (v) => `${v.channel}${v.views != null ? `, ${fmt(v.views)} views` : ""}`);
-  $("#reddit-note").textContent = note("Reddit", web.reddit, web.redditError, web.redditConfigured, "Posts from r/LocalLLaMA, r/StableDiffusion, r/SillyTavernAI and related communities. A chip opens a model from the scan that the post names.", "No Reddit posts for these words in the past year.", "Reddit needs a free app id in Settings before it can be searched.");
+  $("#reddit-note").textContent = note("Reddit", web.reddit, web.redditError, web.redditConfigured, "Posts from r/LocalLLaMA, r/StableDiffusion and related communities.", "No Reddit posts for these words in the past year.", "Reddit needs a free app id in Settings before it can be searched.");
   $("#reddit-found").innerHTML = postList(web.reddit, (p) => `r/${p.subreddit}, ${fmt(p.score)} points, ${fmt(p.comments)} comments`);
   const count = ["civitai", "reddit", "github", "hn", "lemmy", "youtube"].reduce((t, k) => t + (web[k]?.length ?? 0), 0);
-  $("#web-found-summary").textContent = `Also mentioned elsewhere: ${count} item${count === 1 ? "" : "s"} on Civitai, GitHub, Hacker News, Lemmy, YouTube and Reddit${web.took != null ? ` (${(web.took / 1000).toFixed(1)} s)` : ""}`;
+  $("#web-found-summary").textContent = count ? `Also mentioned elsewhere: ${count} on Civitai, GitHub, Hacker News, Lemmy, YouTube and Reddit` : "Also mentioned elsewhere: nothing for these words";
   for (const chip of box.querySelectorAll("button[data-open]")) chip.addEventListener("click", () => openModel(chip.dataset.open));
   for (const chip of box.querySelectorAll("button[data-hub]")) {
     chip.addEventListener("click", () => {

@@ -230,16 +230,35 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#results").isVisible(), false);
   assert.match(await page.locator("#home-hint").innerText(), /No scan yet/);
   // Under the search, why to use it: the outage case first, then the rest; gone once a search is up.
-  // The examples are the kinds of work a team would own up to.
-  assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["coding help", "summarize documents", "transcribe meetings", "product photos", "video clips", "math and reasoning", "creative writing"]);
-  // Between the search and the flowcharts: what paid assistants cost their makers, each figure with its article.
+  // The hero: a dark band, the headline in the display face, five short examples, and the demo playing through one search.
+  assert.equal(await page.locator("#home-title").innerText(), "Find an open model.\nRun it anywhere.");
+  assert.match(await page.$eval("#home-title", (e) => getComputedStyle(e).fontFamily), /Bricolage Grotesque/);
+  assert.equal(await page.$eval("#home-title", (e) => document.fonts.check(`600 40px "${getComputedStyle(e).fontFamily.split(",")[0].replace(/"/g, "")}"`)), true, "the heading face is loaded from this site");
+  assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["coding help", "transcribe meetings", "product photos", "video clips", "creative writing"]);
+  assert.equal(await page.locator("#demo").isVisible(), true);
+  await page.waitForFunction(() => document.querySelector("#demo").classList.contains("checked"), null, { timeout: 15000 });
+  assert.equal(await page.locator("#demo .demo-typed").innerText(), "transcribe meetings");
+  assert.equal(await page.locator("#demo .demo-pct").innerText(), "100%");
+  assert.deepEqual(await page.$$eval("#demo .demo-name", (els) => els.map((e) => e.textContent)), ["whisper-large-v3-turbo", "Qwen2.5-7B-Instruct", "Wan2.2 video"]);
+  // Under the band: the categories on one line, then the curated picks as tiles that open the model.
+  assert.deepEqual(await page.$$eval("#home-categories .chip", (els) => els.map((e) => e.textContent)), ["Easy to set up", "Chat and writing", "Coding", "Math and reasoning", "Understands images", "Makes images", "Speech to text"]);
+  assert.equal(await page.locator("#start-title").innerText(), "Start with one of these");
+  assert.deepEqual(await page.$$eval("#home-picks .tile .tile-kind", (els) => els.slice(0, 4).map((e) => e.textContent)), ["Chat and writing", "Chat and writing", "Coding", "Math and reasoning"]);
+  assert.equal(await page.$$eval("#home-picks .tile", (els) => els.length), 9);
+  await page.click("#home-picks .tile:nth-child(3)");
+  await page.waitForFunction(() => /Qwen2\.5-Coder-7B-Instruct-GGUF/.test(document.querySelector("#modal-title").textContent));
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#modal", { state: "hidden" });
+  // What paid assistants cost their makers, each figure with its article.
   assert.equal(await page.locator("#cost-title").innerText(), "AI tokens won't be cheap forever. Explore open-source models today");
   assert.deepEqual(await page.$$eval("#cost .cost-figure", (els) => els.map((e) => e.textContent)), ["$115 billion", "$8.7 billion", "$14 billion", "$9 billion"]);
   assert.deepEqual(await page.$$eval("#cost .cost-card a", (els) => els.map((e) => [e.target, e.rel, /^https:\/\//.test(e.href)])), Array(4).fill(["_blank", "noopener", true]), "every figure links to its article");
   assert.match(await page.locator("#cost .cost-note").innerText(), /it will be the user[\s\S]*The Boston Globe, April 2026[\s\S]*the only bill is for the computer or the rented GPU/);
-  // Two flowcharts under the search: a day's work handed from model to model, and where it runs.
+  // Two drawings: a day's work handed from model to model, and where it runs; a spark runs each wire.
   assert.equal(await page.locator("#flow").isVisible(), true);
-  assert.equal(await page.$eval("#flow", (e) => getComputedStyle(e).backgroundImage), "none", "a plain card, no dotted field");
+  assert.equal(await page.$eval("#flow", (e) => getComputedStyle(e).backgroundImage), "none", "no dotted field");
+  assert.equal(await page.$$eval("#flow .spark animateMotion", (els) => els.length), 3);
+  assert.equal(await page.$$eval("#flow .emoji", (els) => els.length), 0, "no emoji in the drawing");
   assert.equal(await page.locator("#flow-title").innerText(), "A day's work, on open models");
   assert.deepEqual(await page.$$eval("#flow .node .label:not(.sub)", (els) => els.map((e) => e.textContent)), ["Hugging Face", "Notes model", "Coding model", "Video model"]);
   assert.equal(await page.$eval("#flow .pill text", (e) => e.textContent), "Assigned: the export script, with tests");
@@ -249,13 +268,19 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#why").isVisible(), true);
   assert.equal(await page.locator("#why-title").innerText(), "Why use HuggingFound?");
   assert.deepEqual(await page.$$eval("#why .reason h3", (els) => els.map((e) => e.textContent)), ["When the service everyone relies on goes down", "Every kind of model in one place", "Runs where you choose", "Know a model before you fetch it", "Yours to keep"]);
-  assert.match(await page.locator("#why .lead-reason").innerText(), /One morning it stops answering, the status page says nothing[\s\S]*runs on your own computer or on a GPU rented by the minute/);
+  assert.match(await page.locator("#why .lead-reason").innerText(), /the assistant stops answering, the status page says nothing[\s\S]*runs on your own computer or on a GPU rented by the minute/);
+  // Little to read: no reason runs past two sentences, and no section wraps itself in a card.
+  assert.ok((await page.$$eval("#why .reasons dd", (els) => els.map((e) => e.textContent.split(/\.\s/).length))).every((n) => n <= 2));
+  assert.equal(await page.$eval("#cost", (e) => getComputedStyle(e).borderTopWidth), "0px");
   await page.click("#examples [data-example='coding help']");
   await page.waitForSelector("#found .model");
   assert.equal(await page.locator("#results").isVisible(), true);
   assert.equal(await page.locator("#why").isVisible(), false, "the reasons step aside for the results");
   assert.equal(await page.locator("#flow").isVisible(), false, "and so do the flowcharts");
   assert.equal(await page.locator("#cost").isVisible(), false, "and the cost figures");
+  assert.equal(await page.locator("#start").isVisible(), false, "and the picks");
+  assert.equal(await page.locator("#demo").isVisible(), false, "and the demo; the band keeps only the search and the categories");
+  assert.equal(await page.locator("#home-categories").isVisible(), true);
   assert.match(await page.locator("#found-title").innerText(), /coding help/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");
@@ -1349,7 +1374,7 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
   // Unknown to the site, the visitor sees no adult or video models and no LoRAs: not in the examples, the search, Browse or a model window.
   assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), true, "no video example for a visitor");
-  assert.match(await visitor.locator("#home-hint").innerText(), /Video models and LoRAs open once you sign in or enter an Anthropic API key as a guest\./);
+  assert.match(await visitor.locator("#home-hint").innerText(), /Sign in, or add an Anthropic key as a guest, for video models and LoRAs\./);
   await visitor.fill("#trait", "porn roleplay writing");
   await visitor.click("#trait-go");
   await visitor.waitForSelector("#found .model");
@@ -1422,7 +1447,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
   await visitor.waitForSelector("#account:not([hidden])");
   assert.match(await visitor.locator("#account").innerText(), /Ana/);
   assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), false, "signed in: video models are on show");
-  assert.doesNotMatch(await visitor.locator("#home-hint").innerText(), /Video models and LoRAs open/);
+  assert.doesNotMatch(await visitor.locator("#home-hint").innerText(), /for video models and LoRAs/);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false);
   assert.equal(await visitor.locator("#delete-account").innerText(), "Delete my account");
   await openSettings(visitor);

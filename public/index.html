@@ -4,7 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HuggingFound</title>
+  <meta name="description" content="Search Hugging Face in plain words, then run the model you pick on your own computer or on a GPU rented by the hour.">
+  <meta property="og:title" content="HuggingFound">
+  <meta property="og:description" content="Find an open model. Run it anywhere: your laptop, or a GPU rented by the hour.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#121417">
   <link rel="icon" href="icon.svg">
+  <link rel="preload" href="fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -28,76 +34,102 @@
   </header>
   <div class="rent-bar" id="rent-bar" hidden></div>
 
-  <main class="wrap">
-    <section id="home">
-      <h1 id="home-title">What do you want a model for?</h1>
-      <p class="lead" id="home-lead">Say it in plain words. HuggingFound searches Hugging Face and what people say about each model, then runs the one you pick on this computer or on a GPU rented by the hour.</p>
-      <form class="trait-search big" id="trait-form">
-        <input type="search" id="trait" placeholder="a model for coding help, meeting notes, product photos, transcribing interviews..." autofocus>
-        <button class="primary" type="submit" id="trait-go">Search</button>
-      </form>
-      <p class="examples" id="examples">
-        <span class="muted small">Try:</span>
-        <button class="chip" data-example="coding help">coding help</button>
-        <button class="chip" data-example="summarize documents">summarize documents</button>
-        <button class="chip" data-example="transcribe meetings">transcribe meetings</button>
-        <button class="chip" data-example="product photos">product photos</button>
-        <button class="chip" data-example="video clips">video clips</button>
-        <button class="chip" data-example="math and reasoning">math and reasoning</button>
-        <button class="chip" data-example="creative writing">creative writing</button>
-      </p>
-      <div class="browse-invite" id="browse-invite">
-        <span class="muted small">Not sure what you are looking for? Try a category:</span>
-        <span id="home-categories"></span>
-        <button class="chip strong" id="nav-browse">Browse everything</button>
+  <section id="home" class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow">Open models, found and run</p>
+        <h1 id="home-title">Find an open model.<br>Run it anywhere.</h1>
+        <p class="lead" id="home-lead">Search Hugging Face in plain words. Run the one you pick on your laptop, or on a GPU rented by the hour.</p>
+        <form class="trait-search big" id="trait-form">
+          <input type="search" id="trait" placeholder="coding help, meeting notes, product photos" autofocus>
+          <button class="primary" type="submit" id="trait-go">Search</button>
+        </form>
+        <p class="examples" id="examples">
+          <button class="chip" data-example="coding help">coding help</button>
+          <button class="chip" data-example="transcribe meetings">transcribe meetings</button>
+          <button class="chip" data-example="product photos">product photos</button>
+          <button class="chip" data-example="video clips">video clips</button>
+          <button class="chip" data-example="creative writing">creative writing</button>
+        </p>
+        <p class="muted small" id="home-hint"></p>
       </div>
-      <p class="muted small" id="home-hint"></p>
+      <div class="demo" id="demo" aria-hidden="true">
+        <div class="demo-top"><i></i><i></i><i></i><span>huggingfound.com</span></div>
+        <div class="demo-search"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span class="demo-typed"></span><span class="demo-caret"></span></div>
+        <ul class="demo-results">
+          <li><span class="demo-name">whisper-large-v3-turbo</span><span class="demo-where ok">Runs on your laptop</span><span class="demo-size">1.6 GB</span></li>
+          <li><span class="demo-name">Qwen2.5-7B-Instruct</span><span class="demo-where ok">Runs on your laptop</span><span class="demo-size">4.7 GB</span></li>
+          <li><span class="demo-name">Wan2.2 video</span><span class="demo-where gpu">Rented GPU, $0.44 an hour</span><span class="demo-size">28 GB</span></li>
+        </ul>
+        <div class="demo-run">
+          <div class="demo-run-head"><span class="demo-label">Running on this computer</span><span class="demo-pct">0%</span></div>
+          <div class="demo-track"><i></i></div>
+          <p class="demo-out">Notes: the launch moves to Thursday; Sam owns the export script.</p>
+          <p class="demo-check"><span class="tick"></span>Checked by Claude, with your key</p>
+        </div>
+      </div>
+    </div>
+    <div class="wrap browse-invite" id="browse-invite">
+      <span class="eyebrow">Browse</span>
+      <span id="home-categories"></span>
+      <button class="chip strong" id="nav-browse">Everything</button>
+    </div>
+  </section>
+
+  <main class="wrap">
+    <section id="start" class="start" aria-labelledby="start-title">
+      <div class="row-head">
+        <div><h2 id="start-title">Start with one of these</h2><span class="muted small">Picked by hand. Each one runs on a laptop.</span></div>
+        <span class="rail-nav"><button class="ghost" id="picks-back" aria-label="Scroll back">&#8592;</button><button class="ghost" id="picks-forward" aria-label="Scroll forward">&#8594;</button></span>
+      </div>
+      <div class="rail" id="home-picks"></div>
     </section>
 
     <section id="cost" class="cost" aria-labelledby="cost-title">
+      <p class="eyebrow">Why open models</p>
       <h2 id="cost-title">AI tokens won't be cheap forever. Explore open-source models today</h2>
-      <p class="lead">Every answer from a paid assistant costs its maker more in tokens than you pay for it. The gap is covered by investors for now, and the figures are public.</p>
+      <p class="lead">Every answer from a paid assistant costs its maker more than you pay for it. Investors cover the gap for now.</p>
       <div class="cost-grid">
         <article class="cost-card">
           <p class="cost-figure">$115 billion</p>
           <h3>OpenAI's expected cash burn through 2029</h3>
-          <p>About $17 billion of it in 2026 alone, rising to $45 billion a year by 2028, as reported from the company's own projections.</p>
-          <a href="https://finance.yahoo.com/news/openai-expects-business-burn-115-022035561.html" target="_blank" rel="noopener">Reuters, September 2025</a>
+          <a href="https://finance.yahoo.com/news/openai-expects-business-burn-115-022035561.html" target="_blank" rel="noopener">Reuters, Sep 2025</a>
         </article>
         <article class="cost-card">
           <p class="cost-figure">$8.7 billion</p>
-          <h3>Spent by OpenAI on inference in nine months</h3>
-          <p>The cost of running models for users on Microsoft's cloud, January to September 2025, against roughly $4.3 billion of revenue in the same period, by documents the Financial Times reviewed.</p>
-          <a href="https://www.theregister.com/2025/11/12/openai_spending_report/" target="_blank" rel="noopener">The Register, November 2025</a>
+          <h3>Spent by OpenAI on inference in nine months, against $4.3 billion of revenue</h3>
+          <a href="https://www.theregister.com/2025/11/12/openai_spending_report/" target="_blank" rel="noopener">The Register, Nov 2025</a>
         </article>
         <article class="cost-card">
           <p class="cost-figure">$14 billion</p>
           <h3>OpenAI's projected loss for 2026</h3>
-          <p>Serving one million input tokens costs its customers $2.50 and up; an open model does the same work for the price of the machine it runs on.</p>
-          <a href="https://www.rdworldonline.com/facing-14b-losses-in-2026-openai-is-now-seeking-100b-in-funding-but-can-it-ever-turn-a-profit/" target="_blank" rel="noopener">R&amp;D World, January 2026</a>
+          <a href="https://www.rdworldonline.com/facing-14b-losses-in-2026-openai-is-now-seeking-100b-in-funding-but-can-it-ever-turn-a-profit/" target="_blank" rel="noopener">R&amp;D World, Jan 2026</a>
         </article>
         <article class="cost-card">
           <p class="cost-figure">$9 billion</p>
           <h3>Anthropic's compute bill for the first half of 2026</h3>
-          <p>Up from $7.3 billion for the whole of 2025, with around $450 billion of cloud capacity committed for the years ahead, according to its draft IPO prospectus.</p>
-          <a href="https://finance.yahoo.com/technology/ai/articles/anthropic-prospectus-shows-revenue-growing-224511416.html" target="_blank" rel="noopener">Yahoo Finance, October 2026</a>
+          <a href="https://finance.yahoo.com/technology/ai/articles/anthropic-prospectus-shows-revenue-growing-224511416.html" target="_blank" rel="noopener">Yahoo Finance, Oct 2026</a>
         </article>
       </div>
-      <p class="cost-note"><b>Someone will pay that back, and it will be the user.</b> Only about one chatbot user in twenty pays today, and the $20 plan is "not a sustainable price" for these companies (<a href="https://www.bostonglobe.com/2026/04/29/business/chatgpt-price/" target="_blank" rel="noopener">The Boston Globe, April 2026</a>). As the investor money turns into bills, the plans get dearer, the free tiers thinner and the ads more. HuggingFound is the other way round: the models are open and cost nothing, and the only bill is for the computer or the rented GPU they run on, which you cap yourself.</p>
+      <p class="cost-note"><b>Someone pays that back, and it will be the user.</b> One chatbot user in twenty pays today, and $20 a month is "not a sustainable price" (<a href="https://www.bostonglobe.com/2026/04/29/business/chatgpt-price/" target="_blank" rel="noopener">The Boston Globe, April 2026</a>). Open models cost nothing; the only bill is for the computer or the rented GPU they run on, and you set the cap.</p>
     </section>
 
     <section id="flow" class="flow" aria-labelledby="flow-title">
+      <p class="eyebrow">How it fits together</p>
       <h2 id="flow-title">A day's work, on open models</h2>
-      <p class="lead">Every model found on Hugging Face and set up through HuggingFound, nothing paid for the models. Each step hands its result to the next.</p>
+      <p class="lead">Each model hands its result to the next. Nothing is paid for the models.</p>
       <svg class="flow-art" viewBox="0 0 1000 320" role="img" aria-label="Hugging Face feeds a notes model, which hands its notes to a coding model with work assigned, which hands its result to a video model">
-        <path class="wire" d="M132 160 C 202 160, 248 100, 318 100"/>
-        <path class="wire" d="M402 100 C 472 100, 528 220, 598 220"/>
-        <path class="wire" d="M682 220 C 752 220, 798 160, 868 160"/>
+        <path class="wire" id="w1" d="M132 160 C 202 160, 248 100, 318 100"/>
+        <path class="wire" id="w2" d="M402 100 C 472 100, 528 220, 598 220"/>
+        <path class="wire" id="w3" d="M682 220 C 752 220, 798 160, 868 160"/>
         <path class="wire tie" d="M640 54 V 178"/>
+        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="0s" repeatCount="indefinite"><mpath href="#w1"/></animateMotion></circle>
+        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="0.8s" repeatCount="indefinite"><mpath href="#w2"/></animateMotion></circle>
+        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="1.6s" repeatCount="indefinite"><mpath href="#w3"/></animateMotion></circle>
         <g class="node" transform="translate(90 160)">
           <rect x="-42" y="-42" width="84" height="84" rx="18"/>
           <circle class="port" cx="42" cy="0" r="4"/>
-          <text class="emoji" y="14" text-anchor="middle">🤗</text>
+          <g class="icon dots"><circle cx="-14" cy="-14" r="4"/><circle cx="0" cy="-14" r="4"/><circle cx="14" cy="-14" r="4"/><circle cx="-14" cy="0" r="4"/><circle cx="0" cy="0" r="4"/><circle cx="14" cy="0" r="4"/><circle cx="-14" cy="14" r="4"/><circle cx="0" cy="14" r="4"/><circle cx="14" cy="14" r="4"/></g>
           <text class="label" y="66" text-anchor="middle">Hugging Face</text>
           <text class="label sub" y="86" text-anchor="middle">a million open models</text>
         </g>
@@ -106,7 +138,7 @@
           <circle class="port" cx="-42" cy="0" r="4"/><circle class="port" cx="42" cy="0" r="4"/>
           <g class="icon"><rect x="-17" y="-23" width="34" height="46" rx="4"/><path d="M-9 -9 H9 M-9 1 H9 M-9 11 H3"/></g>
           <text class="label" y="66" text-anchor="middle">Notes model</text>
-          <text class="label sub" y="86" text-anchor="middle">turns the meeting into notes</text>
+          <text class="label sub" y="86" text-anchor="middle">the meeting, as notes</text>
         </g>
         <g class="node" transform="translate(640 220)">
           <rect x="-42" y="-42" width="84" height="84" rx="18"/>
@@ -124,31 +156,33 @@
           <circle class="port" cx="-42" cy="0" r="4"/>
           <g class="icon"><rect x="-24" y="-18" width="48" height="36" rx="5"/><polygon class="play" points="-6,-10 11,0 -6,10"/></g>
           <text class="label" y="66" text-anchor="middle">Video model</text>
-          <text class="label sub" y="86" text-anchor="middle">makes the launch clip</text>
+          <text class="label sub" y="86" text-anchor="middle">the launch clip</text>
         </g>
       </svg>
       <ol class="flow-list">
         <li><b>Hugging Face</b>, a million open models.</li>
         <li><b>Notes model</b> turns the meeting into notes.</li>
-        <li><b>Coding model</b> builds what the notes ask for: the export script, with tests.</li>
+        <li><b>Coding model</b> builds what the notes ask for.</li>
         <li><b>Video model</b> makes the launch clip.</li>
       </ol>
     </section>
 
     <section id="runs" class="flow" aria-labelledby="runs-title">
       <h2 id="runs-title">Where it runs</h2>
-      <p class="lead">Small models run on your computer. Heavier ones run on a GPU rented by the hour. A paid model you already have can check the open models' work, if you like.</p>
+      <p class="lead">Small models on your computer. Heavier ones on a GPU by the hour. A paid model you already have can check the work.</p>
       <svg class="flow-art" viewBox="0 0 1000 320" role="img" aria-label="HuggingFound sets a model up on your computer or on a rented GPU; either way a paid model of yours can check the work">
-        <path class="wire" d="M132 160 C 240 160, 300 80, 408 80"/>
-        <path class="wire" d="M132 160 C 240 160, 300 240, 408 240"/>
+        <path class="wire" id="r1" d="M132 160 C 240 160, 300 80, 408 80"/>
+        <path class="wire" id="r2" d="M132 160 C 240 160, 300 240, 408 240"/>
         <path class="wire faint" d="M492 80 C 600 80, 670 160, 778 160"/>
         <path class="wire faint" d="M492 240 C 600 240, 670 160, 778 160"/>
+        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="0s" repeatCount="indefinite"><mpath href="#r1"/></animateMotion></circle>
+        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="1.2s" repeatCount="indefinite"><mpath href="#r2"/></animateMotion></circle>
         <g class="node" transform="translate(90 160)">
           <rect x="-42" y="-42" width="84" height="84" rx="18"/>
           <circle class="port" cx="42" cy="0" r="4"/>
           <image href="icon.svg" x="-24" y="-24" width="48" height="48"/>
           <text class="label" y="66" text-anchor="middle">HuggingFound</text>
-          <text class="label sub" y="86" text-anchor="middle">finds the model, sets it up</text>
+          <text class="label sub" y="86" text-anchor="middle">finds it, sets it up</text>
         </g>
         <g class="node" transform="translate(450 80)">
           <rect x="-42" y="-42" width="84" height="84" rx="18"/>
@@ -162,51 +196,39 @@
           <circle class="port" cx="-42" cy="0" r="4"/><circle class="port" cx="42" cy="0" r="4"/>
           <g class="icon"><rect x="-18" y="-18" width="36" height="36" rx="4"/><rect x="-8" y="-8" width="16" height="16" rx="2"/><path d="M-10 -26 V-18 M0 -26 V-18 M10 -26 V-18 M-10 18 V26 M0 18 V26 M10 18 V26 M-26 -10 H-18 M-26 0 H-18 M-26 10 H-18 M18 -10 H26 M18 0 H26 M18 10 H26"/></g>
           <text class="label" y="66" text-anchor="middle">A rented GPU</text>
-          <text class="label sub" y="86" text-anchor="middle">heavier models, by the hour; stops itself</text>
+          <text class="label sub" y="86" text-anchor="middle">by the hour; stops itself</text>
         </g>
         <g class="node optional" transform="translate(820 160)">
           <rect x="-42" y="-42" width="84" height="84" rx="18"/>
           <circle class="port" cx="-42" cy="0" r="4"/>
           <g class="icon"><path d="M0 -24 L22 -15 V2 C22 15, 12 24, 0 28 C-12 24, -22 15, -22 2 V-15 Z"/><path class="check" d="M-10 2 L-3 9 L11 -6"/></g>
           <text class="label" y="66" text-anchor="middle">Your paid model, optional</text>
-          <text class="label sub" y="86" text-anchor="middle">Claude or another key checks the work; a free tier will do</text>
+          <text class="label sub" y="86" text-anchor="middle">checks the work; a free tier will do</text>
         </g>
       </svg>
       <ol class="flow-list">
         <li><b>HuggingFound</b> finds the model and sets it up.</li>
-        <li><b>Your computer</b> runs small models; nothing leaves it but the download.</li>
-        <li><b>A rented GPU</b> runs heavier models by the hour, and stops itself when idle.</li>
-        <li><b>Your paid model, optional:</b> Claude or another key checks the open models' work; a free tier will do.</li>
+        <li><b>Your computer</b> runs small models; nothing leaves it.</li>
+        <li><b>A rented GPU</b> runs heavier ones by the hour, and stops itself.</li>
+        <li><b>Your paid model, optional:</b> checks the work; a free tier will do.</li>
       </ol>
     </section>
 
     <section id="why" class="why-use" aria-labelledby="why-title">
-      <h2 id="why-title">Why use HuggingFound?</h2>
-      <p class="lead">Hugging Face holds hundreds of thousands of open models. HuggingFound finds the one for the job, says what people make of it, and runs it where you choose. Here is when that matters.</p>
-      <div class="reasons">
+      <div class="why-grid">
         <article class="reason lead-reason">
+          <p class="eyebrow">Why HuggingFound</p>
+          <h2 id="why-title">Why use HuggingFound?</h2>
           <h3>When the service everyone relies on goes down</h3>
-          <p>A team runs its day on one assistant: drafts, code, meeting notes, pictures for a deck. One morning it stops answering, the status page says nothing, and the other big services are down or full. The work does not wait.</p>
-          <p>HuggingFound is not one service. It opens the whole of Hugging Face: chat and coding models, image and video models, transcription, in the thousands. Search for what you need, pick one, and it runs on your own computer or on a GPU rented by the minute. With that many models, one that does the job is always there, and nobody can switch it off.</p>
+          <p>One morning the assistant stops answering, the status page says nothing, and the other big services are down or full. HuggingFound is not one service. It opens the whole of Hugging Face, and the model you pick runs on your own computer or on a GPU rented by the minute. Nobody can switch it off.</p>
         </article>
-        <article class="reason">
-          <h3>Every kind of model in one place</h3>
-          <p>Writing and chat, code, math and reasoning, models that read pictures, image generation, video clips with sound, speech to text. Each model card says what it makes, how big it is, and what it needs to run.</p>
-        </article>
-        <article class="reason">
-          <h3>Runs where you choose</h3>
-          <p>Small models run on a laptop, with nothing leaving it but the download. Bigger ones run on a data-centre card rented by the hour, which stops by itself when idle or when you say so, and keeps your spend under a cap you set.</p>
-        </article>
-        <article class="reason">
-          <h3>Know a model before you fetch it</h3>
-          <p>HuggingFound reads each model's card and its community discussions, and sums up in a line what people say: what it is good at, what it gets wrong, which version to take. Pictures and clips can be checked by Claude, with your own key, and asked for again with a change.</p>
-        </article>
-        <article class="reason">
-          <h3>Yours to keep</h3>
-          <p>Open weights do not expire and cannot be withdrawn from your disk. What you make is kept in your browser and on your computer, not on a server. Keys you add stay encrypted with your account and are never shown again.</p>
-        </article>
+        <dl class="reasons">
+          <div class="reason"><dt><h3>Every kind of model in one place</h3></dt><dd>Chat, code, math, pictures, video with sound, speech to text.</dd></div>
+          <div class="reason"><dt><h3>Runs where you choose</h3></dt><dd>A laptop, or a rented card that stops itself and stays under your cap.</dd></div>
+          <div class="reason"><dt><h3>Know a model before you fetch it</h3></dt><dd>What people say about it, summed up in a line on every card.</dd></div>
+          <div class="reason"><dt><h3>Yours to keep</h3></dt><dd>Open weights do not expire. What you make stays on your computer.</dd></div>
+        </dl>
       </div>
-      <p class="muted small reason-note">Open models are smaller than the largest paid services and take a little setting up; the trade is that they are many, they are yours, and they run when nothing else does.</p>
     </section>
 
     <section id="notice" class="notice info" hidden></section>
@@ -250,11 +272,8 @@
 
     <section id="browse" hidden>
     <section class="intro">
-      <h1>Open models, running on this computer.</h1>
-      <p class="lead">
-        Scan Hugging Face for the latest models, see which ones this machine can run, and try one
-        with a few clicks. Nothing leaves your computer except the downloads.
-      </p>
+      <h2>Browse</h2>
+      <p class="lead">What is trending on Hugging Face, and which of it this machine can run.</p>
       <div class="scan-row">
         <button class="primary local-only" id="scan">Scan Hugging Face</button>
         <span class="muted small" id="scan-status">No scan yet. The curated picks below work without one.</span>
@@ -264,11 +283,11 @@
         <button class="ghost local-only" id="gather-voices">Gather what people say</button>
         <button class="ghost local-only" id="stop-voices" hidden>Stop</button>
         <button class="ghost local-only" id="get-summarizer" hidden>Install a small model to write the summaries (2 GB)</button>
-        <span class="muted small local-only" id="voices-status">Reads each scanned model's card and community discussions and sums them up in a line or two on every card. A chat model installed in Ollama writes the lines; without one they are lifted from the comments.</span>
+        <span class="muted small local-only" id="voices-status">Sums up each model's card and discussions in a line on its card.</span>
       </div>
       <pre class="log small local-only" id="voices-log" hidden></pre>
       <div class="get-app hosted-only" id="get-app">
-        <b>To download and try a model, run HuggingFound on your computer.</b> It is free and open source, needs Node 20 or newer, and keeps everything in a folder of its own:
+        <b>To download and try a model, run HuggingFound on your computer.</b> Free, open source, Node 20 or newer:
         <code>git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
 npm install
@@ -314,9 +333,9 @@ npm start</code>
             <option value="90">Last 3 months</option>
           </select>
         </label>
-        <input type="search" id="search" placeholder="Filter these by name or by what people say">
+        <input type="search" id="search" placeholder="Filter by name or by what people say">
       </div>
-      <p class="muted small speed-note">Speed lines are rough guesses for this computer from the model's size. The first run is slower while things load; a measured time replaces the guess after a real run.</p>
+      <p class="muted small speed-note">Speed lines are guesses from the model's size; a measured time replaces them after a run.</p>
       <h2 id="picks-title" class="section-title">Good first picks</h2>
       <div id="picks" class="cards"></div>
       <h2 id="scan-title" class="section-title" hidden>From the scan</h2>

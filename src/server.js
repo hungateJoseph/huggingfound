@@ -42,7 +42,7 @@ const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "pu
 // The gathered voices index per file, re-read only when the file changes.
 const VOICES_CACHE = new Map();
 const RUNNER_NAMES = { ollama: "Ollama", whisper: "whisper.cpp", sd: "stable-diffusion.cpp" };
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".txt": "text/plain; charset=utf-8" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2" };
 
 // Keys the hosted site takes from the process environment rather than a file.
 const HOSTED_ENV_KEYS = ["HF_TOKEN", "GITHUB_TOKEN", "YOUTUBE_API_KEY", "REDDIT_CLIENT_ID"];
@@ -1524,7 +1524,7 @@ function serveFile(res, file, root) {
     res.writeHead(404).end("Not found");
     return;
   }
-  res.writeHead(200, { "Content-Type": TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream", "Cache-Control": "no-store" });
+  res.writeHead(200, { "Content-Type": TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream", "Cache-Control": file.includes(`${path.sep}fonts${path.sep}`) ? "public, max-age=31536000, immutable" : "no-store" });
   fs.createReadStream(file).pipe(res);
 }
 

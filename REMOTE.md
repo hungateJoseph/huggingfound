@@ -275,16 +275,32 @@ The machine takes two to four minutes to start. Meanwhile:
   (`pictureUnseen`), and says so above the rows and in the log. Scene
   only shows with an Anthropic key saved or entered. A machine from before joining
   leaves the pieces one by one.
-- The front page carries a "Why use HuggingFound?" section under the
-  search (`#why`, `.why-use`, `.reasons`, `.reason.lead-reason`), shown in
-  home mode only (hidden by `body[data-mode]` for results and browse). The
-  lead reason is the outage case: a team's one assistant stops answering
-  and nothing else is up; HuggingFound opens the whole of Hugging Face,
-  running on the person's computer or a rented card. Four more: every
-  kind of model, runs where you choose, know a model before you fetch it,
-  yours to keep; a closing note that open models are smaller than the
-  largest paid services. Plain static markup in index.html; the scan's
-  first step checks the headings and that it steps aside for results.
+- The front page (2026-10-28 redesign). A dark hero band (`#home.hero`)
+  holds the headline in Bricolage Grotesque (the latin variable file is in
+  `public/fonts`, OFL, served with a year's cache; nothing is fetched from
+  Google), one sentence, the search, five example chips, and on the right
+  the demo (`#demo`, `startDemo()` in app.js): one search typed out,
+  three results, a download bar, a line of notes and a Claude check, on a
+  13-second loop that pauses in a hidden tab; with reduced motion asked
+  for it sits on its finished state. Under the band one line of category
+  links (`#browse-invite`, inside the hero section). Then, in `main`: the
+  curated picks as a row of tiles (`#start`, `renderHomePicks()`, arrows
+  scroll the rail, a tile opens the model), the cost figures on one rule
+  with no boxes (`#cost`), the two drawings with a spark riding each wire
+  (SMIL `animateMotion`, hidden under reduced motion; the Hugging Face
+  node is a dot grid, no emoji), and "Why use HuggingFound?" as the
+  outage story beside four one-line reasons on rules (`#why`). In results
+  and browse modes the band shrinks to the search and the category line
+  and the rest of the home sections are hidden by `body[data-mode]`.
+  Palette: warm paper, near-black ink, one vermilion (`--accent`) for
+  links, live marks and sparks; primary buttons are ink; the rent bar is
+  dark. The things the "vibe coded" write-ups name were taken out on
+  purpose: the Tailwind slate-and-blue defaults, emoji as icons, feature
+  cards in a grid, cards around every section, all-caps section titles,
+  the headline-then-softer-subheadline hero, and the paragraph under
+  every heading. The scan's first step checks the hero, the font, the
+  demo's finished state, the tiles, the figures and that it all steps
+  aside for results.
 - Placement: twice in a day a two-card and a one-card H200 pod in EUR-IS-4
   sat listed as running with no container for ten minutes and more (the
   proxy answering 404 on both ports), while a pod in US-NC-1 came up in
