@@ -21,6 +21,7 @@
         <span>HuggingFound</span>
       </a>
       <div class="top-right">
+        <button class="ghost" id="create-account" hidden>Create account</button>
         <button class="primary" id="sign-in" hidden>Sign in</button>
         <div class="account" id="account" hidden></div>
       </div>
@@ -377,14 +378,29 @@ npm start</code>
   <div class="modal" id="signin" hidden>
     <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="signin-title">
       <div class="modal-head">
-        <div>
-          <h2 id="signin-title">Sign in</h2>
-          <p class="muted small">An account keeps your RunPod and Anthropic keys and the GPU you rent, so the next visit is quick. It keeps nothing else: what you search for, say to a model, give it or get back never reaches this site's storage, and the chat with your rented GPU goes straight from your browser to it. <a href="/privacy.html">How privacy works here</a>.</p>
-        </div>
+        <h2 id="signin-title">Sign in</h2>
         <button class="ghost" id="close-signin" aria-label="Close">Close</button>
       </div>
-      <div id="google-button"></div>
+      <div id="google-button" class="google-host"></div>
       <p class="muted small" id="signin-error"></p>
+      <p class="muted small">New here? <a href="#" id="to-signup">Create an account</a>.</p>
+    </div>
+  </div>
+
+  <div class="modal" id="signup" hidden>
+    <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="signup-title">
+      <div class="modal-head">
+        <h2 id="signup-title">Create an account</h2>
+        <button class="ghost" id="close-signup" aria-label="Close">Close</button>
+      </div>
+      <dl class="keeps">
+        <div><dt>Kept</dt><dd>Your RunPod, Vast.ai and Anthropic keys, encrypted, and the GPU you rent, so the next visit is quick.</dd></div>
+        <div><dt>Never kept</dt><dd>What you search for, say to a model, give it or get back. The chat with your rented GPU goes straight from your browser to it.</dd></div>
+        <div><dt>Opens</dt><dd>Video models and LoRAs, and the adult models.</dd></div>
+      </dl>
+      <div id="google-button-signup" class="google-host"></div>
+      <p class="muted small" id="signup-error"></p>
+      <p class="muted small"><a href="/privacy.html">How privacy works here</a>. Deleting the account deletes the keys and the machine.</p>
     </div>
   </div>
 

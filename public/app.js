@@ -6206,6 +6206,7 @@ function renderAccount() {
   // The Sign in button shows whenever Google is set up and nobody is signed
   // in for good; a guest sees it too, to keep their keys.
   $("#sign-in").hidden = (user && !user.guest) || !state.auth?.ready;
+  $("#create-account").hidden = $("#sign-in").hidden;
   // Settings are open to everyone: a visitor who saves a key there becomes a guest.
   $("#open-settings").hidden = false;
   // The paste-in checker is for visitors with nothing running here; with a
@@ -6236,16 +6237,25 @@ function renderAccount() {
 }
 
 function openSignIn() {
+  $("#signup").hidden = true;
   $("#signin").hidden = false;
   $("#signin-error").textContent = "";
-  mountGoogle();
+  mountGoogle($("#google-button"), "signin_with");
+}
+
+// Creating an account is the same Google step; this window says first what
+// the account keeps and what it never sees.
+function openSignUp() {
+  $("#signin").hidden = true;
+  $("#signup").hidden = false;
+  $("#signup-error").textContent = "";
+  mountGoogle($("#google-button-signup"), "signup_with");
 }
 
 // Google's own button, drawn by its script, which is loaded only when the
 // sign-in window opens. Picking an account hands over an ID token; the
 // server checks it and starts the session.
-function mountGoogle() {
-  const host = $("#google-button");
+function mountGoogle(host, text) {
   if (!state.auth?.google) {
     host.innerHTML = `<p class="muted small">Sign-in is not set up on this site yet; the owner has to add a Google client id.</p>`;
     return;
@@ -6254,7 +6264,7 @@ function mountGoogle() {
     if (!window.google?.accounts?.id) return;
     window.google.accounts.id.initialize({ client_id: state.auth.google, callback: onGoogleCredential });
     host.innerHTML = "";
-    window.google.accounts.id.renderButton(host, { theme: "outline", size: "large", width: 300, text: "continue_with" });
+    window.google.accounts.id.renderButton(host, { theme: "outline", size: "large", width: 300, text });
   };
   if (window.google?.accounts?.id) return ready();
   if (!state.gsi) {
@@ -6272,19 +6282,29 @@ async function onGoogleCredential(response) {
     await api.post("/api/auth/google", { credential: response.credential });
   } catch (err) {
     $("#signin-error").textContent = err.message;
+    $("#signup-error").textContent = err.message;
     return;
   }
   $("#signin").hidden = true;
+  $("#signup").hidden = true;
   await load();
   notice("Signed in. Your keys and your rented GPU are kept with your account; what you say to models is not.", "ok");
   if (state.open) openModel(state.open);
 }
 
 $("#sign-in").addEventListener("click", openSignIn);
-$("#close-signin").addEventListener("click", () => ($("#signin").hidden = true));
-$("#signin").addEventListener("click", (e) => {
-  if (e.target === e.currentTarget) e.currentTarget.hidden = true;
+$("#create-account").addEventListener("click", openSignUp);
+$("#to-signup").addEventListener("click", (e) => {
+  e.preventDefault();
+  openSignUp();
 });
+$("#close-signin").addEventListener("click", () => ($("#signin").hidden = true));
+$("#close-signup").addEventListener("click", () => ($("#signup").hidden = true));
+for (const id of ["#signin", "#signup"]) {
+  $(id).addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) e.currentTarget.hidden = true;
+  });
+}
 $("#delete-account").addEventListener("click", async () => {
   if (!confirm(state.user?.guest ? "Forget your keys now? The rented GPU and every model on it are deleted too." : "Delete your account? The keys, the rented GPU and every model on it are deleted; nothing else was kept.")) return;
   try {

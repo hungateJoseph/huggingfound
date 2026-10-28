@@ -1373,6 +1373,10 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   acceptDialogs = false;
   assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 0);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false, "no Sign in button until Google is set up; guests need none");
+  assert.equal(await visitor.locator("#create-account").isVisible(), false, "nor Create account");
+  // The sign-in window is only the button; what an account keeps is said in the create-account window.
+  assert.equal(await visitor.locator("#signin .modal-head p").count(), 0);
+  assert.deepEqual(await visitor.$$eval("#signup .keeps dt", (els) => els.map((e) => e.textContent)), ["Kept", "Never kept", "Opens"]);
   assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
   // Unknown to the site, the visitor sees no adult or video models and no LoRAs: not in the examples, the search, Browse or a model window.
   assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), true, "no video example for a visitor");
@@ -1451,6 +1455,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
   assert.equal(await visitor.$eval('#examples [data-example="video clips"]', (e) => e.hidden), false, "signed in: video models are on show");
   assert.doesNotMatch(await visitor.locator("#home-hint").innerText(), /for video models and LoRAs/);
   assert.equal(await visitor.locator("#sign-in").isVisible(), false);
+  assert.equal(await visitor.locator("#create-account").isVisible(), false, "signed in: no Create account either");
   assert.equal(await visitor.locator("#delete-account").innerText(), "Delete my account");
   await openSettings(visitor);
   await visitor.waitForSelector("#settings:not([hidden])");

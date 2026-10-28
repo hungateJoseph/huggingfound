@@ -551,12 +551,21 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 /* Elements hidden by script stay hidden whatever a display rule says. */
 [hidden] { display: none !important; }
 /* Accounts on the hosted site. */
+/* Create account beside Sign in, on the dark bar. */
+.top-right > button.ghost { color: var(--dark-ink); border-color: #4a5a64; }
+.top-right > button.ghost:hover { border-color: var(--dark-ink); }
 .account { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--dark-ink); }
 .account button { background: transparent; color: var(--dark-ink); border-color: #4a5a64; }
 .account .avatar { width: 26px; height: 26px; border-radius: 50%; }
 .account button { font-size: 13px; padding: 4px 10px; }
 .account-box { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
-#google-button { min-height: 44px; margin: 8px 0; }
+.google-host { min-height: 44px; margin: 8px 0; }
+/* What an account keeps, said once, when it is made. */
+.keeps { margin: 0 0 16px; display: grid; gap: 10px; }
+.keeps div { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: baseline; font-size: 14px; }
+.keeps dt { font: 600 11px/1.6 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.keeps dd { margin: 0; color: var(--ink); line-height: 1.5; }
+@media (max-width: 600px) { .top-right > button.ghost { display: none; } }
 /* Where a chat model runs: this computer or a rented GPU. */
 .where { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
 .where-opt { border-radius: 999px; padding: 7px 14px; }
