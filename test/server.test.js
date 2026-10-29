@@ -78,7 +78,7 @@ before(async () => {
   web = await startStubWeb();
   envFile = path.join(process.env.HUGGINGFOUND_HOME, ".env");
   scanFile = path.join(process.env.HUGGINGFOUND_HOME, "scan.json");
-  server = createServer({ envFile, scanFile, hubBase: stub.base, civitaiBase: web.url, redditAuthBase: web.url, redditApiBase: web.url, githubBase: web.url, hnBase: web.url, lemmyBase: web.url, youtubeBase: web.url, writtenSummaries: false });
+  server = createServer({ adult: true, envFile, scanFile, hubBase: stub.base, civitaiBase: web.url, redditAuthBase: web.url, redditApiBase: web.url, githubBase: web.url, hnBase: web.url, lemmyBase: web.url, youtubeBase: web.url, writtenSummaries: false });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -125,7 +125,7 @@ test("a scan is saved, and the next scan marks what is new", async () => {
   assert.ok(fs.existsSync(scanFile));
 
   const later = await startStubHub({ extraModels: [{ id: "new/Thing-GGUF", pipeline_tag: "text-generation", tags: ["gguf"], downloads: 1, likes: 1, createdAt: "2026-09-29T00:00:00.000Z" }] });
-  const s2 = createServer({ envFile, scanFile, hubBase: later.base });
+  const s2 = createServer({ adult: true, envFile, scanFile, hubBase: later.base });
   await new Promise((resolve) => s2.listen(0, "127.0.0.1", resolve));
   try {
     const second = await (await fetch(`http://127.0.0.1:${s2.address().port}/api/scan`, { method: "POST" })).json();
@@ -221,7 +221,7 @@ test("a gated model is blocked without a token and opens with one", async () => 
   assert.equal((await (await get("/api/state")).json()).token, "hf_a************wxyz");
   assert.match(fs.readFileSync(envFile, "utf8"), /^HF_TOKEN=hf_abcdefghijklmnopqrstuvwxyz$/m);
 
-  const s3 = createServer({ envFile, scanFile, hubBase: stub.base });
+  const s3 = createServer({ adult: true, envFile, scanFile, hubBase: stub.base });
   await new Promise((resolve) => s3.listen(0, "127.0.0.1", resolve));
   try {
     const open = await (await fetch(`http://127.0.0.1:${s3.address().port}/api/model?id=meta-llama/Llama-3.1-8B-Instruct`)).json();

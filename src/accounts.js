@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-// Accounts for the hosted site. A person signs in with Google, and their
+// Accounts for the hosted site. A person signs in with Google, or with an
+// email address and a password of their own (scrypt, salted), and their
 // settings (the RunPod and Anthropic keys, the rented machine) are kept in
 // a file of their own, encrypted with a secret the server holds. Nothing a
 // person types into a model or gets back from one is stored here; the
@@ -78,21 +79,55 @@ export function createAccounts({ dir, secret, sessionSecret = secret, googleClie
     googleClientId: () => googleClientId,
 
     // ---- users -------------------------------------------------------------
+    // From Google: the address is verified. An account made earlier with a
+    // password but never verified belongs to whoever proves the address, so
+    // the password is dropped and the verified owner has it from here on.
     findOrCreate({ email, name = null, picture = null }) {
       const lower = String(email).trim().toLowerCase();
       if (!lower) throw new AuthError("No email address.", 400);
       const ids = index();
       let user = ids[lower] ? readJson(userFile(ids[lower]), null) : null;
       if (user) {
-        if ((!user.name && name) || (!user.picture && picture)) {
-          user = { ...user, name: user.name ?? name, picture: user.picture ?? picture };
+        if ((!user.name && name) || (!user.picture && picture) || !user.verified) {
+          user = { ...user, name: user.name ?? name, picture: user.picture ?? picture, verified: true };
+          if (!user.verified || user.passwordHash) {
+            delete user.passwordHash;
+            delete user.passwordSalt;
+          }
           writeJson(userFile(user.id), user);
         }
         return publicUser(user);
       }
-      user = { id: crypto.randomBytes(12).toString("hex"), email: lower, name, picture, createdAt: new Date(now()).toISOString(), settings: encrypt({}) };
+      user = { id: crypto.randomBytes(12).toString("hex"), email: lower, name, picture, verified: true, createdAt: new Date(now()).toISOString(), settings: encrypt({}) };
       writeJson(userFile(user.id), user);
       writeJson(indexFile, { ...ids, [lower]: user.id });
+      return publicUser(user);
+    },
+    // With an email address and a password. The address is not verified, so
+    // an address that already has an account is refused rather than joined.
+    register({ email, name = null, password }) {
+      const lower = String(email ?? "").trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lower) || lower.length > 200) throw new AuthError("That does not look like an email address.", 400);
+      if (typeof password !== "string" || password.length < 8) throw new AuthError("The password needs at least 8 characters.", 400);
+      if (password.length > 200) throw new AuthError("That password is too long.", 400);
+      const ids = index();
+      if (ids[lower]) throw new AuthError("That email address already has an account. Sign in instead.", 409);
+      const passwordSalt = crypto.randomBytes(16).toString("hex");
+      const passwordHash = hashPassword(password, passwordSalt);
+      const user = { id: crypto.randomBytes(12).toString("hex"), email: lower, name: name ? String(name).trim().slice(0, 80) || null : null, picture: null, verified: false, passwordHash, passwordSalt, createdAt: new Date(now()).toISOString(), settings: encrypt({}) };
+      writeJson(userFile(user.id), user);
+      writeJson(indexFile, { ...ids, [lower]: user.id });
+      return publicUser(user);
+    },
+    login({ email, password }) {
+      const lower = String(email ?? "").trim().toLowerCase();
+      const ids = index();
+      const user = ids[lower] ? readJson(userFile(ids[lower]), null) : null;
+      // One answer for a wrong address and a wrong password, so neither tells which.
+      if (!user || !user.passwordHash || typeof password !== "string") throw new AuthError(user && !user.passwordHash ? "That account signs in with Google." : "Wrong email address or password.", 401);
+      const expected = Buffer.from(user.passwordHash, "hex");
+      const given = Buffer.from(hashPassword(password, user.passwordSalt), "hex");
+      if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) throw new AuthError("Wrong email address or password.", 401);
       return publicUser(user);
     },
     get(id) {
@@ -256,7 +291,11 @@ export function createAccounts({ dir, secret, sessionSecret = secret, googleClie
   }
 }
 
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 32, { N: 16384, r: 8, p: 1 }).toString("hex");
+}
+
 function publicUser(user) {
   if (user.guest) return { id: user.id, guest: true, email: null, name: "Guest", picture: null, createdAt: user.createdAt, expiresAt: user.expiresAt };
-  return { id: user.id, guest: false, email: user.email, name: user.name ?? null, picture: user.picture ?? null, createdAt: user.createdAt };
+  return { id: user.id, guest: false, email: user.email, name: user.name ?? null, picture: user.picture ?? null, verified: Boolean(user.verified), password: Boolean(user.passwordHash), createdAt: user.createdAt };
 }

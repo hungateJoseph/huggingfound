@@ -132,7 +132,7 @@ test("Google sign-in checks the token against Google's keys and this site's clie
   assert.match(cookie, new RegExp(`^${SESSION_COOKIE}=`));
   assert.match(res.headers.get("set-cookie"), /HttpOnly/);
   const s = await json("/api/state", cookie);
-  assert.deepEqual(s.user, { email: "ana@example.com", name: "Ana", picture: "https://img.example/ana.png", guest: false, expiresAt: null });
+  assert.deepEqual(s.user, { email: "ana@example.com", name: "Ana", picture: "https://img.example/ana.png", guest: false, expiresAt: null, admin: false });
   assert.deepEqual(s.rental, { rented: false });
   assert.equal(s.runpodKey, "");
   assert.equal(s.claudeReady, false);

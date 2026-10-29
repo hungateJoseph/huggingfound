@@ -100,10 +100,12 @@ test("the server refreshes its own catalogue: a scan, then what people say", asy
   assert.ok(s.refresh.last);
 });
 
-test("a visitor the site does not know sees no adult or video models and no LoRAs; a guest's Anthropic key or signing in opens them", async () => {
+test("a visitor the site does not know sees no adult or video models and no LoRAs; a guest's Anthropic key or signing in opens the video models, and adult models only the owner", async () => {
   const CYDONIA = "TheDrummer/Cydonia-24B-v2-GGUF";
   const WAN = "Wan-AI/Wan2.2-TI2V-5B-Diffusers";
-  assert.equal((await (await get("/api/state")).json()).access.full, false);
+  const state = await (await get("/api/state")).json();
+  assert.deepEqual(state.access, { full: false, adult: false });
+  assert.ok(state.categories.every((c) => !c.id.startsWith("nsfw")), "no adult category is named to a visitor");
   const found = await (await get("/api/find?q=porn+roleplay+writing")).json();
   assert.ok(found.models.length > 0, "the search still answers");
   assert.ok(found.models.every((m) => !m.adult), "with no adult model in it");
@@ -112,30 +114,71 @@ test("a visitor the site does not know sees no adult or video models and no LoRA
   const browse = (await (await get("/api/models")).json()).models;
   assert.ok(browse.length > 5);
   assert.ok(browse.every((m) => !m.adult && !/video/.test(m.pipeline ?? "")), "Browse has neither");
-  for (const [id, why] of [[CYDONIA, /for adults\. Sign in, or enter an Anthropic API key as a guest/], [WAN, /Video models and LoRAs open once you sign in, or enter an Anthropic API key as a guest/]]) {
+  for (const [id, why] of [[CYDONIA, /^This model is not available here\.$/], [WAN, /Video models and LoRAs open once you sign in, or enter an Anthropic API key as a guest/]]) {
     const res = await get(`/api/model?id=${id}`);
     assert.equal(res.status, 403, id);
     assert.match((await res.json()).error, why);
   }
   for (const p of [`/api/loras?id=${WAN}`, `/api/loras/recipe?base=${WAN}&id=x/y`, `/api/loras/files?id=x/y`, "/api/loras/link?url=https://civitai.com/models/1"]) assert.equal((await get(p)).status, 403, p);
-  // A guest with only a RunPod key is still a visitor here; with an Anthropic key, not.
+  // A guest with only a RunPod key is still a visitor here; with an Anthropic key the video models open, the adult ones stay shut.
   const runpodOnly = await post("/api/guest", { RUNPOD_API_KEY: "runpodkey0123456789abcdef" });
   const cookie1 = runpodOnly.headers.get("set-cookie").split(";")[0];
-  assert.equal((await (await get("/api/state", { Cookie: cookie1 })).json()).access.full, false);
-  assert.equal((await (await get("/api/search?q=cydonia", { Cookie: cookie1 })).json()).models.length, 0);
+  assert.deepEqual((await (await get("/api/state", { Cookie: cookie1 })).json()).access, { full: false, adult: false });
   const withClaude = await post("/api/guest", { ANTHROPIC_API_KEY: "sk-ant-api03-guestkey0123456789abcdef" });
   const cookie2 = withClaude.headers.get("set-cookie").split(";")[0];
-  assert.equal((await (await get("/api/state", { Cookie: cookie2 })).json()).access.full, true);
-  assert.equal((await (await get("/api/search?q=cydonia", { Cookie: cookie2 })).json()).models.length, 1);
+  assert.deepEqual((await (await get("/api/state", { Cookie: cookie2 })).json()).access, { full: true, adult: false });
+  assert.equal((await (await get("/api/search?q=cydonia", { Cookie: cookie2 })).json()).models.length, 0, "the adult model stays shut for a guest");
   assert.equal((await (await get("/api/search?q=wan2.2", { Cookie: cookie2 })).json()).models.length, 2);
   assert.equal((await get(`/api/model?id=${WAN}`, { Cookie: cookie2 })).status, 200);
-  assert.ok((await (await get("/api/models", { Cookie: cookie2 })).json()).models.some((m) => m.adult));
-  // Signed in: the same.
+  assert.equal((await get(`/api/model?id=${CYDONIA}`, { Cookie: cookie2 })).status, 403);
+  assert.ok((await (await get("/api/models", { Cookie: cookie2 })).json()).models.every((m) => !m.adult));
+  // Signed in: the video models, not the adult ones.
   const user = server.accounts.findOrCreate({ email: "vis@example.com", name: "Vis" });
   const signed = `hf_session=${server.accounts.issue(user.id)}`;
-  assert.equal((await (await get("/api/state", { Cookie: signed })).json()).access.full, true);
-  assert.equal((await get(`/api/model?id=${CYDONIA}`, { Cookie: signed })).status, 200);
+  assert.deepEqual((await (await get("/api/state", { Cookie: signed })).json()).access, { full: true, adult: false });
+  assert.equal((await get(`/api/model?id=${CYDONIA}`, { Cookie: signed })).status, 403);
   assert.notEqual((await get(`/api/loras?id=${WAN}`, { Cookie: signed })).status, 403);
+  // The owner, signed in with Google on the admin address: everything.
+  const owner = server.accounts.findOrCreate({ email: "jbabyjbaby1@gmail.com", name: "Joseph" });
+  const ownerCookie = `hf_session=${server.accounts.issue(owner.id)}`;
+  const ownerState = await (await get("/api/state", { Cookie: ownerCookie })).json();
+  assert.deepEqual(ownerState.access, { full: true, adult: true });
+  assert.equal(ownerState.user.admin, true);
+  assert.equal((await (await get("/api/search?q=cydonia", { Cookie: ownerCookie })).json()).models.length, 1);
+  assert.equal((await get(`/api/model?id=${CYDONIA}`, { Cookie: ownerCookie })).status, 200);
+  assert.ok(ownerState.categories.some((c) => c.id.startsWith("nsfw")));
+  // The admin address registered with a password, unverified, is not the owner.
+  const squat = await post("/api/auth/register", { email: "squat@example.com", password: "longenough1", name: "S" });
+  assert.equal(squat.status, 200);
+  const squatCookie = squat.headers.get("set-cookie").split(";")[0];
+  assert.deepEqual((await (await get("/api/state", { Cookie: squatCookie })).json()).access, { full: true, adult: false });
+});
+
+test("an account with an email address and a password: made once, signed into with the right password only, and Google takes it over", async () => {
+  const made = await post("/api/auth/register", { email: "Mia@Example.com", password: "a-good-password", name: "Mia" });
+  assert.equal(made.status, 200);
+  assert.deepEqual((await made.json()).user, { email: "mia@example.com", name: "Mia", picture: null });
+  const cookie = made.headers.get("set-cookie").split(";")[0];
+  const me = (await (await get("/api/state", { Cookie: cookie })).json()).user;
+  assert.equal(me.email, "mia@example.com");
+  assert.equal(me.guest, false);
+  assert.equal((await post("/api/auth/register", { email: "mia@example.com", password: "another-one-1" })).status, 409, "the address is taken");
+  assert.equal((await post("/api/auth/register", { email: "short@example.com", password: "short" })).status, 400, "eight characters at least");
+  assert.equal((await post("/api/auth/register", { email: "not an address", password: "longenough1" })).status, 400);
+  assert.equal((await post("/api/auth/login", { email: "mia@example.com", password: "wrong-password" })).status, 401);
+  const back = await post("/api/auth/login", { email: "mia@example.com", password: "a-good-password" });
+  assert.equal(back.status, 200);
+  assert.ok(back.headers.get("set-cookie"));
+  // A Google account without a password is not opened by a password.
+  server.accounts.findOrCreate({ email: "g@example.com", name: "G" });
+  const viaGoogle = await post("/api/auth/login", { email: "g@example.com", password: "whatever-this-is" });
+  assert.equal(viaGoogle.status, 401);
+  assert.match((await viaGoogle.json()).error, /signs in with Google/);
+  // Whoever proves the address with Google owns it: the password is dropped.
+  const owner = server.accounts.findOrCreate({ email: "mia@example.com", name: "Mia Real" });
+  assert.equal(owner.verified, true);
+  assert.equal(owner.password, false);
+  assert.equal((await post("/api/auth/login", { email: "mia@example.com", password: "a-good-password" })).status, 401);
 });
 
 test("a model's plan lists the steps with commands, for a typical laptop, with nothing marked done", async () => {

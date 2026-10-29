@@ -23,7 +23,7 @@
       <div class="top-right">
         <button class="ghost" id="create-account" hidden>Create account</button>
         <button class="primary" id="sign-in" hidden>Sign in</button>
-        <div class="account" id="account" hidden></div>
+        <button class="account" id="account" hidden></button>
         <button class="ghost icon" id="open-settings" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
       </div>
     </div>
@@ -46,7 +46,6 @@
           <button class="chip" data-example="photo editing">photo editing</button>
           <button class="chip" data-example="math and analysis">math and analysis</button>
         </p>
-        <p class="browse-all-row"><button class="chip" id="browse-all">Browse all models</button></p>
         <p class="muted small" id="home-hint"></p>
       </div>
       <div class="demo" id="demo" aria-hidden="true">
@@ -62,7 +61,6 @@
       </div>
     </div>
     <div class="wrap hero-foot">
-      <p class="hero-cost">The models are free. The only bill is the machine: your laptop, or a GPU from $0.20 an hour.</p>
       <nav class="hero-links"><a href="/about.html">About the developer</a><a class="hosted-only" href="/privacy.html">Privacy</a></nav>
     </div>
     <div class="wrap browse-invite" id="browse-invite">
@@ -233,8 +231,14 @@ npm start</code>
         <h2 id="signin-title">Sign in</h2>
         <button class="ghost" id="close-signin" aria-label="Close">Close</button>
       </div>
-      <div id="google-button" class="google-host"></div>
+      <form class="auth-form" id="signin-form">
+        <label class="field"><span>Email</span><input type="email" id="signin-email" autocomplete="username" required></label>
+        <label class="field"><span>Password</span><input type="password" id="signin-password" autocomplete="current-password" required></label>
+        <button class="primary" type="submit">Sign in</button>
+      </form>
       <p class="muted small" id="signin-error"></p>
+      <p class="muted small or">or</p>
+      <div id="google-button" class="google-host"></div>
       <p class="muted small">New here? <a href="#" id="to-signup">Create an account</a>.</p>
     </div>
   </div>
@@ -245,14 +249,34 @@ npm start</code>
         <h2 id="signup-title">Create an account</h2>
         <button class="ghost" id="close-signup" aria-label="Close">Close</button>
       </div>
-      <dl class="keeps">
-        <div><dt>Kept</dt><dd>Your RunPod, Vast.ai and Anthropic keys, encrypted, and the GPU you rent, so the next visit is quick.</dd></div>
-        <div><dt>Never kept</dt><dd>What you search for, say to a model, give it or get back. The chat with your rented GPU goes straight from your browser to it.</dd></div>
-        <div><dt>Opens</dt><dd>Video models and LoRAs, and the adult models.</dd></div>
-      </dl>
-      <div id="google-button-signup" class="google-host"></div>
+      <form class="auth-form" id="signup-form">
+        <label class="field"><span>Email</span><input type="email" id="signup-email" autocomplete="username" required></label>
+        <label class="field"><span>First name</span><input type="text" id="signup-name" autocomplete="given-name" maxlength="80"></label>
+        <label class="field"><span>Password</span><input type="password" id="signup-password" autocomplete="new-password" minlength="8" required><small class="muted">At least 8 characters.</small></label>
+        <button class="primary" type="submit">Create account</button>
+      </form>
       <p class="muted small" id="signup-error"></p>
-      <p class="muted small"><a href="/privacy.html">How privacy works here</a>. Deleting the account deletes the keys and the machine.</p>
+      <p class="muted small or">or</p>
+      <div id="google-button-signup" class="google-host"></div>
+      <p class="muted small"><a href="/privacy.html">How privacy works here</a>. Already have one? <a href="#" id="to-signin">Sign in</a>.</p>
+    </div>
+  </div>
+
+  <div class="modal" id="account-view" hidden>
+    <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="account-title">
+      <div class="modal-head">
+        <div>
+          <h2 id="account-title">Your account</h2>
+          <p class="muted small" id="account-line"></p>
+        </div>
+        <button class="ghost" id="close-account" aria-label="Close">Close</button>
+      </div>
+      <div id="account-body"></div>
+      <div class="actions account-actions">
+        <button class="ghost" id="account-settings">Settings</button>
+        <button class="ghost" id="sign-out">Sign out</button>
+        <button class="ghost danger" id="delete-account">Delete my account</button>
+      </div>
     </div>
   </div>
 
@@ -316,7 +340,7 @@ npm start</code>
   </div>
 
   <div class="modal" id="settings" hidden>
-    <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-card settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="modal-head">
         <div>
           <h2 id="settings-title">Settings</h2>
@@ -324,149 +348,119 @@ npm start</code>
         </div>
         <button class="ghost" id="close-settings" aria-label="Close">Close</button>
       </div>
-      <details class="section" id="sec-rent" open>
-        <summary><h3>Rent a GPU by the hour</h3><span class="muted small">RunPod and Vast.ai keys, sizes, the rented machine and its bill</span></summary>
-        <div class="rent" id="rent">
-        <p class="muted small">With a RunPod or Vast.ai key saved, pick a size: HuggingFound rents a machine there, runs chat and image models on it, stops it once it has sat idle, and deletes it when you say so. RunPod bills you by the hour while it runs; HuggingFound charges nothing.</p>
-        <label class="field">
-          <span>RunPod API key</span>
-          <input type="password" id="runpod-key" autocomplete="off" placeholder="rpa_...">
-          <small class="muted">Make an account at <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a> and add some credit, then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods, since it has to make and stop machines. It is kept in the settings file on this computer and sent only to RunPod.</small>
-        </label>
-        <p class="muted small" id="runpod-status"></p>
-        <div class="actions">
-          <button class="primary" id="save-runpod">Save</button>
-          <button class="ghost" id="clear-runpod">Remove</button>
+      <div class="settings-grid">
+        <section class="sgroup" id="sec-keys">
+          <h3>Keys</h3>
+        <div class="key" id="sec-rent">
+          <label class="field">
+            <span>RunPod API key</span>
+            <input type="password" id="runpod-key" autocomplete="off" placeholder="rpa_...">
+            <small class="muted">From <a href="https://www.runpod.io" target="_blank" rel="noopener">runpod.io</a>, under Account, Credentials: a key that can manage pods. Sent only to RunPod.</small>
+          </label>
+          <div class="kfoot"><span class="muted small" id="runpod-status"></span><span class="tools-row"><button class="primary" id="save-runpod">Save</button><button class="ghost" id="clear-runpod">Remove</button></span></div>
         </div>
-        <label class="field">
-          <span>Vast.ai API key (optional)</span>
-          <input type="password" id="vast-key" autocomplete="off" placeholder="Vast.ai key">
-          <small class="muted">A second place to rent from: Vast.ai's GPUs are listed with RunPod's below, marked Vast.ai, and are often in stock when RunPod's are not. Make an account at <a href="https://cloud.vast.ai" target="_blank" rel="noopener">vast.ai</a> and add some credit, then on the Keys page (Account, Keys) create an API key; it has to rent and stop machines. It is kept in the settings file on this computer and sent only to Vast.ai.</small>
-        </label>
-        <p class="muted small" id="vast-status"></p>
-        <div class="actions">
-          <button class="primary" id="save-vast">Save</button>
-          <button class="ghost" id="clear-vast">Remove</button>
+        <div class="key" >
+          <label class="field">
+            <span>Vast.ai API key</span>
+            <input type="password" id="vast-key" autocomplete="off" placeholder="Vast.ai key">
+            <small class="muted">Optional. A second place to rent from, from <a href="https://cloud.vast.ai" target="_blank" rel="noopener">vast.ai</a> under Account, Keys. Sent only to Vast.ai.</small>
+          </label>
+          <div class="kfoot"><span class="muted small" id="vast-status"></span><span class="tools-row"><button class="primary" id="save-vast">Save</button><button class="ghost" id="clear-vast">Remove</button></span></div>
         </div>
-        <div id="rent-panel"></div>
+        <div class="key" id="sec-hf">
+          <label class="field">
+            <span>Hugging Face token</span>
+            <input type="password" id="token" autocomplete="off" placeholder="hf_...">
+            <small class="muted">Optional. A read token opens gated models such as Llama and Gemma once you have accepted their licence.</small>
+          </label>
+          <div class="kfoot"><span class="muted small" id="token-current"></span><span class="tools-row"><button class="primary" id="save-token">Save</button><button class="ghost" id="clear-token">Remove</button></span></div>
         </div>
-      </details>
-      <details class="section" id="sec-hf">
-        <summary><h3>Hugging Face and Civitai</h3><span class="muted small">Optional; gated models, and LoRAs from Civitai</span></summary>
-      <label class="field">
-        <span>Hugging Face token (optional)</span>
-        <input type="password" id="token" autocomplete="off" placeholder="hf_...">
-        <small class="muted">A read token unlocks gated models such as Llama, Gemma and LTX once you have accepted their licence on Hugging Face; a rented GPU fetches them with it. Without one, everything that is openly licensed still works.</small>
-      </label>
-      <p class="muted small" id="token-current"></p>
-      <div class="actions">
-        <button class="primary" id="save-token">Save</button>
-        <button class="ghost" id="clear-token">Remove token</button>
-      </div>
-      <label class="field">
-        <span>Civitai API key (optional)</span>
-        <input type="password" id="civitai-key" autocomplete="off" placeholder="Civitai key">
-        <small class="muted">For LoRAs and fine-tuned models from Civitai, found under "LoRAs and fine-tunes" in a video model's window: Civitai lets only signed-in accounts download them. On civitai.com open your account settings, then API Keys, and add one. The rented GPU fetches the files with it; it is sent only to Civitai.</small>
-      </label>
-      <p class="muted small" id="civitai-status"></p>
-      <div class="actions">
-        <button class="primary" id="save-civitai">Save</button>
-        <button class="ghost" id="clear-civitai">Remove</button>
-      </div>
-      </details>
-      <details class="section local-only" id="sec-servers">
-        <summary><h3>Servers of your own</h3><span class="muted small">Optional; a chat server or image server you set up yourself</span></summary>
-      <label class="field">
-        <span>Chat server (optional)</span>
-        <input type="url" id="chat-server" autocomplete="off" placeholder="http://127.0.0.1:11435">
-        <small class="muted">For models too big for this computer: the address of Ollama on another machine, such as a rented GPU box, reached through an SSH tunnel or a private network. When set, chat models are downloaded and run there, and nothing large comes to this computer. <a href="https://github.com/hungateJoseph/huggingfound/blob/main/REMOTE.md" target="_blank" rel="noopener">How to set one up</a>. Leave empty to run chat models here.</small>
-      </label>
-      <label class="field">
-        <span>GPU memory on that server, in GB</span>
-        <input type="number" id="chat-server-gb" min="1" max="2000" step="1" autocomplete="off" placeholder="24">
-        <small class="muted">Ollama does not report hardware, so the fit and speed lines for chat models go by this number.</small>
-      </label>
-      <p class="muted small" id="chat-server-status"></p>
-      <div class="actions">
-        <button class="primary" id="save-chat-server">Save</button>
-        <button class="ghost" id="clear-chat-server">Use this computer</button>
-      </div>
-      <label class="field">
-        <span>Image server (optional)</span>
-        <input type="url" id="image-server" autocomplete="off" placeholder="http://192.168.1.20:1234">
-        <small class="muted">The address of a stable-diffusion.cpp server (sd-server) on another computer, a rented GPU box or this one. When set, pictures are made there with the model it has loaded, in seconds on a real GPU, and nothing is downloaded here. Leave empty to generate on this computer.</small>
-      </label>
-      <p class="muted small" id="image-server-status"></p>
-      <div class="actions">
-        <button class="primary" id="save-image-server">Save</button>
-        <button class="ghost" id="clear-image-server">Use this computer</button>
-      </div>
-      </details>
-      <details class="section" id="sec-claude">
-        <summary><h3>Anthropic API key</h3><span class="muted small">Optional; lets Claude check answers and pictures</span></summary>
-      <label class="field">
-        <span>Anthropic API key (optional)</span>
-        <input type="password" id="claude-key" autocomplete="off" placeholder="sk-ant-...">
-        <small class="muted">Lets Claude check what a local model wrote or drew: code that may not run, facts that may be wrong, a picture against its description. Small open models make mistakes a stronger model catches. A key comes from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> and Anthropic bills each check to it. Nothing is sent until you click "Ask Claude to check this"; then your question and that answer, or that picture and its description, go to Anthropic.</small>
-      </label>
-      <p class="muted small" id="claude-status"></p>
-      <div class="actions">
-        <button class="primary" id="save-claude">Save</button>
-        <button class="ghost" id="clear-claude">Remove</button>
-      </div>
-      </details>
-      <details class="section local-only" id="sec-sources">
-        <summary><h3>Outside sources</h3><span class="muted small">Optional keys for GitHub, YouTube and Reddit searches</span></summary>
-      <label class="field">
-        <span>GitHub token (optional)</span>
-        <input type="password" id="github-token" autocomplete="off" placeholder="github_pat_... or ghp_...">
-        <small class="muted">GitHub issues on llama.cpp, Ollama, ComfyUI and other projects are searched without a token, ten searches a minute. A token from <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> with no scopes at all raises that to thirty.</small>
-      </label>
-      <p class="muted small" id="github-status"></p>
-      <div class="actions">
-        <button class="primary" id="save-github">Save</button>
-        <button class="ghost" id="clear-github">Remove</button>
-      </div>
-      <label class="field">
-        <span>YouTube API key (optional)</span>
-        <input type="password" id="youtube-key" autocomplete="off" placeholder="AIza...">
-        <small class="muted">Video reviews need a free key: in <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">Google Cloud</a> enable "YouTube Data API v3" on any project, then create an API key under Credentials and paste it here. The free quota allows about a hundred searches a day.</small>
-      </label>
-      <p class="muted small" id="youtube-status"></p>
-      <div class="actions">
-        <button class="primary" id="save-youtube">Save</button>
-        <button class="ghost" id="clear-youtube">Remove</button>
-      </div>
-      <label class="field">
-        <span>Reddit app id (optional)</span>
-        <input type="text" id="reddit-app" autocomplete="off" placeholder="paste the id under your app's name">
-        <small class="muted">Reddit refuses anonymous requests, so searching what people say on r/LocalLLaMA, r/StableDiffusion and r/SillyTavernAI needs a free app id: on <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> choose "create app", type "installed app", any name, redirect URI http://localhost, then copy the id shown under the app's name. No secret and no login are needed. Civitai works without a key.</small>
-      </label>
-      <p class="muted small" id="reddit-status"></p>
-      <div class="actions">
-        <button class="primary" id="save-reddit">Save</button>
-        <button class="ghost" id="clear-reddit">Remove</button>
-      </div>
-      </details>
-      <details class="section hidden-models" id="sec-hidden">
-        <summary><h3>Hidden models</h3><span class="muted small" id="hidden-note"></span></summary>
-        <ul id="hidden-list"></ul>
-      </details>
-      <details class="section local-only runners" id="sec-installed">
-        <summary><h3>What is installed</h3><span class="muted small">The runners on this computer</span></summary>
-        <ul id="runner-list"></ul>
-      </details>
-      <details class="section local-only storage" id="sec-storage">
-        <summary><h3>Space used by models</h3><span class="muted small" id="storage-total"></span></summary>
-        <ul id="storage-list"></ul>
-      </details>
-      <details class="section hosted-only account-box" id="account-box">
-        <summary><h3>Your account</h3><span class="muted small" id="account-line"></span></summary>
-        <div class="actions">
-          <button class="ghost" id="delete-account">Delete my account</button>
+        <div class="key" >
+          <label class="field">
+            <span>Civitai API key</span>
+            <input type="password" id="civitai-key" autocomplete="off" placeholder="Civitai key">
+            <small class="muted">Optional. For LoRAs from Civitai, from your account settings there under API Keys. Sent only to Civitai.</small>
+          </label>
+          <div class="kfoot"><span class="muted small" id="civitai-status"></span><span class="tools-row"><button class="primary" id="save-civitai">Save</button><button class="ghost" id="clear-civitai">Remove</button></span></div>
         </div>
-        <small class="muted">Deletes the keys, the rented GPU and everything on it. Nothing else is kept about you.</small>
-      </details>
+        <div class="key" id="sec-claude">
+          <label class="field">
+            <span>Anthropic API key</span>
+            <input type="password" id="claude-key" autocomplete="off" placeholder="sk-ant-...">
+            <small class="muted">Optional. Lets Claude check and improve what a model makes, from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. Sent only to Anthropic, when you ask.</small>
+          </label>
+          <div class="kfoot"><span class="muted small" id="claude-status"></span><span class="tools-row"><button class="primary" id="save-claude">Save</button><button class="ghost" id="clear-claude">Remove</button></span></div>
+        </div>
+        </section>
+        <section class="sgroup" id="sec-machine">
+          <h3 class="hosted-only">Your rented GPU</h3>
+          <h3 class="local-only">GPU and servers</h3>
+          <div class="rent" id="rent"><div id="rent-panel"></div></div>
+          <details class="section local-only" id="sec-servers">
+            <summary><h3>Servers of your own</h3><span class="muted small">Optional; a chat server or image server you set up yourself</span></summary>
+            <div class="key">
+              <label class="field">
+                <span>Chat server</span>
+                <input type="url" id="chat-server" autocomplete="off" placeholder="http://127.0.0.1:11435">
+                <small class="muted">Optional. Ollama on another machine, reached through a tunnel; chat models run there. <a href="https://github.com/hungateJoseph/huggingfound/blob/main/REMOTE.md" target="_blank" rel="noopener">How</a>.</small>
+              </label>
+              <label class="field">
+                <span>Its GPU memory, GB</span>
+                <input type="number" id="chat-server-gb" min="1" max="2000" step="1" autocomplete="off" placeholder="24">
+                <small class="muted">Fit and speed for chat models go by this number.</small>
+              </label>
+              <div class="kfoot"><span class="muted small" id="chat-server-status"></span><span class="tools-row"><button class="primary" id="save-chat-server">Save</button><button class="ghost" id="clear-chat-server">Use this computer</button></span></div>
+            </div>
+            <div class="key">
+              <label class="field">
+                <span>Image server</span>
+                <input type="url" id="image-server" autocomplete="off" placeholder="http://192.168.1.20:1234">
+                <small class="muted">Optional. A stable-diffusion.cpp server elsewhere; pictures are made there.</small>
+              </label>
+              <div class="kfoot"><span class="muted small" id="image-server-status"></span><span class="tools-row"><button class="primary" id="save-image-server">Save</button><button class="ghost" id="clear-image-server">Use this computer</button></span></div>
+            </div>
+          </details>
+          <details class="section local-only" id="sec-sources">
+            <summary><h3>Outside sources</h3><span class="muted small">Optional keys for GitHub, YouTube and Reddit</span></summary>
+        <div class="key" >
+          <label class="field">
+            <span>GitHub token</span>
+            <input type="password" id="github-token" autocomplete="off" placeholder="github_pat_... or ghp_...">
+            <small class="muted">Optional. A token with no scopes from <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> allows thirty searches a minute instead of ten.</small>
+          </label>
+          <div class="kfoot"><span class="muted small" id="github-status"></span><span class="tools-row"><button class="primary" id="save-github">Save</button><button class="ghost" id="clear-github">Remove</button></span></div>
+        </div>
+        <div class="key" >
+          <label class="field">
+            <span>YouTube API key</span>
+            <input type="password" id="youtube-key" autocomplete="off" placeholder="AIza...">
+            <small class="muted">Optional. A free key with YouTube Data API v3 enabled in <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">Google Cloud</a>.</small>
+          </label>
+          <div class="kfoot"><span class="muted small" id="youtube-status"></span><span class="tools-row"><button class="primary" id="save-youtube">Save</button><button class="ghost" id="clear-youtube">Remove</button></span></div>
+        </div>
+        <div class="key" >
+          <label class="field">
+            <span>Reddit app id</span>
+            <input type="text" id="reddit-app" autocomplete="off" placeholder="the id under your app&#39;s name">
+            <small class="muted">Optional. An installed app made at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> with redirect URI http://localhost; no secret needed.</small>
+          </label>
+          <div class="kfoot"><span class="muted small" id="reddit-status"></span><span class="tools-row"><button class="primary" id="save-reddit">Save</button><button class="ghost" id="clear-reddit">Remove</button></span></div>
+        </div>
+          </details>
+          <details class="section hidden-models" id="sec-hidden">
+            <summary><h3>Hidden models</h3><span class="muted small" id="hidden-note"></span></summary>
+            <ul id="hidden-list"></ul>
+          </details>
+          <details class="section local-only runners" id="sec-installed">
+            <summary><h3>What is installed</h3><span class="muted small">The runners on this computer</span></summary>
+            <ul id="runner-list"></ul>
+          </details>
+          <details class="section local-only storage" id="sec-storage">
+            <summary><h3>Space used by models</h3><span class="muted small" id="storage-total"></span></summary>
+            <ul id="storage-list"></ul>
+          </details>
+        </section>
+      </div>
     </div>
   </div>
 

@@ -49,7 +49,7 @@ before(async () => {
   // The machine's disk, as its agent reports it: roomy, so only the tests about the disk run into it.
   agent.state.diskFreeGb = 400;
   agent.state.diskTotalGb = 500;
-  server = createServer({ envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, idleWatch: false, pushFile: path.join(home, "push-keys.json"), pushSend: async (subscription, payload) => pushed.push({ subscription, payload }) });
+  server = createServer({ adult: true, envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => !process.env.HF_TEST_NO_IMAGE, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, idleWatch: false, pushFile: path.join(home, "push-keys.json"), pushSend: async (subscription, payload) => pushed.push({ subscription, payload }) });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -977,7 +977,7 @@ test("a download asked to stop the machine when it is over does so, unless anoth
   // A server of its own, whose budget of RunPod calls the tests above have not used.
   const ownEnv = path.join(home, "stopafter.env");
   writeEnv(ownEnv, { RUNPOD_API_KEY: KEY, RUNPOD_IDLE_MINUTES: "0" });
-  const own = createServer({ envFile: ownEnv, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, idleWatch: false, doneStopDelayMs: 60 });
+  const own = createServer({ adult: true, envFile: ownEnv, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: stub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => ollama.url, runpodAgent: () => agent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, idleWatch: false, doneStopDelayMs: 60 });
   await new Promise((resolve) => own.listen(0, "127.0.0.1", resolve));
   const ownBase = `http://127.0.0.1:${own.address().port}`;
   const get = (p) => fetch(ownBase + p);

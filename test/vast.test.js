@@ -42,7 +42,7 @@ before(async () => {
   agent.state.token = () => Object.values(vast.state.instances).map((i) => i.env?.HF_AGENT_TOKEN).filter(Boolean);
   agent.state.diskFreeGb = 400;
   agent.state.diskTotalGb = 500;
-  server = createServer({ envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: hub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => dead, runpodAgent: () => dead, runpodImageCheck: async () => true, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, vastBase: vast.base, vastTunnelCheck: (u) => /^http:\/\/127\.0\.0\.1:\d+$/.test(u), idleWatch: false, stockFile: path.join(home, "stock.json"), pushFile: path.join(home, "push-keys.json"), pushSend: async () => {} });
+  server = createServer({ adult: true, envFile, scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: hub.base, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => dead, runpodAgent: () => dead, runpodImageCheck: async () => true, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, vastBase: vast.base, vastTunnelCheck: (u) => /^http:\/\/127\.0\.0\.1:\d+$/.test(u), idleWatch: false, stockFile: path.join(home, "stock.json"), pushFile: path.join(home, "push-keys.json"), pushSend: async () => {} });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });

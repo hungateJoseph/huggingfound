@@ -168,7 +168,7 @@ const reviewer = {
     return { declined: false, model: "claude-opus-5", note: "" };
   },
 };
-const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, runpodAgent: () => rentedAgent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, vastBase: vast.base, vastTunnelCheck: (u) => /^http:\/\/127\.0\.0\.1:\d+$/.test(u), idleWatch: false });
+const server = createServer({ envFile, scanFile, hubBase: stub.base, fetchImpl, reviewer, adult: true, civitaiBase: dead, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, runpodBase: runpod.base, runpodProxy: () => rentedOllama.url, runpodAgent: () => rentedAgent.url, runpodImageCheck: async () => true, runpodStatusTtl: 0, runpodBudget: { minute: 600, hour: 5000 }, vastBase: vast.base, vastTunnelCheck: (u) => /^http:\/\/127\.0\.0\.1:\d+$/.test(u), idleWatch: false });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -201,8 +201,8 @@ const unfoldSettings = (p = page) => p.$$eval("#settings details", (ds) => ds.fo
 
 // Browse: from the front page's one button, or from the band's Everything in results and Browse.
 async function toBrowse(p) {
-  if (await p.locator("#browse-all").isVisible()) await p.click("#browse-all");
-  else await p.click("#nav-browse");
+  if (await p.locator("#nav-browse").isVisible()) await p.click("#nav-browse");
+  else await p.evaluate(() => document.querySelector("#nav-browse").click());
 }
 
 async function step(name, fn) {
@@ -267,14 +267,14 @@ await step("the page opens on a single search box", async () => {
   // The front page is one screen: the band fills it, dark to the bottom, with the cost in a line at its foot and a link to the developer.
   assert.equal(await page.locator("#why").count(), 0);
   for (const gone of ["#start", "#cost", "#flow", "#runs", ".reasons", ".cost-figure", ".dev"]) assert.equal(await page.locator(gone).count(), 0, `${gone} is gone`);
-  assert.equal(await page.locator(".hero-cost").innerText(), "The models are free. The only bill is the machine: your laptop, or a GPU from $0.20 an hour.");
+  assert.equal(await page.locator(".hero-cost").count(), 0, "no cost line");
   assert.deepEqual(await page.$$eval(".hero-links a", (els) => els.filter((e) => getComputedStyle(e).display !== "none").map((e) => [e.textContent, e.getAttribute("href")])), [["About the developer", "/about.html"]]);
   assert.equal(await page.locator(".site-foot").isVisible(), false, "no second footer under the band");
   assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight), true, "nothing to scroll to on a laptop screen");
   assert.equal(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "dark to the bottom");
-  // The category line belongs to results and Browse; the front page has one Browse all models button.
+  // The category line belongs to results and Browse; the front page has nothing else.
   assert.equal(await page.locator("#browse-invite").isVisible(), false);
-  assert.equal(await page.locator("#browse-all").isVisible(), true);
+  assert.equal(await page.locator("#browse-all").count(), 0);
   assert.deepEqual(await page.$$eval("#home-categories .chip", (els) => els.map((e) => e.textContent)), ["Easy to set up", "Chat and writing", "Coding", "Math and reasoning", "Understands images", "Makes images", "Speech to text"]);
   await page.click("#examples [data-example='code']");
   await page.waitForSelector("#found .model");
@@ -283,7 +283,6 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator(".site-foot").isVisible(), true);
   assert.equal(await page.locator("#demo").isVisible(), false, "and the demo; the band keeps only the search and the categories");
   assert.equal(await page.locator("#home-categories").isVisible(), true);
-  assert.equal(await page.locator("#browse-all").isVisible(), false);
   assert.notEqual(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "results sit on the light page");
   assert.match(await page.locator("#found-title").innerText(), /"code"/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
@@ -364,7 +363,7 @@ await step("Browse has no adult tabs; adult models stay in their own category wi
 
   await page.selectOption("#sort", "capable");
   names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
-  assert.equal(names[0], "Cydonia-24B-v2-GGUF", "the biggest chat model first when sorted by capability");
+  assert.equal(names[0], "Mistral-Small-24B-Instruct-2501-GGUF", "the biggest chat model first when sorted by capability, the better liked of two the same size");
   await page.selectOption("#sort", "likes");
   names = await page.$$eval("#models .model .name", (els) => els.map((e) => e.textContent));
   assert.equal(names[0], "Polite-Chat-7B-GGUF", "most liked runnable chat model first");
@@ -1405,7 +1404,6 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   // A key saved in Settings makes the visitor a guest; forgetting it ends the guest.
   await visitor.click("#open-settings");
   await visitor.waitForSelector("#settings:not([hidden])");
-  await visitor.click("#sec-hf summary");
   await visitor.fill("#civitai-key", "0123456789abcdef0123456789abcdef");
   await visitor.click("#save-civitai");
   await visitor.waitForFunction(() => /You are a guest/.test(document.querySelector("#account-line")?.textContent ?? ""));
@@ -1414,16 +1412,44 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   await visitor.keyboard.press("Escape");
   await visitor.waitForSelector("#settings", { state: "hidden" });
   acceptDialogs = true;
-  await visitor.click("#account #sign-out");
+  await visitor.click("#account");
+  await visitor.click("#sign-out");
   await visitor.waitForFunction(() => document.querySelector("#account").hidden);
   acceptDialogs = false;
   assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 0);
-  assert.equal(await visitor.locator("#sign-in").isVisible(), false, "no Sign in button until Google is set up; guests need none");
-  assert.equal(await visitor.locator("#create-account").isVisible(), false, "nor Create account");
+  assert.equal(await visitor.locator("#sign-in").isVisible(), true, "Sign in is there without Google: an email and a password will do");
+  assert.equal(await visitor.locator("#create-account").isVisible(), true);
   assert.equal(await visitor.$eval("#open-checker", (e) => e.hidden), true, "no answer checker until a model has made something here");
-  // The sign-in window is only the button; what an account keeps is said in the create-account window.
-  assert.equal(await visitor.locator("#signin .modal-head p").count(), 0);
-  assert.deepEqual(await visitor.$$eval("#signup .keeps dt", (els) => els.map((e) => e.textContent)), ["Kept", "Never kept", "Opens"]);
+  // Both windows are a short form: email and password, Google under it only when set up, and the privacy link on the second.
+  await visitor.click("#create-account");
+  assert.equal(await visitor.locator("#signup .keeps").count(), 0, "no list of what is kept");
+  assert.deepEqual(await visitor.$$eval("#signup-form input", (els) => els.map((e) => e.type)), ["email", "text", "password"]);
+  assert.equal(await visitor.locator("#google-button-signup").isVisible(), false, "no Google line without a client id");
+  assert.equal(await visitor.$eval("#signup a[href='/privacy.html']", (e) => e.textContent), "How privacy works here");
+  // A short password is refused, a good one makes the account, and the bar shows the first name as a button.
+  await visitor.fill("#signup-email", "pat.lee@example.com");
+  await visitor.fill("#signup-name", "Pat Lee");
+  await visitor.fill("#signup-password", "pw-long-enough-1");
+  await visitor.click("#signup-form button[type=submit]");
+  await visitor.waitForSelector("#account:not([hidden])");
+  assert.equal(await visitor.$eval("#account", (e) => e.lastElementChild.textContent), "Pat", "the first name only");
+  await visitor.click("#account");
+  await visitor.waitForSelector("#account-view:not([hidden])");
+  assert.match(await visitor.locator("#account-view").innerText(), /pat\.lee@example\.com[\s\S]*Keys on file[\s\S]*RunPod[\s\S]*none[\s\S]*No GPU rented/);
+  assert.equal(await visitor.locator("#account-view #runpod-key").count(), 0, "the account window is not the settings");
+  await visitor.click("#sign-out");
+  await visitor.waitForFunction(() => document.querySelector("#account").hidden);
+  await visitor.click("#sign-in");
+  await visitor.fill("#signin-email", "pat.lee@example.com");
+  await visitor.fill("#signin-password", "wrong-one-here");
+  await visitor.click("#signin-form button[type=submit]");
+  await visitor.waitForFunction(() => /Wrong email address or password/.test(document.querySelector("#signin-error").textContent));
+  await visitor.fill("#signin-password", "pw-long-enough-1");
+  await visitor.click("#signin-form button[type=submit]");
+  await visitor.waitForSelector("#account:not([hidden])");
+  await visitor.click("#account");
+  await visitor.click("#sign-out");
+  await visitor.waitForFunction(() => document.querySelector("#account").hidden);
   assert.equal(await visitor.locator(".hero-links a[href='/privacy.html']").isVisible(), true, "the site's front page links its privacy page");
   // Unknown to the site, the visitor sees no adult or video models and no LoRAs: not in the examples, the search, Browse or a model window.
   assert.equal(await visitor.$eval('#examples [data-example="video generation"]', (e) => e.hidden), true, "no video example for a visitor");
@@ -1467,8 +1493,9 @@ await step("hosted: a guest enters a key in the model window, rents, and sees wh
   assert.equal((await (await visitor.request.get(`${hostedBase}/api/state`)).json()).access.full, true, "a guest with an Anthropic key");
   await visitor.waitForFunction(() => document.querySelector("#models .model .name")?.textContent);
   assert.equal(await visitor.$eval('#examples [data-example="video generation"]', (e) => e.hidden), false, "the video example is back");
-  assert.equal(await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).count(), 1, "and the adult model, with its mark");
-  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
+  assert.equal(await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).count(), 0, "the adult model stays shut for a guest");
+  assert.equal(await visitor.locator("#models .pill.adult").count(), 0);
+  await visitor.locator("#models .model", { hasText: "Mistral-Small-24B-Instruct-2501-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector("#ask-yes");
@@ -1479,8 +1506,8 @@ await step("hosted: a guest enters a key in the model window, rents, and sees wh
   assert.equal(await visitor.locator(".rent-offer #ask-size").inputValue(), "48");
   assert.match(await visitor.locator(".rent-faster").innerText(), /^Faster cards\. A100 PCIe \(80 GB\) makes clips about 2\.3 times faster for \$1\.64 an hour, about 1\.79 times the cost per clip\. Pick that size above if time matters more than price\.$/, "the bigger size whose card is meaningfully faster, with the cost per clip next to the A40 picked; the 24 GB card is faster but too small");
   assert.equal(await visitor.locator("#settings").isHidden(), true, "no Settings panel over the window");
-  assert.match(await visitor.locator("#account").innerText(), /Guest, keys kept until/);
-  assert.match(await visitor.locator("#account-line").innerText(), /You are a guest[\s\S]*12 hours after your last use/);
+  assert.equal(await visitor.$eval("#account", (e) => e.lastElementChild.textContent), "Guest");
+  assert.match(await visitor.$eval("#account-line", (e) => e.textContent), /You are a guest[\s\S]*12 hours after your last use/);
   assert.equal(await visitor.locator("#delete-account").innerText(), "Forget my keys now");
   assert.equal(await visitor.locator("#open-settings").isVisible(), true, "a guest reaches Settings for the rented machine");
   const guests = fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g"));
@@ -1488,7 +1515,8 @@ await step("hosted: a guest enters a key in the model window, rents, and sees wh
   await visitor.keyboard.press("Escape");
   // Forgetting the keys ends the guest.
   acceptDialogs = true;
-  await visitor.click("#account #sign-out");
+  await visitor.click("#account");
+  await visitor.click("#sign-out");
   await visitor.waitForFunction(() => document.querySelector("#account").hidden);
   acceptDialogs = false;
   assert.equal(fs.readdirSync(path.join(hostedHome, "accounts")).filter((f) => f.startsWith("g")).length, 0);
@@ -1513,7 +1541,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
   assert.equal(await visitor.locator("#image-server").isVisible(), false);
   assert.equal(await visitor.locator("#runpod-key").isVisible(), true);
   assert.equal(await visitor.locator("#claude-key").isVisible(), true);
-  assert.match(await visitor.locator("#account-line").innerText(), /ana@example\.com/);
+  assert.match(await visitor.$eval("#account-line", (e) => e.textContent), /ana@example\.com/);
   await visitor.fill("#claude-key", "sk-ant-api03-browsertestkey0123456789");
   await visitor.click("#save-claude");
   await visitor.waitForFunction(() => /A key is saved/.test(document.querySelector("#claude-status").textContent));
@@ -1529,7 +1557,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
 await step("hosted: the model window rents the GPU, the download runs on it, and the chat goes straight from the browser to the machine", async () => {
   await toBrowse(visitor);
   await visitor.click("#home-categories [data-cat=chat]");
-  await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
+  await visitor.locator("#models .model", { hasText: "Mistral-Small-24B-Instruct-2501-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
   await visitor.click('.where-opt[data-where="rented"]');
   await visitor.waitForSelector(".rent-offer #ask-size");
@@ -1562,7 +1590,7 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
   assert.equal(await visitor.locator(".bg-note").count(), 0);
   await visitor.waitForSelector("#steps .step.done", { timeout: 15000 });
   acceptDialogs = false;
-  assert.ok(rentedOllama.state.pulls.some((p) => /Cydonia/.test(p)));
+  assert.ok(rentedOllama.state.pulls.some((p) => /Mistral-Small/.test(p)));
   // A running step carries a progress bar, full and labelled Done at the end.
   assert.equal(await visitor.locator("#steps .step .progress .fill").evaluate((el) => el.style.width), "100%");
   assert.equal(await visitor.locator("#steps .step .progress-text").innerText(), "Done");
@@ -2307,10 +2335,10 @@ await step("hosted: the bar opens one list of everything on the machine, with Op
   await visitor.click("#gpu-models-refresh");
   await visitor.waitForFunction(() => !document.querySelector("#gpu-runs"));
   const text = await visitor.locator("#gpu-models-body").innerText();
-  assert.match(text, /Chat models[\s\S]*Cydonia[\s\S]*Image models[\s\S]*stable-diffusion-v1-5-pruned-emaonly-Q8_0\.gguf/);
+  assert.match(text, /Chat models[\s\S]*Mistral-Small[\s\S]*Image models[\s\S]*stable-diffusion-v1-5-pruned-emaonly-Q8_0\.gguf/);
   assert.match(text, /loaded in the GPU/);
-  const chatRow = visitor.locator('#gpu-models li[data-kind="chat"]', { hasText: "Cydonia" });
-  assert.match(await chatRow.innerText(), /TheDrummer\/Cydonia-24B-v2-GGUF/);
+  const chatRow = visitor.locator('#gpu-models li[data-kind="chat"]', { hasText: "Mistral-Small" });
+  assert.match(await chatRow.innerText(), /bartowski\/Mistral-Small-24B-Instruct-2501-GGUF/);
   assert.equal(await visitor.locator('#gpu-models li[data-kind="chat"]', { hasText: "llama3.2:3b" }).locator("[data-open]").count(), 0, "a model not from the Hub has no window to open");
   await chatRow.locator("[data-open]").click();
   await visitor.waitForSelector("#steps .step");
@@ -2342,7 +2370,7 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
   await hit.waitFor();
   assert.match(await hit.innerText(), /Hugging Face\s+LoRA[\s\S]*by motionlab · 900 downloads/);
   assert.match(await visitor.locator("#lora-found").innerText(), /Civitai has no listing for this model, so only Hugging Face was searched/);
-  assert.equal(await visitor.isChecked("#lora-adult"), false, "adult results only when asked for");
+  assert.equal(await visitor.locator("#lora-adult").count(), 0, "no adult switch for anyone but the owner");
   // A pasted link is read as one item; a link it cannot read is said plainly.
   await visitor.fill("#lora-url", "https://example.com/not-a-model");
   await visitor.click("#lora-url-go");
@@ -2521,7 +2549,7 @@ await step("hosted: a video model's LoRAs are found on Hugging Face, added to th
 await step("hosted: deleting the account deletes the machine and signs out", async () => {
   await visitor.keyboard.press("Escape");
   const podId = (await (await visitor.request.get(`${hostedBase}/api/rent`)).json()).id;
-  await openSettings(visitor);
+  await visitor.click("#account");
   await visitor.waitForSelector("#delete-account");
   acceptDialogs = true;
   await visitor.click("#delete-account");

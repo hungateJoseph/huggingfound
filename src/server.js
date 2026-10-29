@@ -62,7 +62,7 @@ const ACCOUNT_KEYS = new Set(["RUNPOD_API_KEY", "VAST_API_KEY", "CIVITAI_TOKEN",
 const MODEL_ID_RE = /^[\w.-]+\/[\w.-]+$/;
 const hiddenList = (raw) => String(raw ?? "").split(",").map((x) => x.trim()).filter((x) => MODEL_ID_RE.test(x));
 
-export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), stockFile = path.join(DATA_DIR, "stock.json"), pushFile = path.join(DATA_DIR, "push-keys.json"), pushSend = null, voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, vastBase, vastDirect, vastTunnelCheck, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "" } = {}) {
+export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = path.join(DATA_DIR, "scan.json"), stockFile = path.join(DATA_DIR, "stock.json"), pushFile = path.join(DATA_DIR, "push-keys.json"), pushSend = null, voicesFile = path.join(DATA_DIR, "voices.json"), civitaiBase, redditAuthBase, redditApiBase, githubBase, hnBase, lemmyBase, youtubeBase, writtenSummaries = true, hosted = process.env.HUGGINGFOUND_HOSTED === "1", refreshHours = Number(process.env.HUGGINGFOUND_REFRESH_HOURS || 12), reviewer = null, devCode = process.env.REVIEW_DEV_CODE || "", reviewLimit = 120, doneStopDelayMs = 45e3, runpodBase, runpodProxy, runpodAgent, runpodImageCheck, runpodStatusTtl, runpodBudget = null, vastBase, vastDirect, vastTunnelCheck, idleWatch = true, accountsDir = path.join(DATA_DIR, "accounts"), accountsSecret = process.env.ACCOUNTS_SECRET || process.env.SESSION_SECRET || "", sessionSecret = process.env.SESSION_SECRET || process.env.ACCOUNTS_SECRET || "", googleClientId = process.env.GOOGLE_CLIENT_ID || "", googleJwks, siteOrigin = process.env.SITE_ORIGIN || "", adminEmails = (process.env.ADMIN_EMAILS || "jbabyjbaby1@gmail.com").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean), adult = process.env.HUGGINGFOUND_ADULT === "1" } = {}) {
   // Calls to a rented machine's agent carry the secret it was started with.
   fetchImpl = agentFetch(fetchImpl);
   // A hosted copy does not know the visitor's computer; it describes a
@@ -82,6 +82,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   if (hosted && !accountsSecret) console.error("ACCOUNTS_SECRET is not set: keys saved on this site will not survive a restart.");
   const secret = accountsSecret || (hosted ? crypto.randomBytes(32).toString("hex") : "");
   const accounts = hosted ? createAccounts({ dir: accountsDir, secret, sessionSecret: sessionSecret || secret, googleClientId, jwksUrl: googleJwks, fetchImpl }) : null;
+  const loginTries = new Map();
   // One rental per settings store: the .env file on a computer, each
   // account on the hosted site. A rental owns the chat server setting while
   // its machine exists and stops the machine when idle.
@@ -211,8 +212,15 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
   // a model window. Signing in opens all of it, and so does a guest's
   // Anthropic key. Your own copy of the site is all yours.
   const fullAccess = (ctx) => !hosted || Boolean(ctx.user && (!ctx.user.guest || ctx.settings().ANTHROPIC_API_KEY));
-  const forVisitors = (m) => !m.adult && kindOf(m) !== "video";
+  // Adult models are shut away from everyone but the site's owner: an account
+  // whose address is on the admin list and was verified by Google. A copy on
+  // someone's own computer opens them only with HUGGINGFOUND_ADULT=1.
+  const admins = new Set(adminEmails);
+  const isAdmin = (ctx) => Boolean(ctx.user && !ctx.user.guest && ctx.user.verified && admins.has(String(ctx.user.email ?? "").toLowerCase()));
+  const adultAccess = (ctx) => (hosted ? isAdmin(ctx) : adult);
+  const visible = (m, ctx) => (!m.adult || adultAccess(ctx)) && (kindOf(m) !== "video" || fullAccess(ctx));
   const VISITOR_ONLY = "Video models and LoRAs open once you sign in, or enter an Anthropic API key as a guest.";
+  const NOT_HERE = "This model is not available here.";
   const claudeReady = () => Boolean(reviewer || claudeKey() || process.env.ANTHROPIC_AUTH_TOKEN);
   const checker = reviewer ?? createReviewer({ apiKey: claudeKey, outputDir: OUTPUT_DIR });
   // On the hosted site the server's key is the owner's: it answers only to
@@ -405,12 +413,12 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         machine,
         hosted,
         // Who is signed in on the hosted site, and whether anyone can.
-        user: ctx.user ? { email: ctx.user.email, name: ctx.user.name, picture: ctx.user.picture, guest: ctx.user.guest, expiresAt: ctx.user.expiresAt ?? null } : null,
-        // Whether video models, LoRAs and adult models are on show for this visitor.
-        access: { full: fullAccess(ctx) },
-        auth: hosted ? { google: accounts.googleClientId() || "", ready: accounts.googleConfigured(), guestHours: GUEST_HOURS } : null,
+        user: ctx.user ? { email: ctx.user.email, name: ctx.user.name, picture: ctx.user.picture, guest: ctx.user.guest, expiresAt: ctx.user.expiresAt ?? null, admin: isAdmin(ctx) } : null,
+        // Whether video models and LoRAs are on show for this visitor, and whether adult models are (the owner only).
+        access: { full: fullAccess(ctx), adult: adultAccess(ctx) },
+        auth: hosted ? { google: accounts.googleClientId() || "", ready: true, guestHours: GUEST_HOURS } : null,
         refresh: hosted ? { hours: refreshHours, last: lastRefresh } : null,
-        categories: CATEGORIES,
+        categories: adultAccess(ctx) ? CATEGORIES : CATEGORIES.filter((c) => !c.id.startsWith("nsfw")),
         // On the hosted site the runners are the rented machine's, if any.
         runners: hosted ? (remote ? await detect(fetchImpl, remote) : noRunners()) : await detect(fetchImpl, remote),
         token: saved.HF_TOKEN ? mask(saved.HF_TOKEN) : "",
@@ -491,6 +499,29 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       }
       accounts.saveSettings(user.id, updates);
       return send(res, 200, { ok: true, guest: user.guest, expiresAt: user.guest ? accounts.extend(user.id) : null });
+    }
+    // An account with an email address and a password, and signing in with one.
+    // Guesses are slowed: ten wrong tries from one address in a quarter hour and it waits.
+    if (req.method === "POST" && (url.pathname === "/api/auth/register" || url.pathname === "/api/auth/login")) {
+      if (!accounts) return send(res, 503, { error: "Sign-in is not set up on this site." });
+      const body = await json(req);
+      const who = String(req.socket.remoteAddress ?? "");
+      const tries = loginTries.get(who) ?? { n: 0, at: 0 };
+      if (tries.n >= 10 && Date.now() - tries.at < 15 * 60e3) return send(res, 429, { error: "Too many tries from this address; wait a quarter of an hour." });
+      try {
+        const user = url.pathname === "/api/auth/register" ? accounts.register({ email: body.email, name: body.name, password: body.password }) : accounts.login({ email: body.email, password: body.password });
+        loginTries.delete(who);
+        if (ctx.user?.guest) {
+          accounts.adopt(ctx.user.id, user.id);
+          rentals.delete(ctx.user.id);
+          rentals.delete(user.id);
+        }
+        res.setHeader("Set-Cookie", accounts.cookie(accounts.issue(user.id)));
+        return send(res, 200, { ok: true, user: { email: user.email, name: user.name, picture: user.picture } });
+      } catch (err) {
+        if (err instanceof AuthError && err.status === 401) loginTries.set(who, { n: tries.n + 1, at: Date.now() });
+        return send(res, err instanceof AuthError ? err.status : 500, { error: err.message });
+      }
     }
     if (req.method === "POST" && url.pathname === "/api/auth/logout") {
       if (accounts) res.setHeader("Set-Cookie", accounts.clearCookie());
@@ -601,33 +632,32 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const started = Date.now();
       const index = readVoices(voicesFile);
       const scan = readScan(scanFile) ?? { models: [] };
-      const full = fullAccess(ctx);
-      const scanned = scan.models.map(withVoice).filter((m) => full || forVisitors(m));
+      const scanned = scan.models.map(withVoice).filter((m) => visible(m, ctx));
       const known = [...new Set([...Object.keys(index), ...scan.models.map((m) => m.id)])];
       let hub = [];
       let hubError = null;
       const [hubResult, asked] = await Promise.all([
-        hub_().search(q).then((models) => models.map((m) => withSpeed(m, ctx)).map(withVoice).filter((m) => full || forVisitors(m))).catch((err) => {
+        hub_().search(q).then((models) => models.map((m) => withSpeed(m, ctx)).map(withVoice).filter((m) => visible(m, ctx))).catch((err) => {
           hubError = err.message;
           return [];
         }),
         askSources(q, known, { civitai: true, reddit: true, github: true, hn: true, lemmy: true, youtube: true }),
       ]);
       hub = hubResult;
-      if (!full && Array.isArray(asked.civitai)) asked.civitai = asked.civitai.filter((i) => !i.nsfw);
+      if (!adultAccess(ctx) && Array.isArray(asked.civitai)) asked.civitai = asked.civitai.filter((i) => !i.nsfw);
       const hideRefusing = url.searchParams.get("showRefusing") !== "1";
-      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, ...speedOf({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }) })).filter((p) => full || forVisitors(p)), voices: index, hideRefusing });
+      const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, ...speedOf({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }) })).filter((p) => visible(p, ctx)), voices: index, hideRefusing });
       return send(res, 200, { q, ...ranked, models: ranked.models.slice(0, 60), hideRefusing, hubError, gathered: Object.keys(index).length, scanned: scan.models.length, took: Date.now() - started, ...asked });
     }
     if (req.method === "GET" && url.pathname === "/api/search") {
       const q = url.searchParams.get("q") ?? "";
       if (!q.trim()) return send(res, 400, { error: "Say what you are looking for" });
       const models = await hub().search(q);
-      return send(res, 200, { q, models: models.map((m) => withSpeed(m, ctx)).map(withVoice).filter((m) => fullAccess(ctx) || forVisitors(m)) });
+      return send(res, 200, { q, models: models.map((m) => withSpeed(m, ctx)).map(withVoice).filter((m) => visible(m, ctx)) });
     }
     if (req.method === "GET" && url.pathname === "/api/models") {
       const scan = readScan(scanFile) ?? { at: null, models: [] };
-      return send(res, 200, { ...scan, models: scan.models.map(withVoice).filter((m) => fullAccess(ctx) || forVisitors(m)) });
+      return send(res, 200, { ...scan, models: scan.models.map(withVoice).filter((m) => visible(m, ctx)) });
     }
     // Gathers what people say about every model in the scan (and any
     // search results the page asks for), a card and a discussion list each.
@@ -662,8 +692,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       // Every outside source is asked at once; one failing is reported, not fatal.
       const started = Date.now();
       const asked = await askSources(q, known, { civitai: true, reddit: true, github: true, hn: true, lemmy: true, youtube: true });
-      const shown = fullAccess(ctx) ? null : new Set((readScan(scanFile)?.models ?? []).filter(forVisitors).map((m) => m.id));
-      if (shown && Array.isArray(asked.civitai)) asked.civitai = asked.civitai.filter((i) => !i.nsfw);
+      const shown = fullAccess(ctx) && adultAccess(ctx) ? null : new Set((readScan(scanFile)?.models ?? []).filter((m) => visible(m, ctx)).map((m) => m.id));
+      if (!adultAccess(ctx) && Array.isArray(asked.civitai)) asked.civitai = asked.civitai.filter((i) => !i.nsfw);
       return send(res, 200, { q, hits: searchVoices(index, q).filter((h) => !shown || shown.has(h.id)).slice(0, 100), took: Date.now() - started, ...asked });
     }
     // Off-Hub voices for one model: its Civitai page and Reddit posts, cached for a week.
@@ -726,7 +756,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       const model = details.get(id) ?? (await hub().model(id, { token: own }));
       // What a person's own token unlocked is not kept for everyone.
       if (!model.gatedBlocked && !(own && model.gated)) details.set(id, model);
-      if (!fullAccess(ctx) && !forVisitors(model)) return send(res, 403, { error: model.adult ? "This model is for adults. Sign in, or enter an Anthropic API key as a guest, to open it here." : VISITOR_ONLY });
+      if (!visible(model, ctx)) return send(res, 403, { error: model.adult && !adultAccess(ctx) ? NOT_HERE : VISITOR_ONLY });
       // Curated picks name their runner and file outright, so a repository
       // the tag rules cannot place still gets a plan.
       const pick = PICKS.find((p) => p.id === id);
@@ -778,14 +808,16 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (!fullAccess(ctx)) return send(res, 403, { error: VISITOR_ONLY });
       const id = String(url.searchParams.get("id") ?? "");
       if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
-      return send(res, 200, await loraFinder.find(id, { adult: url.searchParams.get("adult") === "1" }));
+      return send(res, 200, await loraFinder.find(id, { adult: adultAccess(ctx) && url.searchParams.get("adult") === "1" }));
     }
     if (req.method === "GET" && url.pathname === "/api/loras/link") {
       if (!fullAccess(ctx)) return send(res, 403, { error: VISITOR_ONLY });
       const id = String(url.searchParams.get("base") ?? "");
       if (!/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
       try {
-        return send(res, 200, { item: await loraFinder.fromLink(id, String(url.searchParams.get("url") ?? "").slice(0, 500)) });
+        const item = await loraFinder.fromLink(id, String(url.searchParams.get("url") ?? "").slice(0, 500));
+        if (item?.adult && !adultAccess(ctx)) return send(res, 403, { error: NOT_HERE });
+        return send(res, 200, { item });
       } catch (err) {
         return send(res, 400, { error: err.message });
       }
@@ -799,7 +831,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       if (!/^[\w.-]+\/[\w.-]+$/.test(base) || !/^[\w.-]+\/[\w.-]+$/.test(id)) return send(res, 400, { error: "Bad model id" });
       const version = /^\d+$/.test(String(url.searchParams.get("version") ?? "")) ? url.searchParams.get("version") : null;
       try {
-        return send(res, 200, await loraFinder.recipe(base, { id, version }, { adult: url.searchParams.get("adult") === "1" }));
+        return send(res, 200, await loraFinder.recipe(base, { id, version }, { adult: adultAccess(ctx) && url.searchParams.get("adult") === "1" }));
       } catch (err) {
         return send(res, 502, { error: err.message });
       }

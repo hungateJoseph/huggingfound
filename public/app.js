@@ -45,12 +45,13 @@ async function load() {
   renderDiskLine();
   if (s.hosted) {
     $("#env-note").textContent = s.user?.guest ? "Kept with your guest keys on this site, until they expire." : "Kept with your account on this site.";
-    $("#runpod-key").nextElementSibling.textContent = "Make an account at runpod.io and add some credit, then on the Credentials page (Account, Credentials, API Keys) create a key that can manage pods. It is kept encrypted with your keys here and sent only to RunPod.";
-    $("#vast-key").nextElementSibling.textContent = "A second place to rent from: Vast.ai's GPUs are listed with RunPod's below, marked Vast.ai, and are often in stock when RunPod's are not. Make an account at vast.ai and add some credit, then on the Keys page (Account, Keys) create an API key; it has to rent and stop machines. It is kept encrypted with your keys here and sent only to Vast.ai.";
+    $("#runpod-key").nextElementSibling.textContent = "From runpod.io, under Account, Credentials: a key that can manage pods. Kept encrypted with your account; sent only to RunPod.";
+    $("#vast-key").nextElementSibling.textContent = "Optional. A second place to rent from, from vast.ai under Account, Keys. Kept encrypted with your account; sent only to Vast.ai.";
   } else {
     $("#env-path").textContent = s.envFile;
   }
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
+  state.keys = { runpod: s.runpodKey || "", vast: s.vastKey || "", hf: s.token || "", civitai: s.civitaiToken || "", claude: s.claudeKey || "" };
   state.imageServer = s.imageServer;
   $("#reddit-status").textContent = s.redditApp ? `An app id is saved (${s.redditApp}); Reddit is searched with it.` : "No app id saved; Reddit is skipped.";
   $("#github-status").textContent = s.githubToken ? `A token is saved (${s.githubToken}); thirty GitHub searches a minute.` : "No token; ten GitHub searches a minute.";
@@ -278,7 +279,6 @@ $("#nav-browse").addEventListener("click", () => {
   setMode("browse");
   render();
 });
-$("#browse-all").addEventListener("click", () => $("#nav-browse").click());
 
 // The categories as chips under the search box, for someone who does not
 // know what to type: each opens Browse on that tab.
@@ -5324,6 +5324,7 @@ function saveLoraBook(repo, book) {
 const loraKey = (repo, file) => `${repo}/${file}`;
 // Whether the finder asks Civitai for adult listings too: off unless ticked, kept in this browser.
 function loraAdult() {
+  if (!state.access?.adult) return false;
   try {
     return localStorage.getItem("lorasAdult") === "1";
   } catch {
@@ -5536,7 +5537,7 @@ function wireLoras(box, t, onChange = () => {}) {
         ${fts.map(([key, i]) => `<div class="lora-row ft ${loraHere(t, key) ? "" : "gone"}" data-key="${esc(key)}"><label class="check"><input type="radio" name="lora-ft" value="${esc(key)}" ${b.finetune === key ? "checked" : ""} ${loraHere(t, key) ? "" : "disabled"}> <b>${esc(i.name)}</b>${i.adult ? ' <span class="pill adult">18+</span>' : ""} <span class="muted small">${sourceName(i.source)}${i.gb ? ` · ${fmtGb(i.gb)}` : ""}${i.fp ? ` · ${esc(i.fp)}` : ""}${loraHere(t, key) ? "" : " · not on this machine"}</span></label> ${loraHere(t, key) ? "" : `<button class="ghost lora-readd" data-key="${esc(key)}">Add again</button>`} <button class="ghost lora-recipe" title="How its creator made the clips that show it off">Creator's settings</button> <button class="ghost lora-forget" data-key="${esc(key)}">Remove</button></div>`).join("")}</div>` : ""}
       ${los.length ? `<div class="lora-group"><p class="small"><b>LoRAs</b> <span class="muted">tick to use; up to four at once</span></p>${los.map(row).join("")}</div>` : ""}
       <p class="tools-row"><button class="ghost" id="lora-look">${b.found ? "Look again" : "Look for LoRAs"}</button><span class="muted small">on Hugging Face and Civitai, made for ${esc(t.repo.split("/").pop())}. Nothing is used unless you tick it.</span></p>
-      <label class="check small"><input type="checkbox" id="lora-adult" ${loraAdult() ? "checked" : ""}> Include 18+ results <span class="muted">adult LoRAs from Civitai, marked 18+; for adults only</span></label>
+      ${state.access?.adult ? `<label class="check small"><input type="checkbox" id="lora-adult" ${loraAdult() ? "checked" : ""}> Include 18+ results <span class="muted">adult LoRAs from Civitai, marked 18+; for adults only</span></label>` : ""}
       <div class="tools-row lora-link"><input type="url" id="lora-url" placeholder="Or paste a link: a PromptHero model page, a Civitai model page or a Hugging Face repository"><button class="ghost" id="lora-url-go">Read the link</button></div>
       <div id="lora-linked"></div>
       <div id="lora-found"></div>`;
@@ -5612,7 +5613,7 @@ function wireLoras(box, t, onChange = () => {}) {
       else openRecipe = null;
     }
     body.querySelector("#lora-look").addEventListener("click", look);
-    body.querySelector("#lora-adult").addEventListener("change", (e) => {
+    body.querySelector("#lora-adult")?.addEventListener("change", (e) => {
       setLoraAdult(e.target.checked);
       look();
     });
@@ -6314,26 +6315,64 @@ function renderAccount() {
   const box = $("#account");
   box.hidden = !user;
   const until = user?.expiresAt ? new Date(user.expiresAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
-  $("#account-line").textContent = user ? (user.guest ? `You are a guest. Your keys and the rented machine are kept until ${until}, ${state.auth?.guestHours ?? 12} hours after your last use; then the machine is stopped and the keys forgotten.${state.auth?.google ? " Sign in with Google to keep them." : ""}` : `Signed in as ${user.email}.`) : "";
+  $("#account-line").textContent = user ? (user.guest ? `You are a guest. Your keys and the rented machine are kept until ${until}, ${state.auth?.guestHours ?? 12} hours after your last use; then the machine is stopped and the keys forgotten. Create an account to keep them.` : `Signed in as ${user.email}.`) : "";
   $("#delete-account").textContent = user?.guest ? "Forget my keys now" : "Delete my account";
+  $("#sign-out").textContent = user?.guest ? "Forget keys" : "Sign out";
   if (!user) {
     box.innerHTML = "";
+    $("#account-view").hidden = true;
     return;
   }
-  box.innerHTML = user.guest
-    ? `<span class="muted small" title="Kept until ${esc(until)}">Guest, keys kept until ${esc(until)}</span><button class="ghost" id="sign-out">Forget keys</button>`
-    : `${user.picture ? `<img class="avatar" src="${esc(user.picture)}" alt="" referrerpolicy="no-referrer">` : ""}<span class="muted small">${esc(user.name || user.email)}</span><button class="ghost" id="sign-out">Sign out</button>`;
-  box.querySelector("#sign-out").addEventListener("click", async () => {
-    if (user.guest) {
-      if (!confirm("Forget your keys now? A rented machine is stopped first and then forgotten by this site; it stays in your RunPod account.")) return;
-      await api.post("/api/account/delete", {});
-    } else {
-      await api.post("/api/auth/logout", {});
-    }
-    $("#settings").hidden = true;
-    await load();
-  });
+  // The bar shows the first name, as a button that opens the account window.
+  const first = user.guest ? "Guest" : String(user.name || user.email.split("@")[0]).trim().split(/\s+/)[0];
+  const initial = first.slice(0, 1).toUpperCase();
+  box.innerHTML = `${user.picture ? `<img class="avatar" src="${esc(user.picture)}" alt="" referrerpolicy="no-referrer">` : `<span class="avatar initial">${esc(initial)}</span>`}<span>${esc(first)}</span>`;
+  box.title = user.guest ? `Guest, keys kept until ${until}` : user.email;
+  renderAccountView();
 }
+
+// The account window: who is signed in, the keys on file, the machine; the
+// settings are a step away, not repeated here.
+function renderAccountView() {
+  const user = state.user;
+  const body = $("#account-body");
+  if (!user) return (body.innerHTML = "");
+  const keys = state.keys ?? {};
+  const row = (name, value) => `<li><span>${esc(name)}</span><span class="${value ? "" : "muted"}">${value ? `<code>${esc(value)}</code>` : "none"}</span></li>`;
+  body.innerHTML = `<dl class="account-facts">
+      ${user.guest ? "" : `<div><dt>Email</dt><dd>${esc(user.email)}</dd></div>`}
+      ${user.guest ? "" : `<div><dt>Name</dt><dd>${esc(user.name || "")}</dd></div>`}
+      ${user.guest ? `<div><dt>Guest</dt><dd>Keys kept ${state.auth?.guestHours ?? 12} hours after your last use.</dd></div>` : ""}
+      ${user.admin ? `<div><dt>Role</dt><dd>Site owner</dd></div>` : ""}
+    </dl>
+    <h3>Keys on file</h3>
+    <ul class="account-keys">
+      ${row("RunPod", keys.runpod)}${row("Vast.ai", keys.vast)}${row("Anthropic", keys.claude)}${row("Hugging Face", keys.hf)}${row("Civitai", keys.civitai)}
+    </ul>
+    <p class="small">${state.rental?.rented ? "A GPU is rented; the bar above shows it, and Settings has its sizes and bill." : "No GPU rented."}</p>`;
+}
+$("#account").addEventListener("click", () => {
+  renderAccountView();
+  $("#account-view").hidden = false;
+});
+$("#close-account").addEventListener("click", () => ($("#account-view").hidden = true));
+$("#account-settings").addEventListener("click", () => {
+  $("#account-view").hidden = true;
+  $("#open-settings").click();
+});
+$("#sign-out").addEventListener("click", async () => {
+  const user = state.user;
+  if (!user) return;
+  if (user.guest) {
+    if (!confirm("Forget your keys now? A rented machine is stopped first and then forgotten by this site; it stays in your RunPod account.")) return;
+    await api.post("/api/account/delete", {});
+  } else {
+    await api.post("/api/auth/logout", {});
+  }
+  $("#account-view").hidden = true;
+  $("#settings").hidden = true;
+  await load();
+});
 
 // Whether a model has answered, drawn or filmed anything in this browser;
 // remembered here, so the answer checker is offered from then on.
@@ -6371,10 +6410,10 @@ function openSignUp() {
 // sign-in window opens. Picking an account hands over an ID token; the
 // server checks it and starts the session.
 function mountGoogle(host, text) {
-  if (!state.auth?.google) {
-    host.innerHTML = `<p class="muted small">Sign-in is not set up on this site yet; the owner has to add a Google client id.</p>`;
-    return;
-  }
+  // Without a Google client id, the email form is the way in and the Google line stays out.
+  host.hidden = !state.auth?.google;
+  if (host.previousElementSibling?.classList.contains("or")) host.previousElementSibling.hidden = !state.auth?.google;
+  if (!state.auth?.google) return;
   const ready = () => {
     if (!window.google?.accounts?.id) return;
     window.google.accounts.id.initialize({ client_id: state.auth.google, callback: onGoogleCredential });
@@ -6393,25 +6432,41 @@ function mountGoogle(host, text) {
 }
 
 async function onGoogleCredential(response) {
+  await signInWith("/api/auth/google", { credential: response.credential }, $("#signin-error"));
+}
+// Signing in or up, by whichever door: the windows close and the page is the account's.
+async function signInWith(path, body, errEl) {
   try {
-    await api.post("/api/auth/google", { credential: response.credential });
+    await api.post(path, body);
   } catch (err) {
-    $("#signin-error").textContent = err.message;
-    $("#signup-error").textContent = err.message;
-    return;
+    errEl.textContent = err.message;
+    return false;
   }
   $("#signin").hidden = true;
   $("#signup").hidden = true;
   await load();
   notice("Signed in. Your keys and your rented GPU are kept with your account; what you say to models is not.", "ok");
   if (state.open) openModel(state.open);
+  return true;
 }
+$("#signin-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  signInWith("/api/auth/login", { email: $("#signin-email").value, password: $("#signin-password").value }, $("#signin-error"));
+});
+$("#signup-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  signInWith("/api/auth/register", { email: $("#signup-email").value, name: $("#signup-name").value, password: $("#signup-password").value }, $("#signup-error"));
+});
 
 $("#sign-in").addEventListener("click", openSignIn);
 $("#create-account").addEventListener("click", openSignUp);
 $("#to-signup").addEventListener("click", (e) => {
   e.preventDefault();
   openSignUp();
+});
+$("#to-signin").addEventListener("click", (e) => {
+  e.preventDefault();
+  openSignIn();
 });
 $("#close-signin").addEventListener("click", () => ($("#signin").hidden = true));
 $("#close-signup").addEventListener("click", () => ($("#signup").hidden = true));

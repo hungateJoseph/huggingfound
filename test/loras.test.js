@@ -78,7 +78,7 @@ before(async () => {
   await new Promise((r) => civitai.listen(0, "127.0.0.1", r));
   const home = process.env.HUGGINGFOUND_HOME;
   const dead = "http://127.0.0.1:1";
-  server = createServer({ envFile: path.join(home, ".env"), scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: hub.base, civitaiBase: `http://127.0.0.1:${civitai.address().port}`, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, idleWatch: false, runpodBase: dead });
+  server = createServer({ adult: true, envFile: path.join(home, ".env"), scanFile: path.join(home, "scan.json"), voicesFile: path.join(home, "voices.json"), hubBase: hub.base, civitaiBase: `http://127.0.0.1:${civitai.address().port}`, redditAuthBase: dead, redditApiBase: dead, githubBase: dead, hnBase: dead, lemmyBase: dead, youtubeBase: dead, writtenSummaries: false, idleWatch: false, runpodBase: dead });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${server.address().port}`;
 });

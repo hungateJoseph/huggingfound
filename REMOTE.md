@@ -333,6 +333,27 @@ The machine takes two to four minutes to start. Meanwhile:
   try box instead (`renderAdvice`, `state.advice`), under the chat's
   instructions, once the model is set up. Elsewhere shows only the
   sources that had something; with nothing found the fold is hidden.
+- Accounts and adult models (2026-10-28). `accounts.register`/`login`: an
+  email and a scrypt-hashed password, `verified: false`; Google sign-in
+  sets `verified: true` and, finding an unverified password account on
+  the same address, drops its password (whoever proves the address owns
+  it). Routes `/api/auth/register` and `/api/auth/login`, ten wrong tries
+  per address then a quarter hour's wait. `auth.ready` is true on the
+  site whether or not Google is set up; the Google line in the sign-in
+  windows shows only with a client id. Adult models: `adultAccess(ctx)`
+  is true on the site only for `isAdmin` (signed in, verified, address in
+  `adminEmails`, default jbabyjbaby1@gmail.com) and on a local copy only
+  with `HUGGINGFOUND_ADULT=1` (the scan's local server passes
+  `adult: true`); `visible(m, ctx)` replaces the old visitor filter,
+  `/api/state` carries `access.adult` and `user.admin`, the nsfw
+  categories are left out of the state otherwise, the LoRA finder's
+  adult switch and parameter are the owner's only, and `/api/model`
+  answers 403 "This model is not available here." for an adult model.
+  The page: the bar shows the first name as a button (`#account`) that
+  opens the account window (`#account-view`: email, name, the keys on
+  file masked, the machine, Settings, Sign out, Delete); Settings is one
+  window in two columns (keys left, the rented GPU and the local-only
+  servers right, the rest folded) with no account box.
 - Placement: twice in a day a two-card and a one-card H200 pod in EUR-IS-4
   sat listed as running with no container for ten minutes and more (the
   proxy answering 404 on both ports), while a pod in US-NC-1 came up in
