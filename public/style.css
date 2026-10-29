@@ -928,3 +928,28 @@ body.app main .tab.on, body.app main .chip.strong { background: var(--dark-ink);
 body.app main .get-app code, body.app main .spec div, body.app main .transcript { background: var(--dark); }
 body.app main input::placeholder { color: #6f7b84; }
 body[data-mode="results"] .hero, body[data-mode="browse"] .hero { border-bottom: 1px solid var(--dark-line); }
+
+/* The windows take the page's dark tones too; the inputs sit a shade darker than the card. */
+.modal {
+  --bg: var(--dark); --surface: var(--dark-2); --ink: var(--dark-ink); --muted: var(--dark-muted); --line: var(--dark-line); --chip: #232c34;
+  --accent-ink: #ff8a6b; --accent-soft: rgba(255, 91, 54, 0.16);
+  --ok: #3dd68c; --ok-soft: rgba(61, 214, 140, 0.14); --warn: #ffb454; --warn-soft: rgba(255, 180, 84, 0.14); --bad: #ff7a7a; --bad-soft: rgba(255, 122, 122, 0.14);
+  --info: var(--dark-ink); --info-soft: #232c34;
+  background: rgba(5, 9, 12, 0.6);
+}
+.modal-card { color: var(--dark-ink); box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55); border: 1px solid var(--dark-line); }
+.modal input, .modal textarea, .modal select, .modal .field input, .modal .field textarea { background: var(--dark); color: var(--dark-ink); border-color: var(--dark-line); }
+.modal input::placeholder, .modal textarea::placeholder { color: #6f7b84; }
+.modal button:hover, .modal .model:hover { border-color: #4a5a64; }
+.modal .pill.adult { background: var(--dark-ink); color: var(--dark); }
+.modal .tab.on, .modal .where-opt.on, .modal .pane-tab.on, .modal .chip.strong { background: var(--dark-ink); color: var(--dark); border-color: var(--dark-ink); }
+.modal .pane-tab.on .pane-n { background: rgba(0, 0, 0, 0.15); color: var(--dark); }
+.modal .fit-card, .modal .step, .modal .rent-card, .modal .tier, .modal .queue, .modal .suggest, .modal .review, .modal .code-result, .modal .shot-cards li, .modal .lora-hit, .modal .get-app, .modal .keys-fold, .modal .kept-older, .modal .rent-ask, .modal .rent-when-form { background: var(--dark); }
+.modal .log { background: #090d10; }
+.modal .msg.assistant, .modal .transcript, .modal .spec div, .modal .handoff-body, .modal .msg-file pre { background: #0c1216; }
+.modal .demo-tiles img, .modal .result-image { background: var(--dark); }
+/* The small i that opens a key's description. */
+.key .field span { display: inline-flex; align-items: center; gap: 6px; }
+button.info { width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 1px solid var(--dark-muted); background: transparent; color: var(--dark-muted); font: 700 11px/1 var(--mono); display: inline-grid; place-items: center; cursor: pointer; }
+button.info:hover, button.info[aria-expanded="true"] { border-color: var(--dark-ink); color: var(--dark-ink); }
+.key .field small { margin-top: 2px; }

@@ -52,6 +52,11 @@ async function load() {
   }
   $("#token-current").textContent = s.token ? `A token is saved (${s.token}).` : "No token saved. Open models work without one.";
   state.keys = { runpod: s.runpodKey || "", vast: s.vastKey || "", hf: s.token || "", civitai: s.civitaiToken || "", claude: s.claudeKey || "" };
+  // A Remove button only where there is something to remove.
+  for (const [id, saved] of [["#clear-runpod", s.runpodKey], ["#clear-vast", s.vastKey], ["#clear-token", s.token], ["#clear-civitai", s.civitaiToken], ["#clear-claude", s.claudeKey], ["#clear-github", s.githubToken], ["#clear-youtube", s.youtubeKey], ["#clear-reddit", s.redditApp], ["#clear-chat-server", s.chatServer?.url], ["#clear-image-server", s.imageServer]]) {
+    const el = document.querySelector(id);
+    if (el) el.hidden = !saved;
+  }
   state.imageServer = s.imageServer;
   $("#reddit-status").textContent = s.redditApp ? `An app id is saved (${s.redditApp}); Reddit is searched with it.` : "No app id saved; Reddit is skipped.";
   $("#github-status").textContent = s.githubToken ? `A token is saved (${s.githubToken}); thirty GitHub searches a minute.` : "No token; ten GitHub searches a minute.";
@@ -6210,6 +6215,24 @@ function renderRunners() {
   $("#runner-list").innerHTML = rows.map(([k, v]) => `<li><span>${k}</span><span class="muted">${esc(v)}</span></li>`).join("");
 }
 
+// Each key's description sits behind a small i until it is asked for.
+for (const small of document.querySelectorAll("#settings .key .field small")) {
+  const label = small.closest(".field").querySelector("span");
+  if (!label) continue;
+  small.hidden = true;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "info";
+  btn.setAttribute("aria-label", "About this");
+  btn.setAttribute("aria-expanded", "false");
+  btn.textContent = "i";
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    small.hidden = !small.hidden;
+    btn.setAttribute("aria-expanded", String(!small.hidden));
+  });
+  label.append(btn);
+}
 $("#open-settings").addEventListener("click", () => {
   $("#settings").hidden = false;
   if (!state.hosted) renderStorage($("#local-body").hidden ? ["settings"] : ["local", "settings"]).catch(() => ($("#storage-total").textContent = "Could not read the models folder."));

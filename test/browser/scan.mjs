@@ -1500,9 +1500,15 @@ await step("hosted: a guest enters a key in the model window, rents, and sees wh
   // An Anthropic key makes the visitor a guest with the whole catalogue: the adult model and the video example are back.
   await openSettings(visitor);
   await visitor.waitForSelector("#settings:not([hidden])");
+  // Nothing saved yet: no Remove button, and the description waits behind its i.
+  assert.equal(await visitor.$eval("#clear-claude", (e) => e.hidden), true, "no Remove before a key is saved");
+  assert.equal(await visitor.locator("#claude-key ~ small").isVisible(), false);
+  await visitor.click("#sec-claude .info");
+  assert.match(await visitor.locator("#claude-key ~ small").innerText(), /console\.anthropic\.com/);
   await visitor.fill("#claude-key", "sk-ant-api03-guestbrowserkey0123456789");
   await visitor.click("#save-claude");
   await visitor.waitForFunction(() => /You are a guest/.test(document.querySelector("#account-line")?.textContent ?? ""));
+  assert.equal(await visitor.$eval("#clear-claude", (e) => e.hidden), false, "Remove once there is a key");
   await visitor.keyboard.press("Escape");
   await visitor.waitForSelector("#settings", { state: "hidden" });
   assert.equal((await (await visitor.request.get(`${hostedBase}/api/state`)).json()).access.full, true, "a guest with an Anthropic key");
