@@ -982,18 +982,14 @@ npm start</code>
 // The screen on show for each model this session, and the all-at-once
 // choice kept in this browser.
 state.pane = new Map();
+// One screen at a time, always; the column layout stays only as a switch
+// for the browser scan, under a key nothing on the page sets.
 function panesAll() {
   try {
-    return localStorage.getItem("hf:window") === "all";
+    return localStorage.getItem("hf:panes") === "all";
   } catch {
     return false;
   }
-}
-function setPanesAll(all) {
-  try {
-    if (all) localStorage.setItem("hf:window", "all");
-    else localStorage.removeItem("hf:window");
-  } catch {}
 }
 function showPane(id, name, asked = false) {
   const body = $("#modal-body");

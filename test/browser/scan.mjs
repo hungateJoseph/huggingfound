@@ -175,7 +175,7 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 // The model window's screens are shown all at once in these steps; the staged window has a step of its own.
-await page.addInitScript(() => localStorage.setItem("hf:window", "all"));
+await page.addInitScript(() => localStorage.setItem("hf:panes", "all"));
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 // Deliberate 400s (a rejected setting) log as resource errors; those are not page bugs.
@@ -1389,7 +1389,7 @@ await new Promise((resolve) => hosted.listen(0, "127.0.0.1", resolve));
 const hostedBase = `http://127.0.0.1:${hosted.address().port}`;
 await hosted.refresh();
 const visitor = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-await visitor.addInitScript(() => localStorage.setItem("hf:window", "all"));
+await visitor.addInitScript(() => localStorage.setItem("hf:panes", "all"));
 visitor.on("pageerror", (e) => errors.push(`hosted: ${e.message}`));
 visitor.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(`hosted: ${m.text()}`));
 visitor.on("dialog", (d) => (acceptDialogs ? d.accept() : d.dismiss()));

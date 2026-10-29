@@ -319,9 +319,9 @@ The machine takes two to four minutes to start. Meanwhile:
   (`#voices`). One pane shows at a time (`#modal-body.staged`); the
   screen a model was left on is kept for the session (`state.pane`), a
   running step keeps Set up, and a ready model opens on Use. "All at
-  once" (`hf:window` = all in localStorage) lays them out in a column,
-  as the window was before; the scan sets that for its pages and tests
-  the staged window in a step of its own. Cards show the same one word
+  once" (`hf:panes` = all in localStorage, which nothing on the page sets any
+  more) lays them out in a column; the scan sets that for its pages and
+  tests the staged window in a step of its own. Cards show the same one word
   (`speedWord` from the server) with the sentence as the title. On the
   site, Set up is two ways: "Let HuggingFound download it", which picks
   the rented GPU, and "Download it yourself", a fold with every step's
