@@ -1435,12 +1435,26 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   assert.equal(await visitor.$eval("#account", (e) => e.lastElementChild.textContent), "Pat", "the first name only");
   await visitor.click("#account");
   await visitor.waitForSelector("#account-view:not([hidden])");
-  assert.match(await visitor.locator("#account-view").innerText(), /pat\.lee@example\.com[\s\S]*Keys on file[\s\S]*RunPod[\s\S]*none[\s\S]*No GPU rented/);
+  assert.match(await visitor.locator("#account-view").innerText(), /pat\.lee@example\.com[\s\S]*Keys on file[\s\S]*none yet[\s\S]*No GPU rented/);
+  assert.equal(await visitor.locator("#account-view .account-keys").isVisible(), false, "the keys wait under their bar");
+  await visitor.click("#keys-fold summary");
+  assert.match(await visitor.locator("#account-view .account-keys").innerText(), /RunPod[\s\S]*none[\s\S]*Civitai/);
   assert.equal(await visitor.locator("#account-view #runpod-key").count(), 0, "the account window is not the settings");
+  assert.equal(await visitor.locator("#account-view .account-facts dt", { hasText: "Role" }).count(), 0, "no role line for anyone but the owner");
+  // The name changes freely; the email needs the password and a free address.
+  await visitor.click("#edit-account summary");
+  await visitor.fill("#edit-name", "Patricia Lee");
+  await visitor.fill("#edit-email", "patricia@example.com");
+  await visitor.click("#account-edit button[type=submit]");
+  await visitor.waitForFunction(() => /current password is wrong/.test(document.querySelector("#edit-error")?.textContent ?? ""));
+  await visitor.fill("#edit-password", "pw-long-enough-1");
+  await visitor.click("#account-edit button[type=submit]");
+  await visitor.waitForFunction(() => /patricia@example\.com/.test(document.querySelector("#account-line")?.textContent ?? ""));
+  assert.equal(await visitor.$eval("#account", (e) => e.lastElementChild.textContent), "Patricia");
   await visitor.click("#sign-out");
   await visitor.waitForFunction(() => document.querySelector("#account").hidden);
   await visitor.click("#sign-in");
-  await visitor.fill("#signin-email", "pat.lee@example.com");
+  await visitor.fill("#signin-email", "patricia@example.com");
   await visitor.fill("#signin-password", "wrong-one-here");
   await visitor.click("#signin-form button[type=submit]");
   await visitor.waitForFunction(() => /Wrong email address or password/.test(document.querySelector("#signin-error").textContent));

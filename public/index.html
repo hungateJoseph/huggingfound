@@ -13,7 +13,7 @@
   <link rel="preload" href="fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="app">
   <header class="top">
     <div class="wrap">
       <a class="brand" id="nav-home" href="/">
@@ -197,7 +197,7 @@ npm start</code>
           <h2 id="modal-title"></h2>
           <p class="muted small" id="modal-sub"></p>
         </div>
-        <span class="modal-buttons"><button class="ghost" id="hide-model">Hide this model</button><button class="ghost" id="close-modal" aria-label="Close">Close</button></span>
+        <span class="modal-buttons"><button class="ghost" id="hide-model">Hide this model</button><button class="ghost" id="close-modal" aria-label="Close" title="Close">&times;</button></span>
       </div>
       <div id="modal-body"></div>
     </div>
@@ -219,7 +219,7 @@ npm start</code>
           <h2 id="gpu-models-title">On your rented GPU</h2>
           <p class="muted small" id="gpu-models-sub"></p>
         </div>
-        <button class="ghost" id="close-gpu-models" aria-label="Close">Close</button>
+        <button class="ghost" id="close-gpu-models" aria-label="Close" title="Close">&times;</button>
       </div>
       <div id="gpu-models-body"></div>
     </div>
@@ -229,7 +229,7 @@ npm start</code>
     <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="signin-title">
       <div class="modal-head">
         <h2 id="signin-title">Sign in</h2>
-        <button class="ghost" id="close-signin" aria-label="Close">Close</button>
+        <button class="ghost" id="close-signin" aria-label="Close" title="Close">&times;</button>
       </div>
       <form class="auth-form" id="signin-form">
         <label class="field"><span>Email</span><input type="email" id="signin-email" autocomplete="username" required></label>
@@ -247,7 +247,7 @@ npm start</code>
     <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="signup-title">
       <div class="modal-head">
         <h2 id="signup-title">Create an account</h2>
-        <button class="ghost" id="close-signup" aria-label="Close">Close</button>
+        <button class="ghost" id="close-signup" aria-label="Close" title="Close">&times;</button>
       </div>
       <form class="auth-form" id="signup-form">
         <label class="field"><span>Email</span><input type="email" id="signup-email" autocomplete="username" required></label>
@@ -269,7 +269,7 @@ npm start</code>
           <h2 id="account-title">Your account</h2>
           <p class="muted small" id="account-line"></p>
         </div>
-        <button class="ghost" id="close-account" aria-label="Close">Close</button>
+        <button class="ghost" id="close-account" aria-label="Close" title="Close">&times;</button>
       </div>
       <div id="account-body"></div>
       <div class="actions account-actions">
@@ -287,7 +287,7 @@ npm start</code>
           <h2 id="checker-title">Check an answer with Claude</h2>
           <p class="muted small">Small open models make mistakes a stronger model catches: code that does not run, a wrong fact, a picture that misses its description. Paste what a model gave you and Claude Opus reviews it.</p>
         </div>
-        <button class="ghost" id="close-checker" aria-label="Close">Close</button>
+        <button class="ghost" id="close-checker" aria-label="Close" title="Close">&times;</button>
       </div>
       <div class="quality" id="checker-kind">
         <label><input type="radio" name="checker-kind" value="text" checked> <b>An answer</b> <span class="muted">text or code</span></label>
@@ -346,7 +346,7 @@ npm start</code>
           <h2 id="settings-title">Settings</h2>
           <p class="muted small" id="env-note">Saved to <code id="env-path"></code> on this computer.</p>
         </div>
-        <button class="ghost" id="close-settings" aria-label="Close">Close</button>
+        <button class="ghost" id="close-settings" aria-label="Close" title="Close">&times;</button>
       </div>
       <div class="settings-grid">
         <section class="sgroup" id="sec-keys">

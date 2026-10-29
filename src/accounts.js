@@ -130,6 +130,32 @@ export function createAccounts({ dir, secret, sessionSecret = secret, googleClie
       if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) throw new AuthError("Wrong email address or password.", 401);
       return publicUser(user);
     },
+    // A person changes their name freely. The email address changes only on
+    // an account with a password, with that password given again, to an
+    // address no account has; the new address is unverified, so an account
+    // cannot become the owner's by renaming itself.
+    update(id, { name, email, password } = {}) {
+      const user = validId(id) ? readJson(userFile(id), null) : null;
+      if (!user || user.guest) throw new AuthError("No such account.", 404);
+      const next = { ...user };
+      if (name !== undefined) next.name = String(name).trim().slice(0, 80) || null;
+      const lower = email === undefined ? user.email : String(email).trim().toLowerCase();
+      if (lower !== user.email) {
+        if (!user.passwordHash) throw new AuthError("This account's address comes from Google and cannot be changed here.", 400);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lower) || lower.length > 200) throw new AuthError("That does not look like an email address.", 400);
+        const expected = Buffer.from(user.passwordHash, "hex");
+        const given = Buffer.from(hashPassword(typeof password === "string" ? password : "", user.passwordSalt), "hex");
+        if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) throw new AuthError("The current password is wrong.", 401);
+        const ids = index();
+        if (ids[lower]) throw new AuthError("That email address already has an account.", 409);
+        delete ids[user.email];
+        writeJson(indexFile, { ...ids, [lower]: user.id });
+        next.email = lower;
+        next.verified = false;
+      }
+      writeJson(userFile(id), next);
+      return publicUser(next);
+    },
     get(id) {
       if (!validId(id)) return null;
       const user = readJson(userFile(id), null);

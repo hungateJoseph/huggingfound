@@ -312,7 +312,7 @@ details#web-found summary { cursor: pointer; margin-top: 8px; }
 .hero-links a { color: var(--dark-muted); text-decoration: none; }
 .hero-links a:hover { color: var(--dark-ink); }
 body[data-hosted="1"] .hero-links .hosted-only { display: inline; }
-body:not([data-mode="results"]):not([data-mode="browse"]) .site-foot { display: none; }
+body.app:not([data-mode="results"]):not([data-mode="browse"]) .site-foot { display: none; }
 body[data-mode="results"] .hero-foot, body[data-mode="browse"] .hero-foot { display: none; }
 body[data-mode="results"] .hero, body[data-mode="browse"] .hero { min-height: 0; display: block; }
 .hero-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 48px; align-items: center; }
@@ -361,9 +361,9 @@ body[data-mode="results"] #examples, body[data-mode="browse"] #examples,
 body[data-mode="results"] .demo, body[data-mode="browse"] .demo { display: none; }
 body[data-mode="results"] .hero .trait-search.big, body[data-mode="browse"] .hero .trait-search.big { max-width: 760px; margin-bottom: 10px; }
 /* The front page is dark from top to bottom; the band line of categories belongs to results and Browse. */
-body:not([data-mode="results"]):not([data-mode="browse"]) { background: var(--dark); }
-body:not([data-mode="results"]):not([data-mode="browse"]) .browse-invite { display: none; }
-body:not([data-mode="results"]):not([data-mode="browse"]) .site-foot .muted, body:not([data-mode="results"]):not([data-mode="browse"]) .site-foot a { color: var(--dark-muted); }
+body.app:not([data-mode="results"]):not([data-mode="browse"]) { background: var(--dark); }
+body.app:not([data-mode="results"]):not([data-mode="browse"]) .browse-invite { display: none; }
+body.app:not([data-mode="results"]):not([data-mode="browse"]) .hero { border-bottom: 0; }
 
 
 /* The demo: a small window in which one search is typed, answered, run and checked. */
@@ -493,7 +493,16 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 .account-facts dt { font: 600 11px/1.7 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .account-facts dd { margin: 0; }
 #account-view h3 { margin: 14px 0 6px; font-size: 14px; }
-.account-keys { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+.keys-fold { margin: 12px 0 0; border: 1px solid var(--line); border-radius: 10px; }
+.keys-fold > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; gap: 10px; }
+.keys-fold > summary .muted { font-weight: 400; }
+.keys-fold[open] > summary { border-bottom: 1px solid var(--line); }
+.account-keys { list-style: none; margin: 0; padding: 4px 14px 8px; display: grid; gap: 0; font-size: 14px; }
+.account-keys li:first-child { border-top: 0; }
+.edit-account { margin: 12px 0 0; }
+.edit-account > summary { cursor: pointer; font-size: 14px; color: var(--accent-ink); }
+.edit-account form { display: grid; gap: 2px; margin-top: 6px; }
+.edit-account form .actions { margin-top: 8px; align-items: center; }
 .account-keys li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
 .account-actions { justify-content: flex-start; margin-top: 16px; }
 button.danger { color: var(--bad); }
@@ -896,3 +905,7 @@ details.way .get-app { margin-top: 10px; }
 .settings .rent { margin: 0; padding: 0; border: 0; }
 .settings .rent > #rent-panel:empty::before { content: "No GPU rented. Save a RunPod or Vast.ai key and a model's window offers one."; color: var(--muted); font-size: 14px; }
 @media (max-width: 820px) { .settings-grid { grid-template-columns: 1fr; } }
+
+/* Windows close with a plain x at the top right. */
+.modal-head button[aria-label="Close"], .modal-buttons button[aria-label="Close"] { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 26px; line-height: 1; display: inline-grid; place-items: center; flex: none; }
+.modal-head button[aria-label="Close"]:hover, .modal-buttons button[aria-label="Close"]:hover { background: var(--chip); color: var(--ink); border: 0; }

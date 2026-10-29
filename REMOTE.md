@@ -353,7 +353,14 @@ The machine takes two to four minutes to start. Meanwhile:
   opens the account window (`#account-view`: email, name, the keys on
   file masked, the machine, Settings, Sign out, Delete); Settings is one
   window in two columns (keys left, the rented GPU and the local-only
-  servers right, the rest folded) with no account box.
+  servers right, the rest folded) with no account box. The account
+  window closes on Escape or a click beside it, folds the keys under a
+  "Keys on file" bar, shows a Role line to the owner only, and has a
+  fold to change the name, or the email on a password account with the
+  password given again (`accounts.update`, `POST /api/account/update`:
+  the new address must be free, and starts unverified; a Google
+  account's address cannot be changed). The dark page and hidden footer
+  are scoped to `body.app`, so about.html and privacy.html stay light.
 - Placement: twice in a day a two-card and a one-card H200 pod in EUR-IS-4
   sat listed as running with no container for ten minutes and more (the
   proxy answering 404 on both ports), while a pod in US-NC-1 came up in

@@ -6224,7 +6224,7 @@ $("#close-modal").addEventListener("click", () => {
 // drag that ends outside (selecting text) does not count, only a click
 // that began there.
 let pressedBackdrop = null;
-for (const id of ["#settings", "#modal", "#gpu-models"]) {
+for (const id of ["#settings", "#modal", "#gpu-models", "#account-view"]) {
   const el = $(id);
   if (!el) continue;
   el.addEventListener("pointerdown", (e) => {
@@ -6242,6 +6242,8 @@ document.addEventListener("keydown", (e) => {
     $("#settings").hidden = true;
     $("#checker").hidden = true;
     $("#signin").hidden = true;
+    $("#signup").hidden = true;
+    $("#account-view").hidden = true;
     $("#gpu-models").hidden = true;
     state.open = null;
   }
@@ -6339,17 +6341,49 @@ function renderAccountView() {
   if (!user) return (body.innerHTML = "");
   const keys = state.keys ?? {};
   const row = (name, value) => `<li><span>${esc(name)}</span><span class="${value ? "" : "muted"}">${value ? `<code>${esc(value)}</code>` : "none"}</span></li>`;
+  const saved = Object.values(keys).filter(Boolean).length;
   body.innerHTML = `<dl class="account-facts">
       ${user.guest ? "" : `<div><dt>Email</dt><dd>${esc(user.email)}</dd></div>`}
       ${user.guest ? "" : `<div><dt>Name</dt><dd>${esc(user.name || "")}</dd></div>`}
       ${user.guest ? `<div><dt>Guest</dt><dd>Keys kept ${state.auth?.guestHours ?? 12} hours after your last use.</dd></div>` : ""}
       ${user.admin ? `<div><dt>Role</dt><dd>Site owner</dd></div>` : ""}
     </dl>
-    <h3>Keys on file</h3>
-    <ul class="account-keys">
-      ${row("RunPod", keys.runpod)}${row("Vast.ai", keys.vast)}${row("Anthropic", keys.claude)}${row("Hugging Face", keys.hf)}${row("Civitai", keys.civitai)}
-    </ul>
+    ${user.guest ? "" : `<details class="edit-account" id="edit-account">
+      <summary>Change your name${user.password ? " or email" : ""}</summary>
+      <form id="account-edit">
+        <label class="field"><span>Name</span><input type="text" id="edit-name" maxlength="80" value="${esc(user.name || "")}"></label>
+        ${user.password ? `<label class="field"><span>Email</span><input type="email" id="edit-email" autocomplete="username" value="${esc(user.email)}"></label>
+        <label class="field"><span>Current password</span><input type="password" id="edit-password" autocomplete="current-password"><small class="muted">Needed to change the email. The new address starts unverified.</small></label>` : `<p class="muted small">Your email address comes from Google and cannot be changed here.</p>`}
+        <div class="actions"><button class="primary" type="submit">Save</button><span class="muted small" id="edit-error"></span></div>
+      </form>
+    </details>`}
+    <details class="keys-fold" id="keys-fold">
+      <summary><span>Keys on file</span><span class="muted">${saved ? `${saved} saved` : "none yet"}</span></summary>
+      <ul class="account-keys">
+        ${row("RunPod", keys.runpod)}${row("Vast.ai", keys.vast)}${row("Anthropic", keys.claude)}${row("Hugging Face", keys.hf)}${row("Civitai", keys.civitai)}
+      </ul>
+    </details>
     <p class="small">${state.rental?.rented ? "A GPU is rented; the bar above shows it, and Settings has its sizes and bill." : "No GPU rented."}</p>`;
+  body.querySelector("#account-edit")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = body.querySelector("#edit-error");
+    err.textContent = "";
+    const payload = { name: body.querySelector("#edit-name").value };
+    const emailEl = body.querySelector("#edit-email");
+    if (emailEl && emailEl.value.trim().toLowerCase() !== user.email) {
+      payload.email = emailEl.value;
+      payload.password = body.querySelector("#edit-password").value;
+    }
+    try {
+      await api.post("/api/account/update", payload);
+    } catch (e2) {
+      err.textContent = e2.message;
+      return;
+    }
+    await load();
+    renderAccountView();
+    notice("Saved.", "ok");
+  });
 }
 $("#account").addEventListener("click", () => {
   renderAccountView();

@@ -181,6 +181,32 @@ test("an account with an email address and a password: made once, signed into wi
   assert.equal((await post("/api/auth/login", { email: "mia@example.com", password: "a-good-password" })).status, 401);
 });
 
+test("a person changes their name freely, and their email only with their password, to a free address; a Google address stays as it is", async () => {
+  const made = await post("/api/auth/register", { email: "ned@example.com", password: "ned-password-1", name: "Ned" });
+  const cookie = made.headers.get("set-cookie").split(";")[0];
+  assert.equal((await post("/api/account/update", { name: "Edward" }, { Cookie: cookie })).status, 200);
+  let me = (await (await get("/api/state", { Cookie: cookie })).json()).user;
+  assert.deepEqual([me.name, me.email, me.password], ["Edward", "ned@example.com", true]);
+  assert.equal((await post("/api/account/update", { email: "new@example.com" }, { Cookie: cookie })).status, 401, "no password, no change of address");
+  assert.equal((await post("/api/account/update", { email: "new@example.com", password: "wrong" }, { Cookie: cookie })).status, 401);
+  server.accounts.findOrCreate({ email: "taken@example.com", name: "T" });
+  assert.equal((await post("/api/account/update", { email: "taken@example.com", password: "ned-password-1" }, { Cookie: cookie })).status, 409, "an address with an account already is refused");
+  assert.equal((await post("/api/account/update", { email: "jbabyjbaby1@gmail.com", password: "ned-password-1" }, { Cookie: cookie })).status, 409, "the owner's address is taken too");
+  assert.equal((await post("/api/account/update", { email: "new@example.com", password: "ned-password-1" }, { Cookie: cookie })).status, 200);
+  me = (await (await get("/api/state", { Cookie: cookie })).json()).user;
+  assert.equal(me.email, "new@example.com");
+  assert.equal((await post("/api/auth/login", { email: "new@example.com", password: "ned-password-1" })).status, 200, "signs in under the new address");
+  assert.equal((await post("/api/auth/login", { email: "ned@example.com", password: "ned-password-1" })).status, 401, "and no longer under the old");
+  // Renamed to an address on the admin list before it was taken, an account is still not the owner: the new address is unverified.
+  const g = server.accounts.findOrCreate({ email: "gina@example.com", name: "Gina" });
+  const gCookie = `hf_session=${server.accounts.issue(g.id)}`;
+  assert.equal((await post("/api/account/update", { name: "Georgina" }, { Cookie: gCookie })).status, 200);
+  const changed = await post("/api/account/update", { email: "other@example.com" }, { Cookie: gCookie });
+  assert.equal(changed.status, 400);
+  assert.match((await changed.json()).error, /comes from Google/);
+  assert.equal((await post("/api/account/update", { name: "X" })).status, 401, "signed out, nothing changes");
+});
+
 test("a model's plan lists the steps with commands, for a typical laptop, with nothing marked done", async () => {
   const { plan } = await (await get("/api/model?id=bartowski/Qwen2.5-Coder-7B-Instruct-GGUF")).json();
   assert.equal(plan.runnable, true);

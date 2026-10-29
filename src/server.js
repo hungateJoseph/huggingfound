@@ -413,7 +413,7 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
         machine,
         hosted,
         // Who is signed in on the hosted site, and whether anyone can.
-        user: ctx.user ? { email: ctx.user.email, name: ctx.user.name, picture: ctx.user.picture, guest: ctx.user.guest, expiresAt: ctx.user.expiresAt ?? null, admin: isAdmin(ctx) } : null,
+        user: ctx.user ? { email: ctx.user.email, name: ctx.user.name, picture: ctx.user.picture, guest: ctx.user.guest, expiresAt: ctx.user.expiresAt ?? null, admin: isAdmin(ctx), password: Boolean(ctx.user.password) } : null,
         // Whether video models and LoRAs are on show for this visitor, and whether adult models are (the owner only).
         access: { full: fullAccess(ctx), adult: adultAccess(ctx) },
         auth: hosted ? { google: accounts.googleClientId() || "", ready: true, guestHours: GUEST_HOURS } : null,
@@ -517,6 +517,22 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
           rentals.delete(user.id);
         }
         res.setHeader("Set-Cookie", accounts.cookie(accounts.issue(user.id)));
+        return send(res, 200, { ok: true, user: { email: user.email, name: user.name, picture: user.picture } });
+      } catch (err) {
+        if (err instanceof AuthError && err.status === 401) loginTries.set(who, { n: tries.n + 1, at: Date.now() });
+        return send(res, err instanceof AuthError ? err.status : 500, { error: err.message });
+      }
+    }
+    // A signed-in person changes their name, or their email with their password.
+    if (req.method === "POST" && url.pathname === "/api/account/update") {
+      if (!accounts || !ctx.user || ctx.user.guest) return send(res, 401, { error: "Sign in first." });
+      const body = await json(req);
+      const who = String(req.socket.remoteAddress ?? "");
+      const tries = loginTries.get(who) ?? { n: 0, at: 0 };
+      if (tries.n >= 10 && Date.now() - tries.at < 15 * 60e3) return send(res, 429, { error: "Too many tries from this address; wait a quarter of an hour." });
+      try {
+        const user = accounts.update(ctx.user.id, { name: body.name, email: body.email, password: body.password });
+        loginTries.delete(who);
         return send(res, 200, { ok: true, user: { email: user.email, name: user.name, picture: user.picture } });
       } catch (err) {
         if (err instanceof AuthError && err.status === 401) loginTries.set(who, { n: tries.n + 1, at: Date.now() });
