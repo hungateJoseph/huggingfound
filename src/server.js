@@ -661,7 +661,8 @@ export function createServer({ envFile, hubBase, fetchImpl = fetch, scanFile = p
       ]);
       hub = hubResult;
       if (!adultAccess(ctx) && Array.isArray(asked.civitai)) asked.civitai = asked.civitai.filter((i) => !i.nsfw);
-      const hideRefusing = url.searchParams.get("showRefusing") !== "1";
+      // Models users report as refusing are left out, always.
+      const hideRefusing = true;
       const ranked = rankModels(q, { hub, scanned, picks: PICKS.map((p) => ({ ...p, ...speedOf({ runnerId: p.runner, sizeGb: p.gb, fileName: p.file, machine: machineFor(p.runner, ctx) }) })).filter((p) => visible(p, ctx)), voices: index, hideRefusing });
       return send(res, 200, { q, ...ranked, models: ranked.models.slice(0, 60), hideRefusing, hubError, gathered: Object.keys(index).length, scanned: scan.models.length, took: Date.now() - started, ...asked });
     }

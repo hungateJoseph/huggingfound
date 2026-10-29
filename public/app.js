@@ -250,7 +250,7 @@ $("#trait-form").addEventListener("submit", async (e) => {
   btn.disabled = true;
   btn.textContent = "Searching";
   try {
-    const result = await api.get(`/api/find?q=${encodeURIComponent(q)}${state.showRefusing ? "&showRefusing=1" : ""}`);
+    const result = await api.get(`/api/find?q=${encodeURIComponent(q)}`);
     state.found = { q, models: result.models, kind: result.kind ?? null, web: result, hubError: result.hubError, gathered: result.gathered, scanned: result.scanned, took: result.took, hiddenRefusing: result.hiddenRefusing, hideRefusing: result.hideRefusing };
     notice(result.hubError ? `Hugging Face did not answer (${result.hubError}); showing what is known locally.` : "", "warn");
     if (state.mode !== "browse") setMode("results");
@@ -515,16 +515,10 @@ function render() {
     $("#found-title").textContent = `${found.length} model${found.length === 1 ? "" : "s"} for "${f.q}"`;
     // Only what can be acted on: hidden models and the way to see them.
     const bits = [];
-    if (f.hiddenRefusing) bits.push(`<a href="#" id="toggle-refusing">${f.hideRefusing ? `${f.hiddenRefusing} hidden: users report refusals` : "hide models users report as refusing"}</a>`);
     if (foundHidden) bits.push(`<a href="#" id="toggle-hidden">${state.showHidden ? `hide the ${foundHidden} you hid` : `${foundHidden} hidden by you`}</a>`);
     if (!f.gathered && !state.hosted) bits.push("gather what people say in Browse to rank by reviews");
     $("#found-hint").innerHTML = bits.join(" · ");
     $("#found-hint").hidden = !bits.length;
-    $("#toggle-refusing")?.addEventListener("click", (e) => {
-      e.preventDefault();
-      state.showRefusing = !state.showRefusing;
-      $("#trait-form").requestSubmit();
-    });
     $("#toggle-hidden")?.addEventListener("click", (e) => {
       e.preventDefault();
       state.showHidden = !state.showHidden;
@@ -822,7 +816,11 @@ function renderModel(model, plan, choice = null) {
   state.choice = choice;
   if (choice) whereFor.set(model.id, choice.where);
   const sub = [model.author, model.summary, model.gated ? "gated" : ""].filter(Boolean).join(" · ");
-  $("#modal-sub").innerHTML = `${esc(sub)} · <a href="${esc(model.url)}" target="_blank" rel="noopener">Open on Hugging Face</a>`;
+  $("#modal-sub").innerHTML = `${esc(sub)} · <a href="${esc(model.url)}" target="_blank" rel="noopener">Open on Hugging Face</a>${plan.runnable ? ` · <a href="#" id="say-link">What people say</a>` : ""}`;
+  $("#say-link")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    showPane(model.id, "say", true);
+  });
   renderHideButton(model.id);
   const body = $("#modal-body");
   const parts = [];
@@ -887,8 +885,8 @@ function renderModel(model, plan, choice = null) {
   const ready = plan.steps.every((s) => s.done || s.optional);
   const running = plan.steps.some((s) => s.running);
   const hasTry = !onSite;
-  const panes = [["fit", "Fit"], ["setup", onSite ? "How to run it" : "Set up"], ...(hasTry ? [["use", "Use"]] : []), ["say", "What people say"]];
-  parts.push(`<nav class="panes-nav" id="panes-nav" aria-label="Parts of this window">${panes.map(([id, name], i) => `<button class="pane-tab" data-pane="${id}">${i < 3 && id !== "say" ? `<span class="pane-n">${i + 1}</span>` : ""}${esc(name)}</button>`).join("")}<button class="ghost pane-all" id="pane-all">${panesAll() ? "One at a time" : "All at once"}</button></nav>`);
+  const panes = [["fit", "Fit"], ["setup", "Try model"], ...(hasTry ? [["use", "Use"]] : [])];
+  parts.push(`<nav class="panes-nav" id="panes-nav" aria-label="Parts of this window">${panes.map(([id, name], i) => `<button class="pane-tab" data-pane="${id}"><span class="pane-n">${i + 1}</span>${esc(name)}</button>`).join("")}</nav>`);
 
   // Fit: the size, the fit and the speed, each in a few words, and where to run it.
   const fitLine = fitSentence(plan, choice);
@@ -908,7 +906,7 @@ function renderModel(model, plan, choice = null) {
   </div>`);
   if (onMachine) fitPane.push(`<p class="muted small">Runs on your rented GPU; your browser talks to the machine directly and nothing passes through ${state.hosted ? "this site" : "the app"}.</p>`);
   if (plan.fit.level === "no") fitPane.push(`<div class="notice warn">${state.hosted ? "Larger than a typical laptop has to spare." : "Larger than this computer has to spare; it may load slowly or not at all."}${choice && !choice.rented ? " A rented GPU holds it: pick On a rented GPU above." : choice ? " Pick On a rented GPU above." : ""}</div>`);
-  fitPane.push(`<div class="actions pane-actions"><button class="primary" id="pane-next" data-pane="${ready && hasTry ? "use" : "setup"}">${ready && hasTry ? "Use it" : onSite ? "How to run it" : running ? "See the set-up" : "Set it up"}</button><button class="ghost" data-pane="say">What people say</button></div>`);
+  fitPane.push(`<div class="actions pane-actions"><button class="primary" id="pane-next" data-pane="${ready && hasTry ? "use" : "setup"}">${ready && hasTry ? "Use it" : "Try model"}</button></div>`);
   parts.push(`<section class="pane" data-pane="fit">${fitPane.join("")}</section>`);
 
   // Set up: one step on show at a time: the first one not done, with the
@@ -922,17 +920,26 @@ function renderModel(model, plan, choice = null) {
   const later = plan.steps.filter((s, i) => waiting(s, i) && !s.optional).length;
   const stepsHtml = `<ol class="steps${onSite ? " manual" : ""}" id="steps">${plan.steps.map((s, i) => stepHtml(s, i, waiting(s, i))).join("")}${later ? `<li class="steps-later muted small">Then ${later} more step${later === 1 ? "" : "s"}, shown when this one is done.</li>` : ""}</ol>`;
   if (onSite) {
-    // Two ways: HuggingFound downloads it onto a GPU rented by the hour, or the person does it by hand.
+    // Two ways, neither pushed over the other: HuggingFound on this device
+    // does every step itself, or a GPU rented by the hour does the work.
     setupPane.push(`<div class="setup-ways">
-      ${choice && !choice.gpuOnly ? `<button class="way" id="way-rented"><b>Let HuggingFound download it</b><span class="pill good">Recommended</span><span class="muted">Onto a GPU rented by the hour. It is ready in a few minutes and you use it right here.</span></button>` : ""}
-      <details class="way manual">
-        <summary><b>Download it yourself</b><span class="muted">From Hugging Face, to run with ${esc(plan.runner === "ollama" ? "Ollama" : "the runner named below")} on your computer.</span></summary>
-        ${stepsHtml}
-        <details class="get-app hosted-only"><summary>Or let HuggingFound on your computer do these steps with one click.</summary><code>git clone https://github.com/hungateJoseph/huggingfound.git
+      ${choice?.gpuOnly ? "" : `<div class="way">
+        <b>Download to your device</b>
+        <span class="muted">HuggingFound installs the runner and the model on your computer and runs every step itself. Once it is there you use the model right here, in this window.</span>
+        <div class="actions"><button class="primary" id="way-device">Install on this device</button></div>
+        <div class="device-box" id="device-box" hidden>
+          <p>This runs through HuggingFound's own app on your computer, free and open source. Paste these three lines into a terminal once; it then opens this page from your machine and does the steps at a click.</p>
+          <code>git clone https://github.com/hungateJoseph/huggingfound.git
 cd huggingfound
 npm install
-npm start</code></details>
-      </details>
+npm start</code>
+        </div>
+      </div>`}
+      ${choice && !choice.gpuOnly ? `<div class="way">
+        <b>Run on a rented GPU</b>
+        <span class="muted">Recommended for larger models. HuggingFound rents the GPU by the hour, sets the model up on it and runs it, and you use it right here. The rental, the set-up and the use all happen through HuggingFound.</span>
+        <div class="actions"><button class="primary" id="way-rented">Rent a GPU</button></div>
+      </div>` : ""}
     </div>`);
   } else {
     setupPane.push(stepsHtml);
@@ -959,11 +966,11 @@ npm start</code></details>
     state.pane.set(model.id, "fit");
     chooseWhere(model.id, "rented");
   });
-  for (const btn of body.querySelectorAll("[data-pane]:not(.pane)")) btn.addEventListener("click", () => showPane(model.id, btn.dataset.pane, true));
-  $("#pane-all").addEventListener("click", () => {
-    setPanesAll(!panesAll());
-    renderModel(model, plan, choice);
+  body.querySelector("#way-device")?.addEventListener("click", () => {
+    const box = body.querySelector("#device-box");
+    box.hidden = !box.hidden;
   });
+  for (const btn of body.querySelectorAll("[data-pane]:not(.pane)")) btn.addEventListener("click", () => showPane(model.id, btn.dataset.pane, true));
   wireRentAsk(body, model, choice);
   renderTry(model, plan);
   // Which screen: a step running or just finished keeps Set up, a model

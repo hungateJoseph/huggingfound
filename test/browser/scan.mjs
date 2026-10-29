@@ -282,7 +282,8 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator(".hero-foot").isVisible(), false, "the band's foot steps aside for the results");
   assert.equal(await page.locator(".site-foot").isVisible(), true);
   assert.equal(await page.locator("#demo").isVisible(), false, "and the demo; the band keeps only the search and the categories");
-  assert.equal(await page.locator("#home-categories").isVisible(), true);
+  assert.equal(await page.locator("#home-categories").isVisible(), false, "no category line under the search in results");
+  assert.equal(await page.locator("#nav-browse").isVisible(), true, "Browse is a link in the footer");
   assert.equal(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "results sit on the same dark page, no jump to white");
   assert.equal(await page.$eval("#found .model", (e) => getComputedStyle(e).backgroundColor), "rgb(24, 35, 41)", "cards drawn for the dark page");
   assert.match(await page.locator("#found-title").innerText(), /"code"/i);
@@ -417,14 +418,12 @@ await step("one search box finds models by name and by what people say", async (
   assert.match(await page.locator("#found .model").first().locator(".said").innerText(), /rust/i);
   await page.fill("#trait", "chat");
   await page.click("#trait-go");
-  await page.waitForSelector("#toggle-refusing");
-  assert.match(await page.locator("#found-hint").innerText(), /hidden: users report refusals/);
-  assert.equal(await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).count(), 0, "hidden by default");
-  await page.click("#toggle-refusing");
-  await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).waitFor();
-  assert.match(await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).innerText(), /Users report refusals/);
-  await page.click("#toggle-refusing");
-  await page.waitForFunction(() => document.querySelectorAll("#found .model").length > 0 && !document.querySelector("#found .model .pill.no"));
+  await page.waitForFunction(() => document.querySelectorAll("#found .model").length > 0 && /"chat"/.test(document.querySelector("#found-title").textContent));
+  // A model users report as refusing is left out, with nothing said about it and no way to ask for it.
+  assert.equal(await page.locator("#found .model", { hasText: "Polite-Chat-7B-GGUF" }).count(), 0, "left out");
+  assert.equal(await page.locator("#toggle-refusing").count(), 0);
+  assert.doesNotMatch(await page.locator("#found-hint").innerText(), /refus/);
+  assert.equal(await page.locator("#found .model .pill.no").count(), 0);
   assert.equal(await page.locator("#web-found").isVisible(), true, "outside sources are listed, collapsed");
   assert.match(await page.locator("#web-found-summary").innerText(), /also mentioned elsewhere/i);
   await page.click("#web-found-summary");
@@ -471,31 +470,28 @@ await step("opened for the first time, a model's window shows one screen at a ti
   await fresh.click("#home-categories [data-cat=easy]");
   await fresh.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
   await fresh.waitForSelector("#modal-body .fit-card");
-  assert.deepEqual(await fresh.$$eval("#panes-nav .pane-tab", (els) => els.map((e) => [e.textContent.replace(/^\d/, ""), e.classList.contains("on")])), [["Fit", true], ["Set up", false], ["Use", false], ["What people say", false]]);
+  assert.deepEqual(await fresh.$$eval("#panes-nav .pane-tab", (els) => els.map((e) => [e.textContent.replace(/^\d/, ""), e.classList.contains("on")])), [["Fit", true], ["Try model", false], ["Use", false]]);
+  assert.equal(await fresh.locator("#pane-all").count(), 0, "no all-at-once switch");
+  assert.equal(await fresh.locator("#modal-sub #say-link").innerText(), "What people say", "a small link beside the name, not a step");
   assert.equal(await fresh.locator(".pane[data-pane=fit]").isVisible(), true);
   assert.equal(await fresh.locator("#steps").isVisible(), false, "the steps wait for the next screen");
   assert.equal(await fresh.locator("#voices").isVisible(), false);
   assert.equal(await fresh.locator("#modal-body .fit-size").innerText(), "2.0 GB");
   assert.equal(await fresh.locator("#modal-body .fit-line").innerText(), "Fits this Mac with room to spare.");
-  assert.equal(await fresh.locator("#pane-next").innerText(), "Set it up");
+  assert.equal(await fresh.locator("#pane-next").innerText(), "Try model");
   await fresh.click("#pane-next");
   assert.equal(await fresh.locator("#steps").isVisible(), true);
   assert.equal(await fresh.locator(".pane[data-pane=fit]").isVisible(), false);
   assert.equal(await fresh.$$eval("#steps .step:not([hidden])", (els) => els.length), 1, "one step on show");
-  await fresh.click(".pane-tab[data-pane=say]");
+  await fresh.click("#say-link");
   await fresh.waitForFunction(() => /roleplay and story writing/.test(document.querySelector("#voices")?.textContent ?? ""));
   assert.equal(await fresh.locator("#steps").isVisible(), false);
   // Closed and opened again, the window comes back on the screen it was left on.
   await fresh.click("#close-modal");
   await fresh.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
-  await fresh.waitForSelector("#modal-body .pane-tab.on");
-  assert.equal(await fresh.locator(".pane-tab.on").innerText(), "What people say");
-  assert.equal(await fresh.locator("#modal-body .fit-card").isVisible(), false, "the fit screen stays behind");
-  // "All at once" lays the screens out in a column, and is remembered.
-  await fresh.click("#pane-all");
-  assert.equal(await fresh.locator("#steps").isVisible(), true);
+  await fresh.waitForSelector("#modal-body .pane[data-pane=say].on");
   assert.equal(await fresh.locator("#voices").isVisible(), true);
-  assert.equal(await fresh.evaluate(() => localStorage.getItem("hf:window")), "all");
+  assert.equal(await fresh.locator("#modal-body .fit-card").isVisible(), false, "the fit screen stays behind");
   await fresh.close();
 });
 

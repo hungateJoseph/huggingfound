@@ -362,7 +362,7 @@ body[data-mode="results"] .demo, body[data-mode="browse"] .demo { display: none;
 body[data-mode="results"] .hero .trait-search.big, body[data-mode="browse"] .hero .trait-search.big { max-width: 760px; margin-bottom: 10px; }
 /* The front page is dark from top to bottom; the band line of categories belongs to results and Browse. */
 body.app:not([data-mode="results"]):not([data-mode="browse"]) { background: var(--dark); }
-body.app:not([data-mode="results"]):not([data-mode="browse"]) .browse-invite { display: none; }
+body.app:not([data-mode="browse"]) .browse-invite { display: none; }
 body.app:not([data-mode="results"]):not([data-mode="browse"]) .hero { border-bottom: 0; }
 
 
@@ -953,3 +953,17 @@ body[data-mode="results"] .hero, body[data-mode="browse"] .hero { border-bottom:
 button.info { width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 1px solid var(--dark-muted); background: transparent; color: var(--dark-muted); font: 700 11px/1 var(--mono); display: inline-grid; place-items: center; cursor: pointer; }
 button.info:hover, button.info[aria-expanded="true"] { border-color: var(--dark-ink); color: var(--dark-ink); }
 .key .field small { margin-top: 2px; }
+
+/* The two ways on the site: cards of equal weight, a button each; the app's three lines behind the first. */
+.setup-ways { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+.setup-ways .way { cursor: default; }
+.setup-ways .way .actions { margin-top: 10px; }
+.device-box { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
+.device-box p { margin: 0 0 8px; }
+.device-box code { display: block; padding: 8px 10px; background: var(--dark); border-radius: 6px; white-space: pre; overflow-x: auto; }
+@media (max-width: 720px) { .setup-ways { grid-template-columns: 1fr; } }
+/* The footer's actions read as links. */
+.site-foot button.link { border: 0; background: transparent; padding: 0; cursor: pointer; font: inherit; font-size: 13px; }
+.site-foot button.link:hover { color: var(--ink); }
+body[data-hosted="1"] .site-foot button.hosted-only { display: inline; }
+#modal-sub #say-link { white-space: nowrap; }

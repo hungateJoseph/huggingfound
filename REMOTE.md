@@ -361,6 +361,17 @@ The machine takes two to four minutes to start. Meanwhile:
   the new address must be free, and starts unverified; a Google
   account's address cannot be changed). The dark page and hidden footer
   are scoped to `body.app`, so about.html and privacy.html stay light.
+- Later on 2026-10-28: the window's tabs are Fit, Try model and Use; What
+  people say is a small link beside the name (`#say-link`) that opens
+  its pane; the all-at-once switch is gone (the preference still works
+  when set, which the scan does). On the site, Try model shows two cards
+  of equal weight: Download to your device (the app does every step; the
+  button `#way-device` unfolds the three install lines) and Run on a
+  rented GPU (`#way-rented`, recommended for larger models); the manual
+  Ollama steps are gone. Models users report as refusing are always left
+  out of a search (`hideRefusing` is fixed on; no toggle). The category
+  line shows in Browse only; Browse all models and Check an answer are
+  links in the footer.
 - Placement: twice in a day a two-card and a one-card H200 pod in EUR-IS-4
   sat listed as running with no container for ten minutes and more (the
   proxy answering 404 on both ports), while a pod in US-NC-1 came up in
