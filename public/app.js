@@ -348,29 +348,40 @@ function renderHomePicks() {
 const DEMO_SCENES = [
   {
     q: "fix the failing tests in my python project",
-    results: [["Qwen2.5-Coder-7B-Instruct", "ok", "Runs on your laptop", "4.7 GB"], ["Qwen3-Coder-30B-A3B", "big", "Too big for a laptop. Rent a GPU here, $0.44 an hour", "18 GB"], ["DeepSeek-Coder-V2-Lite", "ok", "Runs on your laptop", "8.9 GB"]],
+    results: [["Qwen2.5-Coder-7B-Instruct", "ok", "Runs on your laptop", "4.7 GB"], ["Qwen3-Coder-30B-A3B", "big", "Too big for a laptop. Rent a GPU here, $0.20 an hour", "18 GB"], ["DeepSeek-Coder-V2-Lite", "ok", "Runs on your laptop", "8.9 GB"]],
     pick: 1,
     label: "Running on a rented GPU",
     out: '<code>test_export.py</code>: two failures found and patched; 14 tests pass.',
     check: "Free model, GPU by the hour. It stops itself when you are done.",
   },
   {
-    q: "product photos on a white background",
-    results: [["SDXL-Lightning", "ok", "Runs on your laptop, four steps", "6.9 GB"], ["FLUX.1-schnell", "big", "Too big for a laptop. Rent a GPU here, $0.44 an hour", "23 GB"], ["Qwen-Image-Edit", "big", "Too big for a laptop. Rent a GPU here; edits a picture you give it", "20 GB"]],
-    pick: 1,
-    label: "Making pictures on a rented GPU",
-    out: '<span class="demo-tiles"><i></i><i></i><i></i><i></i></span>Four pictures in 41 seconds, for about a cent.',
+    q: (set) => `brighten these photos of ${set.of}`,
+    results: [["Qwen-Image-Edit", "big", "Too big for a laptop. Rent a GPU here, $0.20 an hour", "20 GB"], ["FLUX.1-Kontext", "big", "Too big for a laptop. Rent a GPU here, $0.20 an hour", "23 GB"], ["SDXL-Lightning", "ok", "Runs on your laptop, four steps", "6.9 GB"]],
+    pick: 0,
+    label: "Editing the photos on a rented GPU",
+    out: (set) => `${tilesHtml(set)}Four photos done in 20 seconds, for under a cent.`,
     check: "Nothing to install, nothing to pay for the model.",
   },
   {
-    q: "a ten second clip of the product turning",
-    results: [["Wan2.2-TI2V-5B", "big", "Too big for a laptop. Rent a GPU here, $0.44 an hour", "28 GB"], ["LTX-2", "big", "Too big for a laptop. Rent a GPU here; with sound", "40 GB"], ["MiniMax-H3", "big", "Too big for a laptop. Rent a GPU here; long scenes in shots", "60 GB"]],
+    q: (set) => `a ten second clip of ${set.of}`,
+    results: [["Wan2.2-TI2V-5B", "big", "Too big for a laptop. Rent a GPU here, $0.20 an hour", "20 GB"], ["LTX-2", "big", "Too big for a laptop. Rent a GPU here; with sound", "40 GB"], ["MiniMax-H3", "big", "Too big for a laptop. Rent a GPU here; long scenes in shots", "60 GB"]],
     pick: 0,
-    label: "Rendering shot 2 of 3 on a rented A40",
-    out: "Three shots joined, with sound.",
+    label: "Rendering shot 2 of 3 on a rented GPU",
+    out: (set) => `${tilesHtml(set)}Three shots joined, with sound.`,
     check: "The GPU stops itself when you are done.",
   },
 ];
+// The photos the demo shows being edited or filmed: six sets of four, public
+// domain, in public/demo (CREDITS.txt names the makers), taken in turn.
+const DEMO_SETS = [
+  { name: "birds", of: "robins in the garden" },
+  { name: "coast", of: "the coast at sunset" },
+  { name: "dogs", of: "the dogs at play" },
+  { name: "forest", of: "the forest walk" },
+  { name: "lake", of: "the mountain lake" },
+  { name: "winter", of: "the first snow" },
+];
+const tilesHtml = (set) => `<span class="demo-tiles">${[1, 2, 3, 4].map((n) => `<img src="demo/${set.name}-${n}.jpg" alt="" width="256" height="256" loading="eager" decoding="async">`).join("")}</span>`;
 function startDemo() {
   const demo = $("#demo");
   if (!demo) return;
@@ -380,15 +391,18 @@ function startDemo() {
   const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const timers = [];
   const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+  let setN = 0;
   const show = (scene) => {
+    const set = DEMO_SETS[setN % DEMO_SETS.length];
+    if (typeof scene.q === "function") setN += 1;
     demo.querySelector(".demo-results").innerHTML = scene.results.map(([name, where, says, size], i) => `<li class="${i === scene.pick ? "pick" : ""}"><span class="demo-name">${esc(name)}</span><span class="demo-where ${where}">${esc(says)}</span><span class="demo-size">${esc(size)}</span></li>`).join("");
     demo.querySelector(".demo-label").textContent = scene.label;
-    demo.querySelector(".demo-out").innerHTML = scene.out;
+    demo.querySelector(".demo-out").innerHTML = typeof scene.out === "function" ? scene.out(set) : scene.out;
     demo.querySelector(".demo-check-text").textContent = scene.check;
+    return typeof scene.q === "function" ? scene.q(set) : scene.q;
   };
   if (still) {
-    show(DEMO_SCENES[0]);
-    typed.textContent = DEMO_SCENES[0].q;
+    typed.textContent = show(DEMO_SCENES[0]);
     demo.classList.add("typed", "found", "picked", "running", "done", "checked");
     fill.style.width = "100%";
     pct.textContent = "100%";
@@ -403,9 +417,8 @@ function startDemo() {
     typed.textContent = "";
     fill.style.width = "0%";
     pct.textContent = "0%";
-    show(scene);
+    const words = show(scene);
     // Typed a letter at a time, found, downloaded, run, checked.
-    const words = scene.q;
     for (let i = 1; i <= words.length; i++) at(300 + i * 45, () => { typed.textContent = words.slice(0, i); });
     const typedAt = 300 + words.length * 45 + 250;
     at(typedAt, () => demo.classList.add("typed"));

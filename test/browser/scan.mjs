@@ -247,12 +247,17 @@ await step("the page opens on a single search box", async () => {
   assert.match(await page.$eval("#demo .demo-results li.pick .demo-where", (e) => e.textContent), /^Too big for a laptop\. Rent a GPU here/);
   assert.equal(await page.$eval("#demo", (e) => e.classList.contains("picked")), true);
   assert.doesNotMatch(await page.locator("#demo").innerText(), /Claude|key/i);
-  // Settings sits on the category line's right, level with it, never over the chips.
-  const [cats, util] = await page.$$eval("#browse-invite .cats, #browse-invite .utility", (els) => els.map((e) => e.getBoundingClientRect()));
-  assert.ok(util.left >= cats.right - 1, "the buttons are to the right of the chips");
-  assert.ok(Math.abs((util.top + util.height / 2) - (cats.top + cats.height / 2)) < 20, "and level with them");
+  // Settings is a gear at the far right of the bar.
+  const [bar, right, gear] = await page.$$eval(".top .wrap, .top .top-right, #open-settings", (els) => els.map((e) => e.getBoundingClientRect()));
+  assert.equal(await page.$eval("#open-settings", (e) => e.closest(".top") !== null && e.getAttribute("aria-label")), "Settings");
+  assert.equal(await page.$eval("#open-settings", (e) => e === e.parentElement.lastElementChild), true, "the last thing in the bar");
+  assert.ok(Math.abs(gear.right - right.right) < 2 && gear.top >= bar.top && gear.bottom <= bar.bottom, "in the bar, at its right edge");
   // The next search played is for pictures.
-  await page.waitForFunction(() => /product photos/.test(document.querySelector("#demo .demo-typed").textContent), null, { timeout: 20000 });
+  await page.waitForFunction(() => /^brighten these photos of robins in the garden$/.test(document.querySelector("#demo .demo-typed").textContent), null, { timeout: 20000 });
+  // Real photographs stand in for what the model makes, from the repository, each one loaded.
+  await page.waitForFunction(() => document.querySelector("#demo").classList.contains("done"), null, { timeout: 20000 });
+  assert.deepEqual(await page.$$eval("#demo .demo-tiles img", (els) => els.map((e) => [e.getAttribute("src"), e.complete && e.naturalWidth])), [1, 2, 3, 4].map((n) => [`demo/birds-${n}.jpg`, 256]));
+  assert.doesNotMatch(await page.locator("#demo").innerText(), /0\.44/, "the showcase price is the cheap card's");
   // Under the band: the categories on one line, then the curated picks as tiles that open the model.
   assert.deepEqual(await page.$$eval("#home-categories .chip", (els) => els.map((e) => e.textContent)), ["Easy to set up", "Chat and writing", "Coding", "Math and reasoning", "Understands images", "Makes images", "Speech to text"]);
   assert.equal(await page.locator("#start-title").innerText(), "Start with one of these");

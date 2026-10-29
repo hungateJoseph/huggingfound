@@ -1530,7 +1530,7 @@ function serveFile(res, file, root) {
     res.writeHead(404).end("Not found");
     return;
   }
-  res.writeHead(200, { "Content-Type": TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream", "Cache-Control": file.includes(`${path.sep}fonts${path.sep}`) ? "public, max-age=31536000, immutable" : "no-store" });
+  res.writeHead(200, { "Content-Type": TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream", "Cache-Control": file.includes(`${path.sep}fonts${path.sep}`) || file.includes(`${path.sep}demo${path.sep}`) ? "public, max-age=31536000, immutable" : "no-store" });
   fs.createReadStream(file).pipe(res);
 }
 

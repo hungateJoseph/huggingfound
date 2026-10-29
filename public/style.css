@@ -388,11 +388,7 @@ body[data-mode="results"] #cost, body[data-mode="browse"] #cost { display: none;
 .demo-out { font-size: 13px; color: var(--dark-ink); line-height: 1.45; }
 .demo-out code { background: rgba(255, 255, 255, 0.08); color: var(--dark-ink); font-size: 12px; }
 .demo-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0 0 8px; }
-.demo-tiles i { display: block; aspect-ratio: 1; border-radius: 6px; background: linear-gradient(160deg, #f6f3ee, #d9d3c8); position: relative; overflow: hidden; }
-.demo-tiles i::after { content: ""; position: absolute; left: 30%; right: 30%; top: 34%; bottom: 20%; border-radius: 4px 4px 8px 8px; background: linear-gradient(180deg, #ff8a6b, #d9472a); box-shadow: 0 6px 10px rgba(0, 0, 0, 0.12); }
-.demo-tiles i:nth-child(2)::after { left: 36%; right: 36%; top: 22%; border-radius: 50% 50% 6px 6px; }
-.demo-tiles i:nth-child(3)::after { left: 24%; right: 24%; top: 40%; bottom: 30%; border-radius: 6px; }
-.demo-tiles i:nth-child(4)::after { left: 34%; right: 34%; top: 26%; bottom: 18%; border-radius: 8px 8px 2px 2px; }
+.demo-tiles img { display: block; width: 100%; height: auto; aspect-ratio: 1; object-fit: cover; border-radius: 6px; background: #2a2e35; }
 .demo.done .demo-out { opacity: 1; transform: none; }
 .demo-check { margin-top: 8px; font-size: 12.5px; color: var(--dark-muted); display: flex; align-items: center; gap: 7px; }
 .demo.checked .demo-check { opacity: 1; transform: none; }
@@ -556,6 +552,9 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 /* Create account beside Sign in, on the dark bar. */
 .top-right > button.ghost { color: var(--dark-ink); border-color: #4a5a64; }
 .top-right > button.ghost:hover { border-color: var(--dark-ink); }
+/* Settings: a gear at the far right of the bar. */
+.top-right > button.icon { width: 36px; height: 36px; padding: 0; display: inline-grid; place-items: center; border-radius: 50%; border-color: transparent; color: var(--dark-muted); }
+.top-right > button.icon:hover { color: var(--dark-ink); background: var(--dark-2); border-color: transparent; }
 .account { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--dark-ink); }
 .account button { background: transparent; color: var(--dark-ink); border-color: #4a5a64; }
 .account .avatar { width: 26px; height: 26px; border-radius: 50%; }
@@ -567,7 +566,7 @@ body[data-hosted="1"] button.hosted-only { display: inline-block; }
 .keeps div { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: baseline; font-size: 14px; }
 .keeps dt { font: 600 11px/1.6 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .keeps dd { margin: 0; color: var(--ink); line-height: 1.5; }
-@media (max-width: 600px) { .top-right > button.ghost { display: none; } }
+@media (max-width: 600px) { .top-right > button.ghost:not(.icon) { display: none; } }
 /* Where a chat model runs: this computer or a rented GPU. */
 .where { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
 .where-opt { border-radius: 999px; padding: 7px 14px; }

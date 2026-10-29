@@ -1,0 +1,27 @@
+Photos in the front page's demo, as the pictures a model is shown making or editing.
+All are public domain or CC0, found through Openverse (openverse.org); none needs attribution, and the makers are named here anyway.
+
+birds-1.jpg: "Robin bird branch" by None, CC0, rawpixel: https://www.rawpixel.com/image/3237458/free-photo-image-robin-summer-green-birds
+birds-2.jpg: "Fall 2017 Horticulture" by Arlington National Cemetery, PDM, flickr: https://www.flickr.com/photos/60564189@N06/37967365764
+birds-3.jpg: "American robin perched on a tree branch" by U.S. Fish and Wildlife Service - Midwest Region, PDM, flickr: https://www.flickr.com/photos/49208525@N08/44076037300
+birds-4.jpg: "European robin" by planes, space, nature, PDM, flickr: https://www.flickr.com/photos/158350039@N03/53109399938
+coast-1.jpg: "The arch wave, islands, rocks, Pacific Ocean and South Mazatlan, Sinaloa, Mexico" by Wonderlane, CC0, flickr: https://www.flickr.com/photos/71401718@N00/3966588961
+coast-2.jpg: "Seekers of The Setting Sun" by jody.claborn, PDM, flickr: https://www.flickr.com/photos/130478877@N02/24183046109
+coast-3.jpg: "Sunset at Orange Beach, AL" by jody.claborn, PDM, flickr: https://www.flickr.com/photos/130478877@N02/24432888693
+coast-4.jpg: "Walk on the Wild Side , La Jolla, California" by moonjazz, PDM, flickr: https://www.flickr.com/photos/8398907@N02/4378853415
+dogs-1.jpg: "At the dog run" by GeorgeTan#2...INACTIVE NOW, PDM, flickr: https://www.flickr.com/photos/171425013@N02/48534209677
+dogs-2.jpg: "Wet dark brown dog running with frisbee" by D Coetzee, CC0, flickr: https://www.flickr.com/photos/29507259@N02/3618938248
+dogs-3.jpg: "smiling dog at a dog run" by GeorgeTan#2...INACTIVE NOW, PDM, flickr: https://www.flickr.com/photos/171425013@N02/48555550947
+dogs-4.jpg: "Black dog running" by D Coetzee, CC0, flickr: https://www.flickr.com/photos/29507259@N02/3618107481
+forest-1.jpg: "Forest Path" by Atraktor Studio, PDM, flickr: https://www.flickr.com/photos/48853757@N02/32437866813
+forest-2.jpg: "Forest Path. [3840x2160] - xSnowLeopardx" by Douglas Tofoli, PDM, flickr: https://www.flickr.com/photos/141973883@N05/27905518931
+forest-3.jpg: "forest path" by Honza z Krkonoš, PDM, flickr: https://www.flickr.com/photos/167171242@N02/46250952365
+forest-4.jpg: "Dog running on bridge" by Wallboat, CC0, flickr: https://www.flickr.com/photos/151415985@N06/36875180395
+lake-1.jpg: "Adirondack Mountains - Whiteface Mountain - Lake Placid - New York -" by Onasill - Bill Badzo - 149 Million Views - Thank Y, PDM, flickr: https://www.flickr.com/photos/7156765@N05/51461034500
+lake-2.jpg: "seven mountain lake 1" by amet_tea, CC0, flickr: https://www.flickr.com/photos/36485480@N02/14254215750
+lake-3.jpg: "Red Mountain Lake Wildflowers, Wallowa-Whitman National Forest" by Forest Service Pacific Northwest Region, PDM, flickr: https://www.flickr.com/photos/135886671@N08/26776502236
+lake-4.jpg: "High mountain lake _ET5A3747" by Intermountain Region US Forest Service, PDM, flickr: https://www.flickr.com/photos/107640324@N05/26858078310
+winter-1.jpg: "Snow Forest Path" by cclogg, CC0, flickr: https://www.flickr.com/photos/46244586@N02/31570435832
+winter-2.jpg: "forest path copy" by bwstock, CC0, flickr: https://www.flickr.com/photos/16962092@N03/38294279151
+winter-3.jpg: "High mountain lake _ET5A3747" by Intermountain Region US Forest Service, PDM, flickr: https://www.flickr.com/photos/107640324@N05/26858078310
+winter-4.jpg: "Robin in tree branches" by Pearl Photo, PDM, flickr: https://www.flickr.com/photos/7733380@N06/8726495310
