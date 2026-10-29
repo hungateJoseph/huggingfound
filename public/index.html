@@ -35,7 +35,7 @@
       <div class="hero-copy">
         <p class="eyebrow">Free, open source models</p>
         <h1 id="home-title">Find a free model.<br>Run it anywhere.</h1>
-        <p class="lead" id="home-lead">Coding help, photo editing, video production. Say what you need and pick a free model from Hugging Face. Small ones run on your laptop; for the big ones, rent a GPU by the hour right here.</p>
+        <p class="lead" id="home-lead">Coding help, photo editing, video production. Say what you need and pick a free model from Hugging Face. Small ones run on your laptop. For the big ones, rent a GPU by the hour right here.</p>
         <form class="trait-search big" id="trait-form">
           <input type="search" id="trait" placeholder="coding help, photo editing, video production" autofocus>
           <button class="primary" type="submit" id="trait-go">Search</button>
@@ -46,6 +46,7 @@
           <button class="chip" data-example="photo editing">photo editing</button>
           <button class="chip" data-example="math and analysis">math and analysis</button>
         </p>
+        <p class="browse-all-row"><button class="chip" id="browse-all">Browse all models</button></p>
         <p class="muted small" id="home-hint"></p>
       </div>
       <div class="demo" id="demo" aria-hidden="true">
@@ -72,161 +73,27 @@
     </div>
   </section>
 
+  <section id="why" class="why-use" aria-labelledby="why-title">
+    <div class="wrap why-grid">
+      <div class="why-text">
+        <p class="eyebrow">Why HuggingFound</p>
+        <h2 id="why-title">The models are free. The only bill is the machine.</h2>
+        <p class="lead">A paid assistant is <a href="https://www.bostonglobe.com/2026/04/29/business/chatgpt-price/" target="_blank" rel="noopener">$20 a month and rising</a>, and its maker still loses money on every answer. Here the models cost nothing. Small ones run on your laptop, and a GPU for the big ones is about $0.20 an hour, stopped the moment you are done.</p>
+        <ul class="why-points">
+          <li>No subscription and no tokens to buy</li>
+          <li>A GPU from $0.20 an hour, under a cap you set</li>
+          <li>Hundreds of thousands of models, yours to keep</li>
+        </ul>
+      </div>
+      <div class="dev">
+        <p class="eyebrow">About the developer</p>
+        <p>HuggingFound is designed, written and run by Joseph Hungate, a software engineer in Seattle. Before this: three and a half years at Amazon Web Services on S3, and four as a Cyber Officer in the U.S. Army.</p>
+        <a href="/about.html">More about the developer</a>
+      </div>
+    </div>
+  </section>
+
   <main class="wrap">
-    <section id="start" class="start" aria-labelledby="start-title">
-      <div class="row-head">
-        <div><h2 id="start-title">Start with one of these</h2><span class="muted small">Picked by hand. Each one runs on a laptop.</span></div>
-        <span class="rail-nav"><button class="ghost" id="picks-back" aria-label="Scroll back">&#8592;</button><button class="ghost" id="picks-forward" aria-label="Scroll forward">&#8594;</button></span>
-      </div>
-      <div class="rail" id="home-picks"></div>
-    </section>
-
-    <section id="cost" class="cost" aria-labelledby="cost-title">
-      <p class="eyebrow">Why open models</p>
-      <h2 id="cost-title">AI tokens won't be cheap forever. Explore open-source models today</h2>
-      <p class="lead">Every answer from a paid assistant costs its maker more than you pay for it. Investors cover the gap for now.</p>
-      <div class="cost-grid">
-        <article class="cost-card">
-          <p class="cost-figure">$115 billion</p>
-          <h3>OpenAI's expected cash burn through 2029</h3>
-          <a href="https://finance.yahoo.com/news/openai-expects-business-burn-115-022035561.html" target="_blank" rel="noopener">Reuters, Sep 2025</a>
-        </article>
-        <article class="cost-card">
-          <p class="cost-figure">$8.7 billion</p>
-          <h3>Spent by OpenAI on inference in nine months, against $4.3 billion of revenue</h3>
-          <a href="https://www.theregister.com/2025/11/12/openai_spending_report/" target="_blank" rel="noopener">The Register, Nov 2025</a>
-        </article>
-        <article class="cost-card">
-          <p class="cost-figure">$14 billion</p>
-          <h3>OpenAI's projected loss for 2026</h3>
-          <a href="https://www.rdworldonline.com/facing-14b-losses-in-2026-openai-is-now-seeking-100b-in-funding-but-can-it-ever-turn-a-profit/" target="_blank" rel="noopener">R&amp;D World, Jan 2026</a>
-        </article>
-        <article class="cost-card">
-          <p class="cost-figure">$9 billion</p>
-          <h3>Anthropic's compute bill for the first half of 2026</h3>
-          <a href="https://finance.yahoo.com/technology/ai/articles/anthropic-prospectus-shows-revenue-growing-224511416.html" target="_blank" rel="noopener">Yahoo Finance, Oct 2026</a>
-        </article>
-      </div>
-      <p class="cost-note"><b>Someone pays that back, and it will be the user.</b> One chatbot user in twenty pays today, and $20 a month is "not a sustainable price" (<a href="https://www.bostonglobe.com/2026/04/29/business/chatgpt-price/" target="_blank" rel="noopener">The Boston Globe, April 2026</a>). Open models cost nothing; the only bill is for the computer or the rented GPU they run on, and you set the cap.</p>
-    </section>
-
-    <section id="flow" class="flow" aria-labelledby="flow-title">
-      <p class="eyebrow">How it fits together</p>
-      <h2 id="flow-title">A day's work, on open models</h2>
-      <p class="lead">Each model hands its result to the next. Nothing is paid for the models.</p>
-      <svg class="flow-art" viewBox="0 0 1000 320" role="img" aria-label="Hugging Face feeds a notes model, which hands its notes to a coding model with work assigned, which hands its result to a video model">
-        <path class="wire" id="w1" d="M132 160 C 202 160, 248 100, 318 100"/>
-        <path class="wire" id="w2" d="M402 100 C 472 100, 528 220, 598 220"/>
-        <path class="wire" id="w3" d="M682 220 C 752 220, 798 160, 868 160"/>
-        <path class="wire tie" d="M640 54 V 178"/>
-        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="0s" repeatCount="indefinite"><mpath href="#w1"/></animateMotion></circle>
-        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="0.8s" repeatCount="indefinite"><mpath href="#w2"/></animateMotion></circle>
-        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="1.6s" repeatCount="indefinite"><mpath href="#w3"/></animateMotion></circle>
-        <g class="node" transform="translate(90 160)">
-          <rect x="-42" y="-42" width="84" height="84" rx="18"/>
-          <circle class="port" cx="42" cy="0" r="4"/>
-          <g class="icon dots"><circle cx="-14" cy="-14" r="4"/><circle cx="0" cy="-14" r="4"/><circle cx="14" cy="-14" r="4"/><circle cx="-14" cy="0" r="4"/><circle cx="0" cy="0" r="4"/><circle cx="14" cy="0" r="4"/><circle cx="-14" cy="14" r="4"/><circle cx="0" cy="14" r="4"/><circle cx="14" cy="14" r="4"/></g>
-          <text class="label" y="66" text-anchor="middle">Hugging Face</text>
-          <text class="label sub" y="86" text-anchor="middle">a million open models</text>
-        </g>
-        <g class="node" transform="translate(360 100)">
-          <rect x="-42" y="-42" width="84" height="84" rx="18"/>
-          <circle class="port" cx="-42" cy="0" r="4"/><circle class="port" cx="42" cy="0" r="4"/>
-          <g class="icon"><rect x="-17" y="-23" width="34" height="46" rx="4"/><path d="M-9 -9 H9 M-9 1 H9 M-9 11 H3"/></g>
-          <text class="label" y="66" text-anchor="middle">Notes model</text>
-          <text class="label sub" y="86" text-anchor="middle">the meeting, as notes</text>
-        </g>
-        <g class="node" transform="translate(640 220)">
-          <rect x="-42" y="-42" width="84" height="84" rx="18"/>
-          <circle class="port" cx="-42" cy="0" r="4"/><circle class="port" cx="42" cy="0" r="4"/>
-          <text class="code" y="9" text-anchor="middle">&lt;/&gt;</text>
-          <text class="label" y="66" text-anchor="middle">Coding model</text>
-          <text class="label sub" y="86" text-anchor="middle">builds what the notes ask for</text>
-        </g>
-        <g class="pill" transform="translate(640 40)">
-          <rect x="-132" y="-14" width="264" height="28" rx="14"/>
-          <text y="4.5" text-anchor="middle">Assigned: the export script, with tests</text>
-        </g>
-        <g class="node" transform="translate(910 160)">
-          <rect x="-42" y="-42" width="84" height="84" rx="18"/>
-          <circle class="port" cx="-42" cy="0" r="4"/>
-          <g class="icon"><rect x="-24" y="-18" width="48" height="36" rx="5"/><polygon class="play" points="-6,-10 11,0 -6,10"/></g>
-          <text class="label" y="66" text-anchor="middle">Video model</text>
-          <text class="label sub" y="86" text-anchor="middle">the launch clip</text>
-        </g>
-      </svg>
-      <ol class="flow-list">
-        <li><b>Hugging Face</b>, a million open models.</li>
-        <li><b>Notes model</b> turns the meeting into notes.</li>
-        <li><b>Coding model</b> builds what the notes ask for.</li>
-        <li><b>Video model</b> makes the launch clip.</li>
-      </ol>
-    </section>
-
-    <section id="runs" class="flow" aria-labelledby="runs-title">
-      <h2 id="runs-title">Where it runs</h2>
-      <p class="lead">Small models on your computer. Heavier ones on a GPU by the hour. A paid model you already have can check the work.</p>
-      <svg class="flow-art" viewBox="0 0 1000 320" role="img" aria-label="HuggingFound sets a model up on your computer or on a rented GPU; either way a paid model of yours can check the work">
-        <path class="wire" id="r1" d="M132 160 C 240 160, 300 80, 408 80"/>
-        <path class="wire" id="r2" d="M132 160 C 240 160, 300 240, 408 240"/>
-        <path class="wire faint" d="M492 80 C 600 80, 670 160, 778 160"/>
-        <path class="wire faint" d="M492 240 C 600 240, 670 160, 778 160"/>
-        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="0s" repeatCount="indefinite"><mpath href="#r1"/></animateMotion></circle>
-        <circle class="spark" r="4"><animateMotion dur="2.4s" begin="1.2s" repeatCount="indefinite"><mpath href="#r2"/></animateMotion></circle>
-        <g class="node" transform="translate(90 160)">
-          <rect x="-42" y="-42" width="84" height="84" rx="18"/>
-          <circle class="port" cx="42" cy="0" r="4"/>
-          <image href="icon.svg" x="-24" y="-24" width="48" height="48"/>
-          <text class="label" y="66" text-anchor="middle">HuggingFound</text>
-          <text class="label sub" y="86" text-anchor="middle">finds it, sets it up</text>
-        </g>
-        <g class="node" transform="translate(450 80)">
-          <rect x="-42" y="-42" width="84" height="84" rx="18"/>
-          <circle class="port" cx="-42" cy="0" r="4"/><circle class="port" cx="42" cy="0" r="4"/>
-          <g class="icon"><rect x="-21" y="-17" width="42" height="27" rx="3"/><path d="M-30 17 H30"/></g>
-          <text class="label" y="66" text-anchor="middle">Your computer</text>
-          <text class="label sub" y="86" text-anchor="middle">small models; nothing leaves it</text>
-        </g>
-        <g class="node" transform="translate(450 240)">
-          <rect x="-42" y="-42" width="84" height="84" rx="18"/>
-          <circle class="port" cx="-42" cy="0" r="4"/><circle class="port" cx="42" cy="0" r="4"/>
-          <g class="icon"><rect x="-18" y="-18" width="36" height="36" rx="4"/><rect x="-8" y="-8" width="16" height="16" rx="2"/><path d="M-10 -26 V-18 M0 -26 V-18 M10 -26 V-18 M-10 18 V26 M0 18 V26 M10 18 V26 M-26 -10 H-18 M-26 0 H-18 M-26 10 H-18 M18 -10 H26 M18 0 H26 M18 10 H26"/></g>
-          <text class="label" y="66" text-anchor="middle">A rented GPU</text>
-          <text class="label sub" y="86" text-anchor="middle">by the hour; stops itself</text>
-        </g>
-        <g class="node optional" transform="translate(820 160)">
-          <rect x="-42" y="-42" width="84" height="84" rx="18"/>
-          <circle class="port" cx="-42" cy="0" r="4"/>
-          <g class="icon"><path d="M0 -24 L22 -15 V2 C22 15, 12 24, 0 28 C-12 24, -22 15, -22 2 V-15 Z"/><path class="check" d="M-10 2 L-3 9 L11 -6"/></g>
-          <text class="label" y="66" text-anchor="middle">Your paid model, optional</text>
-          <text class="label sub" y="86" text-anchor="middle">checks the work; a free tier will do</text>
-        </g>
-      </svg>
-      <ol class="flow-list">
-        <li><b>HuggingFound</b> finds the model and sets it up.</li>
-        <li><b>Your computer</b> runs small models; nothing leaves it.</li>
-        <li><b>A rented GPU</b> runs heavier ones by the hour, and stops itself.</li>
-        <li><b>Your paid model, optional:</b> checks the work; a free tier will do.</li>
-      </ol>
-    </section>
-
-    <section id="why" class="why-use" aria-labelledby="why-title">
-      <div class="why-grid">
-        <article class="reason lead-reason">
-          <p class="eyebrow">Why HuggingFound</p>
-          <h2 id="why-title">Why use HuggingFound?</h2>
-          <h3>When the service everyone relies on goes down</h3>
-          <p>One morning the assistant stops answering, the status page says nothing, and the other big services are down or full. HuggingFound is not one service. It opens the whole of Hugging Face, and the model you pick runs on your own computer or on a GPU rented by the minute. Nobody can switch it off.</p>
-        </article>
-        <dl class="reasons">
-          <div class="reason"><dt><h3>Every kind of model in one place</h3></dt><dd>Chat, code, math, pictures, video with sound, speech to text.</dd></div>
-          <div class="reason"><dt><h3>Runs where you choose</h3></dt><dd>A laptop, or a rented card that stops itself and stays under your cap.</dd></div>
-          <div class="reason"><dt><h3>Know a model before you fetch it</h3></dt><dd>What people say about it, summed up in a line on every card.</dd></div>
-          <div class="reason"><dt><h3>Yours to keep</h3></dt><dd>Open weights do not expire. What you make stays on your computer.</dd></div>
-        </dl>
-      </div>
-    </section>
-
     <section id="notice" class="notice info" hidden></section>
 
     <section id="results" hidden>

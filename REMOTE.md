@@ -284,14 +284,17 @@ The machine takes two to four minutes to start. Meanwhile:
   13-second loop that pauses in a hidden tab; with reduced motion asked
   for it sits on its finished state. Under the band one line of category
   links (`#browse-invite`, inside the hero section). Then, in `main`: the
-  curated picks as a row of tiles (`#start`, `renderHomePicks()`, arrows
-  scroll the rail, a tile opens the model), the cost figures on one rule
-  with no boxes (`#cost`), the two drawings with a spark riding each wire
-  (SMIL `animateMotion`, hidden under reduced motion; the Hugging Face
-  node is a dot grid, no emoji), and "Why use HuggingFound?" as the
-  outage story beside four one-line reasons on rules (`#why`). In results
-  and browse modes the band shrinks to the search and the category line
-  and the rest of the home sections are hidden by `body[data-mode]`.
+  (2026-10-28, later) one dark section (`#why`, outside `main`): why,
+  with the cost said plainly ($20 a month and rising for a paid
+  assistant, nothing for the models, a GPU from about $0.20 an hour) and
+  three points, beside a short note on the developer with a link to
+  about.html. The picks rail, the cost figures, the two drawings and the
+  reasons grid are gone; the front page is dark to the bottom (`body`
+  outside results and browse). The band's category line shows only in
+  results and Browse; the front page has one "Browse all models" button
+  (`#browse-all`, which clicks `#nav-browse`). In results and browse
+  modes the band shrinks to the search and the category line and `#why`
+  is hidden by `body[data-mode]`.
   Palette: paper, a deep blue-black (`--dark`, the bar and the band run
   into each other, with a faint coral glow top right), and one coral
   (`--accent`) for primary buttons, links, live marks and sparks. The bar

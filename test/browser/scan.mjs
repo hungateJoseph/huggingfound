@@ -199,6 +199,12 @@ async function openSettings(p = page) {
 }
 const unfoldSettings = (p = page) => p.$$eval("#settings details", (ds) => ds.forEach((d) => (d.open = true)));
 
+// Browse: from the front page's one button, or from the band's Everything in results and Browse.
+async function toBrowse(p) {
+  if (await p.locator("#browse-all").isVisible()) await p.click("#browse-all");
+  else await p.click("#nav-browse");
+}
+
 async function step(name, fn) {
   try {
     await fn();
@@ -258,47 +264,27 @@ await step("the page opens on a single search box", async () => {
   await page.waitForFunction(() => document.querySelector("#demo").classList.contains("done"), null, { timeout: 20000 });
   assert.deepEqual(await page.$$eval("#demo .demo-tiles img", (els) => els.map((e) => [e.getAttribute("src"), e.complete && e.naturalWidth])), [1, 2, 3, 4].map((n) => [`demo/birds-${n}.jpg`, 256]));
   assert.doesNotMatch(await page.locator("#demo").innerText(), /0\.44/, "the showcase price is the cheap card's");
-  // Under the band: the categories on one line, then the curated picks as tiles that open the model.
+  // Under the band: why, with the cost said plainly, and the developer; nothing white on the front page.
+  assert.equal(await page.locator("#why-title").innerText(), "The models are free. The only bill is the machine.");
+  assert.deepEqual(await page.$$eval("#why .why-points li", (els) => els.map((e) => e.textContent)), ["No subscription and no tokens to buy", "A GPU from $0.20 an hour, under a cap you set", "Hundreds of thousands of models, yours to keep"]);
+  assert.match(await page.locator("#why .dev").innerText(), /Joseph Hungate[\s\S]*More about the developer/);
+  assert.equal(await page.$eval("#why .dev a", (e) => e.getAttribute("href")), "/about.html");
+  assert.equal(await page.$eval("#why .lead a", (e) => e.host), "www.bostonglobe.com", "the price line names its source");
+  for (const gone of ["#start", "#cost", "#flow", "#runs", ".reasons", ".cost-figure"]) assert.equal(await page.locator(gone).count(), 0, `${gone} is gone`);
+  assert.equal(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "the front page is dark to the bottom");
+  assert.equal(await page.$eval("#why", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)");
+  // The category line belongs to results and Browse; the front page has one Browse all models button.
+  assert.equal(await page.locator("#browse-invite").isVisible(), false);
+  assert.equal(await page.locator("#browse-all").isVisible(), true);
   assert.deepEqual(await page.$$eval("#home-categories .chip", (els) => els.map((e) => e.textContent)), ["Easy to set up", "Chat and writing", "Coding", "Math and reasoning", "Understands images", "Makes images", "Speech to text"]);
-  assert.equal(await page.locator("#start-title").innerText(), "Start with one of these");
-  assert.deepEqual(await page.$$eval("#home-picks .tile .tile-kind", (els) => els.slice(0, 5).map((e) => e.textContent)), ["Coding", "Makes images", "Makes images", "Makes images", "Chat and writing"], "code and pictures first");
-  assert.equal(await page.$$eval("#home-picks .tile", (els) => els.length), 9);
-  await page.click("#home-picks .tile:nth-child(1)");
-  await page.waitForFunction(() => /Qwen2\.5-Coder-7B-Instruct-GGUF/.test(document.querySelector("#modal-title").textContent));
-  await page.keyboard.press("Escape");
-  await page.waitForSelector("#modal", { state: "hidden" });
-  // What paid assistants cost their makers, each figure with its article.
-  assert.equal(await page.locator("#cost-title").innerText(), "AI tokens won't be cheap forever. Explore open-source models today");
-  assert.deepEqual(await page.$$eval("#cost .cost-figure", (els) => els.map((e) => e.textContent)), ["$115 billion", "$8.7 billion", "$14 billion", "$9 billion"]);
-  assert.deepEqual(await page.$$eval("#cost .cost-card a", (els) => els.map((e) => [e.target, e.rel, /^https:\/\//.test(e.href)])), Array(4).fill(["_blank", "noopener", true]), "every figure links to its article");
-  assert.match(await page.locator("#cost .cost-note").innerText(), /it will be the user[\s\S]*The Boston Globe, April 2026[\s\S]*the only bill is for the computer or the rented GPU/);
-  // Two drawings: a day's work handed from model to model, and where it runs; a spark runs each wire.
-  assert.equal(await page.locator("#flow").isVisible(), true);
-  assert.equal(await page.$eval("#flow", (e) => getComputedStyle(e).backgroundImage), "none", "no dotted field");
-  assert.equal(await page.$$eval("#flow .spark animateMotion", (els) => els.length), 3);
-  assert.equal(await page.$$eval("#flow .emoji", (els) => els.length), 0, "no emoji in the drawing");
-  assert.equal(await page.locator("#flow-title").innerText(), "A day's work, on open models");
-  assert.deepEqual(await page.$$eval("#flow .node .label:not(.sub)", (els) => els.map((e) => e.textContent)), ["Hugging Face", "Notes model", "Coding model", "Video model"]);
-  assert.equal(await page.$eval("#flow .pill text", (e) => e.textContent), "Assigned: the export script, with tests");
-  assert.equal(await page.locator("#runs-title").innerText(), "Where it runs");
-  assert.deepEqual(await page.$$eval("#runs .node .label:not(.sub)", (els) => els.map((e) => e.textContent)), ["HuggingFound", "Your computer", "A rented GPU", "Your paid model, optional"]);
-  assert.equal(await page.locator("#flow .flow-art").isVisible(), true, "the drawing at desktop width");
-  assert.equal(await page.locator("#why").isVisible(), true);
-  assert.equal(await page.locator("#why-title").innerText(), "Why use HuggingFound?");
-  assert.deepEqual(await page.$$eval("#why .reason h3", (els) => els.map((e) => e.textContent)), ["When the service everyone relies on goes down", "Every kind of model in one place", "Runs where you choose", "Know a model before you fetch it", "Yours to keep"]);
-  assert.match(await page.locator("#why .lead-reason").innerText(), /the assistant stops answering, the status page says nothing[\s\S]*runs on your own computer or on a GPU rented by the minute/);
-  // Little to read: no reason runs past two sentences, and no section wraps itself in a card.
-  assert.ok((await page.$$eval("#why .reasons dd", (els) => els.map((e) => e.textContent.split(/\.\s/).length))).every((n) => n <= 2));
-  assert.equal(await page.$eval("#cost", (e) => getComputedStyle(e).borderTopWidth), "0px");
   await page.click("#examples [data-example='code']");
   await page.waitForSelector("#found .model");
   assert.equal(await page.locator("#results").isVisible(), true);
-  assert.equal(await page.locator("#why").isVisible(), false, "the reasons step aside for the results");
-  assert.equal(await page.locator("#flow").isVisible(), false, "and so do the flowcharts");
-  assert.equal(await page.locator("#cost").isVisible(), false, "and the cost figures");
-  assert.equal(await page.locator("#start").isVisible(), false, "and the picks");
+  assert.equal(await page.locator("#why").isVisible(), false, "the why section steps aside for the results");
   assert.equal(await page.locator("#demo").isVisible(), false, "and the demo; the band keeps only the search and the categories");
   assert.equal(await page.locator("#home-categories").isVisible(), true);
+  assert.equal(await page.locator("#browse-all").isVisible(), false);
+  assert.notEqual(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "results sit on the light page");
   assert.match(await page.locator("#found-title").innerText(), /"code"/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");
@@ -321,7 +307,7 @@ await step("the page opens on a single search box", async () => {
   await page.waitForFunction(() => document.querySelector("#results").hidden);
 });
 
-await page.click("#nav-browse");
+await toBrowse(page);
 await page.waitForSelector("#picks .model");
 
 await step("browse shows the easy list with the curated picks", async () => {
@@ -481,7 +467,7 @@ await step("opening a model shows its plan with the install, start and pull step
 await step("opened for the first time, a model's window shows one screen at a time: how big it is and whether it fits, then the steps, then the try box", async () => {
   const fresh = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await fresh.goto(base);
-  await fresh.click("#nav-browse");
+  await toBrowse(fresh);
   await fresh.click("#home-categories [data-cat=easy]");
   await fresh.locator("#models .model", { hasText: "Llama-3.2-3B-Instruct-GGUF" }).locator(".name").click();
   await fresh.waitForSelector("#modal-body .fit-card");
@@ -685,7 +671,7 @@ await step("a reload keeps the scan and reports when it was made", async () => {
   await page.reload();
   await page.waitForSelector("#trait");
   assert.equal(await page.locator("#home-hint").isVisible(), false, "nothing to say once there is a scan");
-  await page.click("#nav-browse");
+  await toBrowse(page);
   await page.waitForSelector("#scan-title:not([hidden])");
   assert.match(await page.locator("#scan-status").innerText(), /Last scan (just now|\d+ minutes ago)/);
 });
@@ -730,7 +716,7 @@ await step("a conversation survives re-renders, an outside click and closing the
     for (let i = 0; i < 12; i++) old.push({ role: "user", content: `earlier question ${i}` }, { role: "assistant", content: `earlier answer ${i}\nwith a second line` });
     localStorage.setItem("chat:qwen-test", JSON.stringify(old));
   });
-  await page.click("#nav-browse");
+  await toBrowse(page);
   await page.click("#home-categories [data-cat=chat]");
   // What each reads when files go with a message: every chat model reads
   // code, one trained on code says so, one trained on decompilation reads binaries too.
@@ -932,7 +918,7 @@ await step("a conversation survives re-renders, an outside click and closing the
 });
 
 await step("files go with a chat message: chosen as chips, sent under their names in fenced blocks with the window grown to hold them, and kept folded under the bubble", async () => {
-  await page.click("#nav-browse");
+  await toBrowse(page);
   await page.click("#home-categories [data-cat=chat]");
   await page.locator("#models .model", { hasText: "Qwen2.5-Coder-7B-Instruct-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#chat-send");
@@ -1013,7 +999,7 @@ await step("files go with a chat message: chosen as chips, sent under their name
 });
 
 await step("cards carry what users say and one tag for what the model makes; the author's text and the runner stay in the window", async () => {
-  await page.click("#nav-browse");
+  await toBrowse(page);
   await page.click("#home-categories [data-cat=chat]");
   assert.equal(await page.locator("#models .model .summary").count(), 0, "no Hub blurb on cards");
   assert.equal(await page.locator("#models .model .said .line.author").count(), 0, "no author lines on cards");
@@ -1038,7 +1024,7 @@ await step("cards carry what users say and one tag for what the model makes; the
 });
 
 await step("every chat model asks where to run it; picking a GPU without a key asks for the key", async () => {
-  await page.click("#nav-browse");
+  await toBrowse(page);
   await page.click("#home-categories [data-cat=chat]");
   await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#steps .step");
@@ -1333,7 +1319,7 @@ await step("a Vast.ai key adds its cards to the same list, each marked Vast.ai, 
 });
 
 await step("every card says what the model makes, and a search for pictures marks the text models that cannot", async () => {
-  await page.click("#nav-browse");
+  await toBrowse(page);
   await page.click("#home-categories [data-cat=chat]");
   assert.match(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.makes").innerText(), /Text only, no pictures/);
   assert.equal(await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).locator(".pill.reads").innerText(), "Reads code");
@@ -1358,7 +1344,7 @@ await step("every card says what the model makes, and a search for pictures mark
 });
 
 await step("a model can be hidden from search and Browse, listed in Settings, and brought back", async () => {
-  await page.click("#nav-browse");
+  await toBrowse(page);
   await page.click("#home-categories [data-cat=chat]");
   await page.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await page.waitForSelector("#steps .step");
@@ -1391,7 +1377,7 @@ await step("a model can be hidden from search and Browse, listed in Settings, an
   await page.waitForFunction(() => document.querySelectorAll("#hidden-list li").length === 0);
   assert.match(await page.locator("#hidden-note").innerText(), /Nothing hidden/);
   await page.click("#close-settings");
-  await page.click("#nav-browse");
+  await toBrowse(page);
   await page.click("#home-categories [data-cat=chat]");
   await page.waitForSelector('#models .model[data-id="TheDrummer/Cydonia-24B-v2-GGUF"]');
   assert.doesNotMatch(fs.readFileSync(envFile, "utf8"), /HIDDEN_MODELS=\S/);
@@ -1451,7 +1437,7 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   assert.ok(asVisitor.models.every((m) => !/Wan|LTX|video/i.test(`${m.name} ${m.pipeline ?? ""}`) && !m.adult), "a search for clips finds no video model");
   assert.equal((await visitor.request.get(`${hostedBase}/api/model?id=Wan-AI/Wan2.2-TI2V-5B-Diffusers`)).status(), 403);
   assert.equal((await visitor.request.get(`${hostedBase}/api/loras?id=Wan-AI/Wan2.2-TI2V-5B-Diffusers`)).status(), 403);
-  await visitor.click("#nav-browse");
+  await toBrowse(visitor);
   await visitor.click("#home-categories [data-cat=chat]");
   assert.equal(await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).count(), 0, "the adult chat model is not in Browse either");
   assert.equal(await visitor.locator("#models .pill.adult").count(), 0);
@@ -1541,7 +1527,7 @@ await step("hosted: signed in, Settings hold only the account's keys, and the pr
 });
 
 await step("hosted: the model window rents the GPU, the download runs on it, and the chat goes straight from the browser to the machine", async () => {
-  await visitor.click("#nav-browse");
+  await toBrowse(visitor);
   await visitor.click("#home-categories [data-cat=chat]");
   await visitor.locator("#models .model", { hasText: "Cydonia-24B-v2-GGUF" }).first().locator(".name").click();
   await visitor.waitForSelector(".where");
@@ -1627,7 +1613,7 @@ await step("hosted: the model window rents the GPU, the download runs on it, and
 
 await step("hosted: an image model is downloaded onto the rented GPU and pictures are made there, straight from the browser", async () => {
   await visitor.keyboard.press("Escape");
-  await visitor.click("#nav-browse");
+  await toBrowse(visitor);
   await visitor.click("#home-categories [data-cat=images]");
   await visitor.locator("#picks .model", { hasText: "stable-diffusion-v1-5-GGUF" }).locator(".name").click();
   await visitor.waitForSelector(".where");
@@ -1880,7 +1866,7 @@ await step("hosted: clips are asked for by length and quality with a time guesse
   const WAN = "Wan-AI/Wan2.2-TI2V-5B-Diffusers";
   rentedAgent.state.files.push({ repo: WAN, file: "model_index.json", gb: 10.2, engine: "diffusers" });
   await visitor.request.get(`${hostedBase}/api/rent`);
-  await visitor.click("#nav-browse");
+  await toBrowse(visitor);
   await visitor.fill("#trait", "video generation");
   await visitor.click("#trait-go");
   await visitor.waitForSelector("#found .model");

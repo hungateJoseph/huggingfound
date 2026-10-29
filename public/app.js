@@ -278,6 +278,7 @@ $("#nav-browse").addEventListener("click", () => {
   setMode("browse");
   render();
 });
+$("#browse-all").addEventListener("click", () => $("#nav-browse").click());
 
 // The categories as chips under the search box, for someone who does not
 // know what to type: each opens Browse on that tab.
@@ -303,41 +304,6 @@ function renderHomeHint() {
   if (!v?.count && !state.hosted) parts.push("Gather what people say, in Browse, to rank by reviews.");
   $("#home-hint").textContent = parts.join(" ");
   $("#home-hint").hidden = !parts.length;
-  renderHomePicks();
-}
-
-// The curated picks as a row of tiles on the front page: real models to
-// open, in place of words about them. Hidden ones stay out.
-function renderHomePicks() {
-  const rail = $("#home-picks");
-  if (!rail) return;
-  const lead = (p) => (p.categories.includes("coding") ? 0 : p.categories.includes("images") ? 1 : 2);
-  const picks = (state.picks ?? []).filter((p) => !state.hidden.has(p.id)).sort((a, b) => lead(a) - lead(b));
-  const key = picks.map((p) => p.id).join("|");
-  if (rail.dataset.key === key) return;
-  rail.dataset.key = key;
-  const kindOf = (p) => state.categories.find((c) => c.id !== "easy" && p.categories.includes(c.id))?.name ?? makesOf(p).text;
-  rail.innerHTML = picks.map((p) => `<button class="tile" data-id="${esc(p.id)}" title="${esc(p.id)}">
-    <span class="tile-kind">${esc(kindOf(p))}</span>
-    <span class="tile-name">${esc(p.id.split("/").pop())}</span>
-    <span class="tile-why">${esc(p.why)}</span>
-    <span class="tile-meta">${esc(p.gb < 1 ? `${Math.round(p.gb * 1000)} MB` : `${p.gb.toFixed(1)} GB`)}${p.fast ? " · four steps" : ""}</span>
-  </button>`).join("");
-  for (const tile of rail.querySelectorAll(".tile")) tile.addEventListener("click", () => openModel(tile.dataset.id));
-  $("#start").hidden = picks.length === 0;
-  if (!rail.dataset.wired) {
-    rail.dataset.wired = "1";
-    const by = (dir) => rail.scrollBy({ left: dir * rail.clientWidth * 0.8, behavior: "smooth" });
-    $("#picks-back").addEventListener("click", () => by(-1));
-    $("#picks-forward").addEventListener("click", () => by(1));
-    const ends = () => {
-      $("#picks-back").disabled = rail.scrollLeft <= 2;
-      $("#picks-forward").disabled = rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 2;
-    };
-    rail.addEventListener("scroll", ends, { passive: true });
-    window.addEventListener("resize", ends);
-    queueMicrotask(ends);
-  }
 }
 
 // The picture in the hero: three searches played through in turn, for code,
