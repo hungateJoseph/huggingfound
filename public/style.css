@@ -52,7 +52,7 @@ body {
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 
 /* The bar: the name, and sign-in. Dark, so it runs into the band below it. */
-.top { background: var(--dark); border-bottom: 1px solid var(--dark-line); position: sticky; top: 0; z-index: 5; }
+.top { background: var(--dark); position: sticky; top: 0; z-index: 5; }
 .top .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; gap: 12px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font: 700 18px/1 var(--display); letter-spacing: -0.01em; color: var(--dark-ink); text-decoration: none; }
 .brand img { border-radius: 7px; }
@@ -303,7 +303,7 @@ details#web-found summary { cursor: pointer; margin-top: 8px; }
 
 /* The hero: a dark band with the search on the left and the product,
    played through once, on the right. */
-.hero { background: var(--dark) radial-gradient(ellipse 60% 70% at 85% 0%, rgba(255, 91, 54, 0.16), transparent 70%); color: var(--dark-ink); padding: 40px 0 20px; border-bottom: 1px solid var(--dark-line); display: flex; flex-direction: column; justify-content: center; min-height: calc(100vh - 57px); }
+.hero { background: var(--dark) radial-gradient(ellipse 60% 70% at 85% 0%, rgba(255, 91, 54, 0.16), transparent 70%); color: var(--dark-ink); padding: 40px 0 20px; border-bottom: 1px solid var(--dark-line); display: flex; flex-direction: column; justify-content: center; min-height: calc(100vh - 56px); }
 .hero > .wrap { width: 100%; }
 .hero-grid { flex: 1 1 auto; }
 /* The foot of the band: the cost in one line, and the two links; the page's own footer stays off the front page. */
@@ -909,3 +909,22 @@ details.way .get-app { margin-top: 10px; }
 /* Windows close with a plain x at the top right. */
 .modal-head button[aria-label="Close"], .modal-buttons button[aria-label="Close"] { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 26px; line-height: 1; display: inline-grid; place-items: center; flex: none; }
 .modal-head button[aria-label="Close"]:hover, .modal-buttons button[aria-label="Close"]:hover { background: var(--chip); color: var(--ink); border: 0; }
+
+/* Results and Browse sit on the same dark page as the band: inside main the
+   colours are redrawn for it, while the windows, which stand outside main,
+   stay light. */
+body.app { background: var(--dark); }
+body.app main, body.app .site-foot {
+  --bg: var(--dark); --surface: var(--dark-2); --ink: var(--dark-ink); --muted: var(--dark-muted); --line: var(--dark-line); --chip: #232c34;
+  --accent-ink: #ff8a6b; --accent-soft: rgba(255, 91, 54, 0.16);
+  --ok: #3dd68c; --ok-soft: rgba(61, 214, 140, 0.14); --warn: #ffb454; --warn-soft: rgba(255, 180, 84, 0.14); --bad: #ff7a7a; --bad-soft: rgba(255, 122, 122, 0.14);
+  --info: var(--dark-ink); --info-soft: #232c34;
+  color: var(--dark-ink);
+}
+body.app main button:hover, body.app main .model:hover { border-color: #4a5a64; }
+body.app main .model:hover { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); }
+body.app main .pill.adult { background: var(--dark-ink); color: var(--dark); }
+body.app main .tab.on, body.app main .chip.strong { background: var(--dark-ink); color: var(--dark); border-color: var(--dark-ink); }
+body.app main .get-app code, body.app main .spec div, body.app main .transcript { background: var(--dark); }
+body.app main input::placeholder { color: #6f7b84; }
+body[data-mode="results"] .hero, body[data-mode="browse"] .hero { border-bottom: 1px solid var(--dark-line); }

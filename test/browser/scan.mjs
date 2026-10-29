@@ -242,7 +242,7 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator("#home-title").innerText(), "Find a free model.\nRun it anywhere.");
   assert.match(await page.$eval("#home-title", (e) => getComputedStyle(e).fontFamily), /Bricolage Grotesque/);
   assert.equal(await page.$eval("#home-title", (e) => document.fonts.check(`600 40px "${getComputedStyle(e).fontFamily.split(",")[0].replace(/"/g, "")}"`)), true, "the heading face is loaded from this site");
-  assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["code", "video generation", "photo editing", "math and analysis"]);
+  assert.deepEqual(await page.$$eval("#examples .chip", (els) => els.map((e) => e.textContent)), ["code", "video generation", "photo editing", "data analysis"]);
   assert.equal(await page.locator("#demo").isVisible(), true);
   await page.waitForFunction(() => document.querySelector("#demo").classList.contains("checked"), null, { timeout: 15000 });
   assert.equal(await page.locator("#demo .demo-typed").innerText(), "fix the failing tests in my python project");
@@ -283,7 +283,8 @@ await step("the page opens on a single search box", async () => {
   assert.equal(await page.locator(".site-foot").isVisible(), true);
   assert.equal(await page.locator("#demo").isVisible(), false, "and the demo; the band keeps only the search and the categories");
   assert.equal(await page.locator("#home-categories").isVisible(), true);
-  assert.notEqual(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "results sit on the light page");
+  assert.equal(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "results sit on the same dark page, no jump to white");
+  assert.equal(await page.$eval("#found .model", (e) => getComputedStyle(e).backgroundColor), "rgb(24, 35, 41)", "cards drawn for the dark page");
   assert.match(await page.locator("#found-title").innerText(), /"code"/i);
   const names = await page.$$eval("#found .model .name", (els) => els.map((e) => e.textContent));
   assert.ok(names.includes("Qwen2.5-Coder-7B-Instruct-GGUF"), "the curated coding pick answers before any scan");
