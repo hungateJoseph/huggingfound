@@ -60,7 +60,7 @@ test("the about page is served, links the developer's GitHub, and names this sit
   assert.match(page, /github\.com\/hungateJoseph"/);
   assert.match(page, /linkedin\.com\//);
   assert.doesNotMatch(page, /mailto:|REPLACE-WITH|huggingfound\.git|oopsiblinked/, "one sentence and two links, nothing else");
-  assert.match(page, /Amazon Web Services[\s\S]*Cyber Officer[\s\S]*AI models can be used most efficiently/);
+  assert.match(page, /Amazon Web Services[\s\S]*Cyber Officer[\s\S]*AI models can be put to work most efficiently/);
   // The front page and the privacy page both point at it.
   for (const p of ["/", "/privacy.html"]) assert.match(await (await get(p)).text(), /href="\/about\.html"/, p);
 });
