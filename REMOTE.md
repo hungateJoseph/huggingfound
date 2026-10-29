@@ -284,13 +284,14 @@ The machine takes two to four minutes to start. Meanwhile:
   13-second loop that pauses in a hidden tab; with reduced motion asked
   for it sits on its finished state. Under the band one line of category
   links (`#browse-invite`, inside the hero section). Then, in `main`: the
-  (2026-10-28, later) one dark section (`#why`, outside `main`): why,
-  with the cost said plainly ($20 a month and rising for a paid
-  assistant, nothing for the models, a GPU from about $0.20 an hour) and
-  three points, beside a short note on the developer with a link to
-  about.html. The picks rail, the cost figures, the two drawings and the
-  reasons grid are gone; the front page is dark to the bottom (`body`
-  outside results and browse). The band's category line shows only in
+  (2026-10-28, later) nothing: the band fills the screen (`min-height:
+  calc(100vh - 56px)`, the page's footer hidden on the front page) and
+  ends in one line at its foot (`.hero-foot`): the cost in a sentence
+  (free models, a GPU from $0.20 an hour) and the links About the
+  developer and, on the site, Privacy. The picks rail, the cost figures,
+  the two drawings and the reasons grid are gone; the front page is dark
+  to the bottom (`body` outside results and browse) and fits a laptop
+  screen without scrolling, which the scan checks. The band's category line shows only in
   results and Browse; the front page has one "Browse all models" button
   (`#browse-all`, which clicks `#nav-browse`). In results and browse
   modes the band shrinks to the search and the category line and `#why`

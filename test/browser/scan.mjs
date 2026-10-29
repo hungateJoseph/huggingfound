@@ -264,15 +264,14 @@ await step("the page opens on a single search box", async () => {
   await page.waitForFunction(() => document.querySelector("#demo").classList.contains("done"), null, { timeout: 20000 });
   assert.deepEqual(await page.$$eval("#demo .demo-tiles img", (els) => els.map((e) => [e.getAttribute("src"), e.complete && e.naturalWidth])), [1, 2, 3, 4].map((n) => [`demo/birds-${n}.jpg`, 256]));
   assert.doesNotMatch(await page.locator("#demo").innerText(), /0\.44/, "the showcase price is the cheap card's");
-  // Under the band: why, with the cost said plainly, and the developer; nothing white on the front page.
-  assert.equal(await page.locator("#why-title").innerText(), "The models are free. The only bill is the machine.");
-  assert.deepEqual(await page.$$eval("#why .why-points li", (els) => els.map((e) => e.textContent)), ["No subscription and no tokens to buy", "A GPU from $0.20 an hour, under a cap you set", "Hundreds of thousands of models, yours to keep"]);
-  assert.match(await page.locator("#why .dev").innerText(), /Joseph Hungate[\s\S]*More about the developer/);
-  assert.equal(await page.$eval("#why .dev a", (e) => e.getAttribute("href")), "/about.html");
-  assert.equal(await page.$eval("#why .lead a", (e) => e.host), "www.bostonglobe.com", "the price line names its source");
-  for (const gone of ["#start", "#cost", "#flow", "#runs", ".reasons", ".cost-figure"]) assert.equal(await page.locator(gone).count(), 0, `${gone} is gone`);
-  assert.equal(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "the front page is dark to the bottom");
-  assert.equal(await page.$eval("#why", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)");
+  // The front page is one screen: the band fills it, dark to the bottom, with the cost in a line at its foot and a link to the developer.
+  assert.equal(await page.locator("#why").count(), 0);
+  for (const gone of ["#start", "#cost", "#flow", "#runs", ".reasons", ".cost-figure", ".dev"]) assert.equal(await page.locator(gone).count(), 0, `${gone} is gone`);
+  assert.equal(await page.locator(".hero-cost").innerText(), "The models are free. The only bill is the machine: your laptop, or a GPU from $0.20 an hour.");
+  assert.deepEqual(await page.$$eval(".hero-links a", (els) => els.filter((e) => getComputedStyle(e).display !== "none").map((e) => [e.textContent, e.getAttribute("href")])), [["About the developer", "/about.html"]]);
+  assert.equal(await page.locator(".site-foot").isVisible(), false, "no second footer under the band");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight), true, "nothing to scroll to on a laptop screen");
+  assert.equal(await page.$eval("body", (e) => getComputedStyle(e).backgroundColor), "rgb(16, 25, 31)", "dark to the bottom");
   // The category line belongs to results and Browse; the front page has one Browse all models button.
   assert.equal(await page.locator("#browse-invite").isVisible(), false);
   assert.equal(await page.locator("#browse-all").isVisible(), true);
@@ -280,7 +279,8 @@ await step("the page opens on a single search box", async () => {
   await page.click("#examples [data-example='code']");
   await page.waitForSelector("#found .model");
   assert.equal(await page.locator("#results").isVisible(), true);
-  assert.equal(await page.locator("#why").isVisible(), false, "the why section steps aside for the results");
+  assert.equal(await page.locator(".hero-foot").isVisible(), false, "the band's foot steps aside for the results");
+  assert.equal(await page.locator(".site-foot").isVisible(), true);
   assert.equal(await page.locator("#demo").isVisible(), false, "and the demo; the band keeps only the search and the categories");
   assert.equal(await page.locator("#home-categories").isVisible(), true);
   assert.equal(await page.locator("#browse-all").isVisible(), false);
@@ -1424,7 +1424,7 @@ await step("hosted: a visitor who is not signed in reaches Settings, where a key
   // The sign-in window is only the button; what an account keeps is said in the create-account window.
   assert.equal(await visitor.locator("#signin .modal-head p").count(), 0);
   assert.deepEqual(await visitor.$$eval("#signup .keeps dt", (els) => els.map((e) => e.textContent)), ["Kept", "Never kept", "Opens"]);
-  assert.equal(await visitor.locator("#nav-privacy").isVisible(), true);
+  assert.equal(await visitor.locator(".hero-links a[href='/privacy.html']").isVisible(), true, "the site's front page links its privacy page");
   // Unknown to the site, the visitor sees no adult or video models and no LoRAs: not in the examples, the search, Browse or a model window.
   assert.equal(await visitor.$eval('#examples [data-example="video generation"]', (e) => e.hidden), true, "no video example for a visitor");
   assert.equal(await visitor.$eval("#home-hint", (e) => e.hidden), true, "nothing about signing in on the front page; it is said in the model window");
